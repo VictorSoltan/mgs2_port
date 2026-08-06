@@ -1,4 +1,4 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/dmsynth_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmsynth/dmsynth_private.h
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/dmsynth_private.h recovered-session/wine-11.0/dlls/dmsynth/dmsynth_private.h
 --- a/dlls/dmsynth/dmsynth_private.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmsynth/dmsynth_private.h	2026-08-05 14:43:06.690088968 +0300
 @@ -46,6 +46,65 @@
@@ -75,7 +75,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +extern int mgs2_env_int(const char *name, int def, int lo, int hi);
 +
  #endif	/* __WINE_DMSYNTH_PRIVATE_H */
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/Makefile.in /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmsynth/Makefile.in
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/Makefile.in recovered-session/wine-11.0/dlls/dmsynth/Makefile.in
 --- a/dlls/dmsynth/Makefile.in	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmsynth/Makefile.in	2026-08-02 20:46:04.528326993 +0300
 @@ -3,9 +3,11 @@
@@ -92,7 +92,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 -	synthsink.c \
 -	version.rc
 +	synthsink.c
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/synth.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmsynth/synth.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/synth.c recovered-session/wine-11.0/dlls/dmsynth/synth.c
 --- a/dlls/dmsynth/synth.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmsynth/synth.c	2026-08-05 15:58:53.745234888 +0300
 @@ -49,6 +49,73 @@
@@ -714,7 +714,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      {
          LeaveCriticalSection(&synth->cs);
          return FLUID_FAILED;
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/synthsink.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmsynth/synthsink.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/synthsink.c recovered-session/wine-11.0/dlls/dmsynth/synthsink.c
 --- a/dlls/dmsynth/synthsink.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmsynth/synthsink.c	2026-08-05 15:03:27.526497221 +0300
 @@ -25,7 +25,65 @@
@@ -1616,7 +1616,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      InitializeCriticalSectionEx(&obj->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO);
      obj->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": cs");
  
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/version.rc /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmsynth/version.rc
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmsynth/version.rc recovered-session/wine-11.0/dlls/dmsynth/version.rc
 --- a/dlls/dmsynth/version.rc	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmsynth/version.rc	1970-01-01 02:00:00.000000000 +0200
 @@ -1,23 +0,0 @@

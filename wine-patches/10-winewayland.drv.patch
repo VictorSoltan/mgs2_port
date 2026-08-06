@@ -1,6 +1,6 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/winewayland.drv/opengl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/winewayland.drv/opengl.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/winewayland.drv/opengl.c recovered-session/wine-11.0/dlls/winewayland.drv/opengl.c
 --- a/dlls/winewayland.drv/opengl.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/winewayland.drv/opengl.c	2026-08-05 20:48:26.238484156 +0300
++++ b/dlls/winewayland.drv/opengl.c	2026-08-06 15:40:43.408906067 +0300
 @@ -18,6 +18,49 @@
   * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
   */
@@ -61,7 +61,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
  #include "ntstatus.h"
  #define WIN32_NO_STATUS
-@@ -46,10 +92,123 @@
+@@ -46,10 +92,138 @@
  static const struct opengl_funcs *funcs;
  static const struct opengl_drawable_funcs wayland_drawable_funcs;
  
@@ -105,6 +105,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +    BOOL flip;          /* MGS2_GL_FLIP     : GL is bottom-up, wl_shm is top-down */
 +    BOOL bgra;          /* MGS2_GL_BGRA     : read straight in the shm byte order */
 +    BOOL read_split;    /* MGS2_GL_READ_SPLIT: time glFinish apart from glReadPixels */
++    BOOL invalidate_ds; /* MGS2_GL_INVALIDATE_DS: discard depth/stencil after the frame */
 +    int shm_buffers;    /* MGS2_GL_SHM_BUFFERS */
 +    int pbos;           /* MGS2_GL_PBOS     */
 +    int stats;          /* MGS2_GL_STATS    : log timings every N frames, 0 = off */
@@ -142,6 +143,12 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +     * Diagnostic only -- the added glFinish perturbs the pipeline, so never
 +     * ship with it on. */
 +    mgs_cfg.read_split  = mgs_env_int("MGS2_GL_READ_SPLIT", 0, 0, 1) != 0;
++    /* Default off: measured on this device, the presenter's own framebuffer
++     * reports depth=0 stencil=0, i.e. the game renders into wined3d's FBO and
++     * only the resolved colour reaches us, so there is nothing here to discard.
++     * The tile-memory saving would have to be taken inside wined3d instead.
++     * Kept switchable for the day the render target changes. */
++    mgs_cfg.invalidate_ds = mgs_env_int("MGS2_GL_INVALIDATE_DS", 0, 0, 1) != 0;
 +    mgs_cfg.loaded = TRUE;
 +    ERR("MGS2 present config: pbo=%d pbos=%d flip=%d bgra=%d shm_buffers=%d stats=%d\n",
 +        mgs_cfg.use_pbo, mgs_cfg.pbos, mgs_cfg.flip, mgs_cfg.bgra,
@@ -183,10 +190,18 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +    double t_readback, t_copy, t_first;
 +    double t_finish;      /* MGS2_GL_READ_SPLIT: pipeline drain, separate from transfer */
 +    BOOL read_format_logged;
++
++    /* Frame-time distribution. A mean over 300 frames hides a 300 ms hitch
++     * completely, and hitches are what the game is actually judged on. */
++    double t_prev_swap;
++    double frame_max;
++    double t_acquire;      /* time spent waiting for a free compositor buffer */
++    double acquire_max;
++    unsigned int slow_50, slow_100, slow_200, slow_500;
  };
  
  static struct wayland_gl_drawable *impl_from_opengl_drawable(struct opengl_drawable *base)
-@@ -57,10 +216,76 @@
+@@ -57,10 +231,76 @@
      return CONTAINING_RECORD(base, struct wayland_gl_drawable, base);
  }
  
@@ -264,7 +279,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  }
  
  static EGLConfig egl_config_for_format(int format)
-@@ -68,6 +293,43 @@
+@@ -68,6 +308,43 @@
      return egl->configs[(format - 1) % egl->config_count];
  }
  
@@ -308,7 +323,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  static void wayland_gl_drawable_sync_size(struct wayland_gl_drawable *gl)
  {
      int client_width, client_height;
-@@ -78,35 +340,26 @@
+@@ -78,35 +355,26 @@
      client_height = client_rect.bottom - client_rect.top;
      if (client_width == 0 || client_height == 0) client_width = client_height = 1;
  
@@ -347,7 +362,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      if (!(client = wayland_client_surface_create(hwnd))) return FALSE;
      gl = opengl_drawable_create(sizeof(*gl), &wayland_drawable_funcs, format, &client->client);
      client_surface_release(&client->client);
-@@ -116,13 +369,16 @@
+@@ -116,13 +384,16 @@
      gl->base.buffer_map[GL_FRONT - GL_FRONT_LEFT] = GL_BACK;
      gl->base.buffer_map[GL_FRONT_AND_BACK - GL_FRONT_LEFT] = GL_BACK;
  
@@ -368,7 +383,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      *drawable = &gl->base;
      return TRUE;
  
-@@ -152,38 +408,306 @@
+@@ -152,38 +423,358 @@
      if (flags & GL_FLUSH_UPDATED) wayland_gl_drawable_sync_size(gl);
  }
  
@@ -519,16 +534,22 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +{
 +    double span = now - gl->t_first;
 +    if (span <= 0.0) return;
-+    ERR("MGS2 present stats: %u frames in %.0f ms = %.1f fps | readback %.2f ms/f | copy %.2f ms/f%s\n",
-+        gl->frames, span, gl->frames * 1000.0 / span,
++    ERR("MGS2 present stats: tick=%.0f %u frames in %.0f ms = %.1f fps | readback %.2f ms/f | copy %.2f ms/f%s\n",
++        now, gl->frames, span, gl->frames * 1000.0 / span,
 +        gl->t_readback / gl->frames, gl->t_copy / gl->frames,
 +        mgs_cfg.read_split ? " (split below)" : "");
 +    if (mgs_cfg.read_split)
 +        ERR("MGS2 read split: gpu_finish %.2f ms/f | pixel_transfer %.2f ms/f\n",
 +            gl->t_finish / gl->frames,
 +            (gl->t_readback - gl->t_finish) / gl->frames);
++    ERR("MGS2 frame time: worst %.0f ms | over 50/100/200/500 ms: %u/%u/%u/%u "
++        "| compositor wait %.2f ms/f, worst %.0f ms\n",
++        gl->frame_max, gl->slow_50, gl->slow_100, gl->slow_200, gl->slow_500,
++        gl->t_acquire / gl->frames, gl->acquire_max);
 +    gl->frames = 0;
 +    gl->t_readback = gl->t_copy = gl->t_finish = 0.0;
++    gl->frame_max = gl->acquire_max = gl->t_acquire = 0.0;
++    gl->slow_50 = gl->slow_100 = gl->slow_200 = gl->slow_500 = 0;
 +    gl->t_first = now;
 +}
 +
@@ -544,6 +565,19 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      funcs->p_eglSwapBuffers(egl->display, gl->base.surface);
  
 +    if (gl->width <= 0 || gl->height <= 0) return TRUE;
++
++    /* Mali is tile-based, so an attachment whose contents are still "live" at the
++     * end of a pass has to be written out of tile memory into RAM. The game
++     * clears depth and stencil every frame and we only ever read colour, so tell
++     * the driver they are finished and save that write. MGS2_GL_INVALIDATE_DS=0
++     * turns it off. */
++    if (mgs_cfg.invalidate_ds && funcs->p_glInvalidateFramebuffer)
++    {
++        static const GLenum attachments[] = { GL_DEPTH, GL_STENCIL };
++
++        funcs->p_glInvalidateFramebuffer(GL_FRAMEBUFFER, ARRAY_SIZE(attachments),
++                                         attachments);
++    }
 +
 +    /* Reap any buffer releases the compositor has already sent. */
 +    wl_display_dispatch_queue_pending(process_wayland.wl_display, gl->wl_event_queue);
@@ -602,7 +636,17 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +    {
 +        /* Synchronous path: read straight into the compositor buffer. This is
 +         * the pre-PBO behaviour, kept as a fallback and A/B baseline. */
-+        if (!(buf = mgs_acquire_shm_buffer(gl, gl->width, gl->height))) return TRUE;
++        {
++            double t_acq0 = mgs_now_ms();
++            buf = mgs_acquire_shm_buffer(gl, gl->width, gl->height);
++            if (timing)
++            {
++                double d = mgs_now_ms() - t_acq0;
++                gl->t_acquire += d;
++                if (d > gl->acquire_max) gl->acquire_max = d;
++            }
++        }
++        if (!buf) return TRUE;
 +
 +        /* What the implementation itself calls its preferred read format.  Asking
 +         * for BGRA when the render target is RGBA can make the driver swizzle
@@ -613,6 +657,15 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +
 +            funcs->p_glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &impl_format);
 +            funcs->p_glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, &impl_type);
++            GLint samples = 0, red = 0, depth = 0, stencil = 0;
++
++            funcs->p_glGetIntegerv(GL_SAMPLES, &samples);
++            funcs->p_glGetIntegerv(GL_RED_BITS, &red);
++            funcs->p_glGetIntegerv(GL_DEPTH_BITS, &depth);
++            funcs->p_glGetIntegerv(GL_STENCIL_BITS, &stencil);
++            ERR("MGS2 framebuffer: samples=%d red=%d depth=%d stencil=%d "
++                "(samples must be 0; anything else is a capability bug)\n",
++                samples, red, depth, stencil);
 +            ERR("MGS2 read format: implementation prefers format %#x type %#x; "
 +                "we ask for %#x (BGRA_EXT %#x, RGBA %#x), %dx%d\n",
 +                impl_format, impl_type, read_format, GL_BGRA_EXT, GL_RGBA,
@@ -653,6 +706,20 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
 +
 +    if (timing)
 +    {
++        double now = mgs_now_ms();
++
++        if (gl->t_prev_swap > 0.0)
++        {
++            double interval = now - gl->t_prev_swap;
++
++            if (interval > gl->frame_max) gl->frame_max = interval;
++            if (interval > 500.0) gl->slow_500++;
++            else if (interval > 200.0) gl->slow_200++;
++            else if (interval > 100.0) gl->slow_100++;
++            else if (interval > 50.0) gl->slow_50++;
++        }
++        gl->t_prev_swap = now;
++
 +        if (!gl->frames) gl->t_first = t0;
 +        gl->frames++;
 +        gl->t_readback += t1 - t0;
@@ -689,7 +756,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  }
  
  static const struct opengl_drawable_funcs wayland_pbuffer_funcs =
-@@ -195,16 +719,15 @@
+@@ -195,16 +786,15 @@
                                     GLint max_level, GLsizei *width, GLsizei *height, struct opengl_drawable **surface)
  {
      EGLConfig config = egl_config_for_format(format);

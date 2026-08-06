@@ -1,4 +1,4 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/ntdll/unix/sync.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/ntdll/unix/sync.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/ntdll/unix/sync.c recovered-session/wine-11.0/dlls/ntdll/unix/sync.c
 --- a/dlls/ntdll/unix/sync.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/ntdll/unix/sync.c	2026-08-02 14:57:02.425727567 +0300
 @@ -2391,6 +2391,53 @@

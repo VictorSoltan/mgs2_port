@@ -1,4 +1,4 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/opengl32/unix_wgl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/opengl32/unix_wgl.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/opengl32/unix_wgl.c recovered-session/wine-11.0/dlls/opengl32/unix_wgl.c
 --- a/dlls/opengl32/unix_wgl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/opengl32/unix_wgl.c	2026-08-01 13:22:56.094305207 +0300
 @@ -546,6 +546,18 @@

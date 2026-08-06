@@ -164,6 +164,30 @@ esac
 #   MGS2_D3D8=native   restores the wrapper if anything renders wrong.
 D3D8_MODE="${MGS2_D3D8:-builtin}"
 export WINEDLLOVERRIDES="mscoree=;mshtml=;winemenubuilder.exe=;${AUDIO_OVERRIDE}d3d8=${D3D8_MODE};d3d9=builtin;dxgi=builtin"
+# MGS2_TRIAGE=1 turns on every aggregate counter at once: frame-time distribution
+# and the compositor wait from the presenter, shader compile/link time from
+# wined3d, and draw/state/managed-texture counts from d3d8. All are one line per
+# second or per 300 frames -- never per call, which on this device has already
+# cost more than it measured. Timestamps line the three streams up.
+# Linking one GLSL program costs about 195 ms on this Mali blob, and it happens
+# inside the frame that first needs that state combination -- measured against a
+# 236 ms frame in the same second, which is the freeze reported on entering an
+# open area or a cutscene. wined3d_glslcache1.dll keeps each linked program's
+# binary here and hands it back with glProgramBinary instead of linking again, so
+# the cost is paid once per state combination per driver version instead of once
+# per session. A DOS path, because wined3d is PE code and D: is mapped to
+# /storage further up.
+#   MGS2_GLSL_CACHE=          disable
+#   MGS2_GLSL_CACHE_STATS=1   log every hit, store and reject
+export MGS2_GLSL_CACHE="${MGS2_GLSL_CACHE-D:\\roms\\ports\\MGS2-Substance\\cache}"
+
+if [ "${MGS2_TRIAGE:-0}" = 1 ]; then
+    export MGS2_GLSL_CACHE_STATS=1
+    export MGS2_GL_STATS="${MGS2_GL_STATS:-300}"
+    export MGS2_WINED3D_STATS=1
+    export MGS2_D3D8_STATS=1
+    export WINEDEBUG="-all,err+waylanddrv,err+d3d_shader,err+d3d8"
+fi
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/var/run/0-runtime-dir}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
 export BOX64_LD_LIBRARY_PATH="/usr/share/box64/lib:$GAMEDIR/x64libs"
@@ -201,7 +225,12 @@ export MGS2_GL_STATS="${MGS2_GL_STATS:-0}"
 # rebuilt-from-source driver (synchronous by default, instrumented, with the
 # async path behind MGS2_GL_PBO); winewayland_gbmshm_directbgra1.so is the
 # older binary-only build, kept as a fallback.
-WAYLAND_SO="${MGS2_WAYLAND_SO:-winewayland_pbo1.so}"
+# winewayland_mali1.so adds two things to pbo1: depth/stencil invalidation after
+# the frame (Mali is tile-based, so attachments still live at end of pass get
+# written out to memory for nothing -- MGS2_GL_INVALIDATE_DS=0 disables), and
+# frame-time distribution in the stats line, because a mean over 300 frames hides
+# exactly the hitches this port is judged on.
+WAYLAND_SO="${MGS2_WAYLAND_SO:-winewayland_mali1.so}"
 [ -r "$GAMEDIR/$WAYLAND_SO" ] || WAYLAND_SO="winewayland_gbmshm_directbgra1.so"
 
 # Which WineD3D build to mount. dbg52 is dbg42 with a six-byte binary patch:
@@ -344,7 +373,23 @@ DMUSIC_DLL="${MGS2_DMUSIC_DLL:-}"
 DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_wine112.dll}"
 [ -n "$DMSYNTH_DLL" ] && [ ! -r "$GAMEDIR/$DMSYNTH_DLL" ] && DMSYNTH_DLL=""
 
-WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_dbg150_cxcaps.dll}"
+# Which d3d8 to mount. Only meaningful because d3d8=builtin (see WINEDLLOVERRIDES
+# above) put Wine's own module back in the chain. d3d8_mgs2fast1.dll carries two
+# MGS2-specific fast paths, both switchable:
+#   MGS2_D3D8_STATEFAST=0       stop dropping redundant SetRenderState /
+#                               SetTextureStageState / SetSamplerState calls.
+#                               Each redundant call otherwise takes the global
+#                               wined3d mutex and walks into the stateblock.
+#   MGS2_D3D8_MANAGED_DIRTY=0   go back to re-uploading every bound managed
+#                               texture on every draw. The fast path only uploads
+#                               after Unlock, AddDirtyRect, UpdateTexture,
+#                               CopyRects or creation, which are the only ways a
+#                               managed texture's content can change.
+# If textures ever look stale, MGS2_D3D8_MANAGED_DIRTY=0 is the first thing to try.
+D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_mgs2fast1.dll}"
+[ -n "$D3D8_DLL" ] && [ ! -r "$GAMEDIR/$D3D8_DLL" ] && D3D8_DLL=""
+
+WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_glslcache2.dll}"
 [ -r "$GAMEDIR/$WINED3D_DLL" ] || WINED3D_DLL="wined3d_dbg42_gles_present.dll"
 
 # ---------------------------------------------------------------------------
@@ -434,6 +479,7 @@ mount_bind "$GAMEDIR/$WAYLAND_SO" /usr/lib/wine/i386-unix/winewayland.so || exit
 # dbg42 keeps the reliable, continuously updating FBO presentation path.
 mount_bind "$GAMEDIR/$WINED3D_DLL" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 [ -n "$USER32_DLL" ] && { mount_bind "$GAMEDIR/$USER32_DLL" /usr/lib/wine/i386-windows/user32.dll || exit 1; }
+[ -n "$D3D8_DLL" ] && { mount_bind "$GAMEDIR/$D3D8_DLL" /usr/lib/wine/i386-windows/d3d8.dll || exit 1; }
 [ -n "$DMSYNTH_DLL" ] && { mount_bind "$GAMEDIR/$DMSYNTH_DLL" /usr/lib/wine/i386-windows/dmsynth.dll || exit 1; }
 [ -n "$DSOUND_DLL" ] && { mount_bind "$GAMEDIR/$DSOUND_DLL" /usr/lib/wine/i386-windows/dsound.dll || exit 1; }
 [ -n "$DMIME_DLL" ] && { mount_bind "$GAMEDIR/$DMIME_DLL" /usr/lib/wine/i386-windows/dmime.dll || exit 1; }
@@ -453,6 +499,7 @@ cleanup() {
     pkill -9 -f "[${EXE:0:1}]${EXE:1}" 2>/dev/null || true
     restore_cpu_state
     unmount_all /usr/lib/wine/i386-windows/wined3d.dll
+    unmount_all /usr/lib/wine/i386-windows/d3d8.dll
     unmount_all /usr/lib/wine/i386-unix/winewayland.so
     unmount_all /usr/lib/wine/i386-unix/win32u.so
     unmount_all /usr/lib/wine/i386-unix/opengl32.so

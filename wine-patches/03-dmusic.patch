@@ -1,4 +1,4 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmusic/port.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmusic/port.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmusic/port.c recovered-session/wine-11.0/dlls/dmusic/port.c
 --- a/dlls/dmusic/port.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmusic/port.c	2026-08-03 11:54:47.311945909 +0300
 @@ -143,6 +143,60 @@

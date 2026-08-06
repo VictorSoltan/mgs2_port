@@ -1,4 +1,4 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/adapter_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/adapter_gl.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/adapter_gl.c recovered-session/wine-11.0/dlls/wined3d/adapter_gl.c
 --- a/dlls/wined3d/adapter_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/adapter_gl.c	2026-08-02 14:12:49.285229261 +0300
 @@ -487,6 +487,16 @@
@@ -344,7 +344,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      while (upper != lower)
      {
          test = (upper + lower) / 2;
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/buffer.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/buffer.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/buffer.c recovered-session/wine-11.0/dlls/wined3d/buffer.c
 --- a/dlls/wined3d/buffer.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/buffer.c	2026-08-02 01:30:46.504061257 +0300
 @@ -28,6 +28,86 @@
@@ -443,7 +443,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      if (!buffer->map_ptr)
          return WINED3D_OK;
  
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/context_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/context_gl.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/context_gl.c recovered-session/wine-11.0/dlls/wined3d/context_gl.c
 --- a/dlls/wined3d/context_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/context_gl.c	2026-08-02 14:26:48.699837518 +0300
 @@ -36,6 +36,12 @@
@@ -2845,7 +2845,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      if (context->uses_uavs)
      {
          GL_EXTCALL(glMemoryBarrier(GL_ALL_BARRIER_BITS));
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/cs.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/cs.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/cs.c recovered-session/wine-11.0/dlls/wined3d/cs.c
 --- a/dlls/wined3d/cs.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/cs.c	2026-07-12 09:38:41.840299900 +0300
 @@ -3663,8 +3663,13 @@
@@ -2864,7 +2864,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
          }
      }
  
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/device.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/device.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/device.c recovered-session/wine-11.0/dlls/wined3d/device.c
 --- a/dlls/wined3d/device.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/device.c	2026-07-12 09:36:21.677624266 +0300
 @@ -601,13 +601,13 @@
@@ -2901,7 +2901,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      {
          GLuint buffer;
  
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/ffp_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/ffp_gl.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/ffp_gl.c recovered-session/wine-11.0/dlls/wined3d/ffp_gl.c
 --- a/dlls/wined3d/ffp_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/ffp_gl.c	2026-08-01 13:26:16.960381879 +0300
 @@ -225,11 +225,29 @@
@@ -2984,9 +2984,9 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      wined3d_context_gl_end_transform_feedback(context_gl);
  
      for (i = 0; i < ARRAY_SIZE(state->stream_output); ++i)
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/glsl_shader.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/glsl_shader.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/glsl_shader.c recovered-session/wine-11.0/dlls/wined3d/glsl_shader.c
 --- a/dlls/wined3d/glsl_shader.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/glsl_shader.c	2026-08-02 12:03:58.629062203 +0300
++++ b/dlls/wined3d/glsl_shader.c	2026-08-06 15:58:45.738328988 +0300
 @@ -410,7 +410,21 @@
  static void shader_glsl_add_version_declaration(struct wined3d_string_buffer *buffer,
          const struct wined3d_gl_info *gl_info)
@@ -3010,7 +3010,340 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  }
  
  static unsigned int shader_glsl_full_ffp_varyings(const struct wined3d_gl_info *gl_info)
-@@ -7296,6 +7310,7 @@
+@@ -534,8 +548,318 @@
+ }
+ 
+ /* Context activation is done by the caller. */
++/*
++ * MGS2 shader triage.
++ *
++ * This game is fixed-function, so wined3d builds a GLSL variant per state
++ * combination and compiles it when that combination first appears -- which is
++ * exactly on entering a new area or a cutscene, where the owner reports freezes.
++ * Counters and total milliseconds, reported at most once a second, are enough to
++ * say whether a hitch coincides with a compile or a link. MGS2_WINED3D_STATS=1.
++ */
++static LONG mgs2_compiles, mgs2_links;
++static double mgs2_compile_ms, mgs2_link_ms;
++
++static BOOL mgs2_wined3d_stats(void)
++{
++    static int on = -1;
++    char value[8];
++    DWORD len;
++
++    if (on != -1) return on;
++    len = GetEnvironmentVariableA("MGS2_WINED3D_STATS", value, sizeof(value));
++    on = len && len < sizeof(value) && value[0] != '0';
++    return on;
++}
++
++static double mgs2_now_ms(void)
++{
++    LARGE_INTEGER counter, frequency;
++
++    QueryPerformanceFrequency(&frequency);
++    QueryPerformanceCounter(&counter);
++    return frequency.QuadPart ? counter.QuadPart * 1000.0 / frequency.QuadPart : 0.0;
++}
++
++static void mgs2_shader_report(void)
++{
++    static DWORD last;
++    DWORD now;
++
++    if (!mgs2_wined3d_stats()) return;
++    now = GetTickCount();
++    if (now - last < 1000) return;
++    last = now;
++    if (!mgs2_compiles && !mgs2_links) return;
++
++    ERR("MGS2 SHADERSTAT tick=%lu compiles=%ld in %.1f ms | links=%ld in %.1f ms\n",
++            now, mgs2_compiles, mgs2_compile_ms, mgs2_links, mgs2_link_ms);
++    mgs2_compiles = mgs2_links = 0;
++    mgs2_compile_ms = mgs2_link_ms = 0.0;
++}
++
++
++/*
++ * MGS2 program binary cache.
++ *
++ * Measured on this device: compiling a GLSL shader costs 2-4 ms, but linking one
++ * program on the Mali blob costs about 195 ms, and it happens synchronously in
++ * whatever frame first needs that state combination. That is exactly the freeze
++ * the owner reports on entering an open area or a cutscene -- a 236 ms frame was
++ * caught in the same second as a 198 ms link.
++ *
++ * GLES gives the fix: keep the linked program's binary and hand it back with
++ * glProgramBinary next time instead of linking again. The link disappears; the
++ * cheap compile stays. Nothing is cached in the first session that produced it,
++ * so the win shows from the second run of a scene onwards.
++ *
++ * The key is a hash over every attached shader's final source plus the driver
++ * identity, so a driver update or a wined3d change invalidates entries instead of
++ * feeding a stale binary to the GPU. glProgramBinary is always checked with
++ * GL_LINK_STATUS, and any failure falls back to a normal link -- the spec
++ * explicitly requires that, binaries are allowed to be rejected at any time.
++ *
++ *   MGS2_GLSL_CACHE=<dos path>   enable, e.g. D:\\roms\\ports\\MGS2-Substance\\cache
++ *   MGS2_GLSL_CACHE_STATS=1      one line per hit/miss decision
++ */
++static const char *mgs2_glsl_cache_dir(void)
++{
++    static char dir[MAX_PATH];
++    static int checked;
++
++    if (!checked)
++    {
++        DWORD len = GetEnvironmentVariableA("MGS2_GLSL_CACHE", dir, sizeof(dir));
++
++        checked = 1;
++        if (!len || len >= sizeof(dir)) dir[0] = 0;
++        else CreateDirectoryA(dir, NULL);
++    }
++    return dir[0] ? dir : NULL;
++}
++
++static BOOL mgs2_glsl_cache_stats(void)
++{
++    static int on = -1;
++    char value[8];
++    DWORD len;
++
++    if (on != -1) return on;
++    len = GetEnvironmentVariableA("MGS2_GLSL_CACHE_STATS", value, sizeof(value));
++    on = len && len < sizeof(value) && value[0] != '0';
++    return on;
++}
++
++/*
++ * Resolve the program-binary entry points ourselves.
++ *
++ * Measured on this stack: the driver reports one binary format, so it can do
++ * this, but wined3d's tables come back NULL for both functions. Same cause as
++ * the ES2_compatibility functions documented in adapter_gl.c -- these are core
++ * GL 4.1 by the desktop spelling, and what a GLES blob actually exports is the
++ * OES spelling. Try both, once.
++ */
++static PFN_glGetProgramBinary mgs2_p_get_program_binary;
++static PFN_glProgramBinary mgs2_p_program_binary;
++
++static void mgs2_resolve_binary_funcs(const struct wined3d_gl_info *gl_info)
++{
++    static int resolved;
++    HMODULE opengl32;
++
++    if (resolved) return;
++    resolved = 1;
++
++    mgs2_p_get_program_binary = gl_info->gl_ops.ext.p_glGetProgramBinary;
++    mgs2_p_program_binary = gl_info->gl_ops.ext.p_glProgramBinary;
++    if (mgs2_p_get_program_binary && mgs2_p_program_binary) return;
++
++    if (!mgs2_p_get_program_binary)
++        mgs2_p_get_program_binary = (void *)wglGetProcAddress("glGetProgramBinary");
++    if (!mgs2_p_get_program_binary)
++        mgs2_p_get_program_binary = (void *)wglGetProcAddress("glGetProgramBinaryOES");
++    if (!mgs2_p_program_binary)
++        mgs2_p_program_binary = (void *)wglGetProcAddress("glProgramBinary");
++    if (!mgs2_p_program_binary)
++        mgs2_p_program_binary = (void *)wglGetProcAddress("glProgramBinaryOES");
++
++    if ((!mgs2_p_get_program_binary || !mgs2_p_program_binary)
++            && (opengl32 = GetModuleHandleA("opengl32.dll")))
++    {
++        if (!mgs2_p_get_program_binary)
++            mgs2_p_get_program_binary = (void *)GetProcAddress(opengl32, "glGetProgramBinary");
++        if (!mgs2_p_program_binary)
++            mgs2_p_program_binary = (void *)GetProcAddress(opengl32, "glProgramBinary");
++    }
++}
++
++static void mgs2_hash_bytes(ULONGLONG *hash, const void *data, SIZE_T size)
++{
++    const BYTE *p = data;
++    SIZE_T i;
++
++    for (i = 0; i < size; ++i)
++        *hash = (*hash ^ p[i]) * 0x100000001b3ull;
++}
++
++/* Hash every attached shader's source, plus who is going to run it. */
++static BOOL mgs2_glsl_program_key(const struct wined3d_gl_info *gl_info, GLuint program,
++        char *out, SIZE_T out_size)
++{
++    ULONGLONG hash = 0xcbf29ce484222325ull;
++    GLuint shaders[8];
++    GLsizei count = 0, i;
++    const char *ident;
++
++    if (!gl_info->gl_ops.ext.p_glGetAttachedShaders || !gl_info->gl_ops.ext.p_glGetShaderSource)
++        return FALSE;
++
++    GL_EXTCALL(glGetAttachedShaders(program, ARRAY_SIZE(shaders), &count, shaders));
++    if (count <= 0) return FALSE;
++
++    for (i = 0; i < count; ++i)
++    {
++        GLint length = 0;
++        char *src;
++
++        GL_EXTCALL(glGetShaderiv(shaders[i], GL_SHADER_SOURCE_LENGTH, &length));
++        if (length <= 0 || !(src = malloc(length + 1))) return FALSE;
++        GL_EXTCALL(glGetShaderSource(shaders[i], length + 1, NULL, src));
++        mgs2_hash_bytes(&hash, src, strlen(src));
++        free(src);
++    }
++
++    if ((ident = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_VERSION)))
++        mgs2_hash_bytes(&hash, ident, strlen(ident));
++    if ((ident = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_RENDERER)))
++        mgs2_hash_bytes(&hash, ident, strlen(ident));
++    if ((ident = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_VENDOR)))
++        mgs2_hash_bytes(&hash, ident, strlen(ident));
++
++    snprintf(out, out_size, "%s\\glsl-%016I64x.bin", mgs2_glsl_cache_dir(), hash);
++    return TRUE;
++}
++
++/* TRUE if the program is now linked from a cached binary. */
++static BOOL mgs2_glsl_load_binary(const struct wined3d_gl_info *gl_info, GLuint program)
++{
++    char path[MAX_PATH];
++    HANDLE file;
++    DWORD size, read = 0;
++    GLenum format;
++    void *blob;
++    GLint status = 0;
++
++    mgs2_resolve_binary_funcs(gl_info);
++    if (!mgs2_glsl_cache_dir() || !mgs2_p_program_binary) return FALSE;
++    if (!mgs2_glsl_program_key(gl_info, program, path, sizeof(path))) return FALSE;
++
++    file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
++            FILE_ATTRIBUTE_NORMAL, NULL);
++    if (file == INVALID_HANDLE_VALUE) return FALSE;
++
++    size = GetFileSize(file, NULL);
++    if (size <= sizeof(GLenum) || size == INVALID_FILE_SIZE || !(blob = malloc(size)))
++    {
++        CloseHandle(file);
++        return FALSE;
++    }
++    if (!ReadFile(file, blob, size, &read, NULL) || read != size)
++    {
++        CloseHandle(file);
++        free(blob);
++        return FALSE;
++    }
++    CloseHandle(file);
++
++    memcpy(&format, blob, sizeof(format));
++    mgs2_p_program_binary(program, format, (char *)blob + sizeof(format),
++            size - sizeof(format));
++    free(blob);
++
++    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &status));
++    if (!status)
++    {
++        /* Stale or rejected: drop it and let the caller link normally. */
++        DeleteFileA(path);
++        if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE reject %s\n", path);
++        return FALSE;
++    }
++    if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE hit %s\n", path);
++    return TRUE;
++}
++
++/* One line, once, saying whether this driver can do program binaries at all --
++ * without it a silent zero store count is indistinguishable from a bug. */
++static void mgs2_glsl_cache_probe(const struct wined3d_gl_info *gl_info)
++{
++    static int done;
++    GLint formats = -1;
++
++    if (done) return;
++    done = 1;
++
++    gl_info->gl_ops.gl.p_glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &formats);
++
++    mgs2_resolve_binary_funcs(gl_info);
++    ERR("MGS2 GLSLCACHE probe: dir=%s binary_formats=%d get_binary=%p program_binary=%p "
++        "attached=%p get_source=%p\n",
++        mgs2_glsl_cache_dir() ? mgs2_glsl_cache_dir() : "(unset)", formats,
++        mgs2_p_get_program_binary, mgs2_p_program_binary,
++        gl_info->gl_ops.ext.p_glGetAttachedShaders, gl_info->gl_ops.ext.p_glGetShaderSource);
++}
++
++static void mgs2_glsl_save_binary(const struct wined3d_gl_info *gl_info, GLuint program)
++{
++    char path[MAX_PATH], tmp[MAX_PATH];
++    GLint length = 0, status = 0;
++    GLenum format = 0;
++    HANDLE file;
++    DWORD written;
++    void *blob;
++
++    mgs2_glsl_cache_probe(gl_info);
++    if (!mgs2_glsl_cache_dir() || !mgs2_p_get_program_binary) return;
++    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &status));
++    if (mgs2_glsl_cache_stats() && !status) ERR("MGS2 GLSLCACHE skip: link status 0\n");
++    if (!status) return;
++    GL_EXTCALL(glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &length));
++    if (length <= 0)
++    {
++        if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE skip: binary length %d\n", length);
++        return;
++    }
++    if (!mgs2_glsl_program_key(gl_info, program, path, sizeof(path)))
++    {
++        if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE skip: no key\n");
++        return;
++    }
++    if (!(blob = malloc(length + sizeof(GLenum)))) return;
++
++    mgs2_p_get_program_binary(program, length, NULL, &format,
++            (char *)blob + sizeof(GLenum));
++    memcpy(blob, &format, sizeof(format));
++
++    /* Write beside the target and rename, so a kill mid-write cannot leave a
++     * truncated binary that the next run would feed to the driver. */
++    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
++    file = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++    if (file != INVALID_HANDLE_VALUE)
++    {
++        BOOL ok = WriteFile(file, blob, length + sizeof(GLenum), &written, NULL)
++                && written == length + sizeof(GLenum);
++        CloseHandle(file);
++        if (ok) MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
++        else DeleteFileA(tmp);
++        if (mgs2_glsl_cache_stats())
++            ERR("MGS2 GLSLCACHE store %s %d bytes %s\n", path, length, ok ? "ok" : "FAILED");
++    }
++    free(blob);
++}
++
+ static void shader_glsl_compile(const struct wined3d_gl_info *gl_info, GLuint shader, const char *src)
+ {
++    double mgs2_t0 = mgs2_wined3d_stats() ? mgs2_now_ms() : 0.0;
+     const char *ptr, *end, *line;
+ 
+     TRACE("Compiling shader object %u.\n", shader);
+@@ -555,6 +879,13 @@
+     GL_EXTCALL(glCompileShader(shader));
+     checkGLcall("glCompileShader");
+     print_glsl_info_log(gl_info, shader, FALSE);
++    if (mgs2_wined3d_stats())
++    {
++        mgs2_compiles++;
++        mgs2_compile_ms += mgs2_now_ms() - mgs2_t0;
++        mgs2_shader_report();
++    }
++
+ }
+ 
+ /* Context activation is done by the caller. */
+@@ -7296,6 +7627,7 @@
      string_buffer_clear(buffer);
  
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -3018,7 +3351,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      shader_addline(buffer, "invariant gl_Position;\n");
  
-@@ -7424,6 +7439,105 @@
+@@ -7424,6 +7756,105 @@
      return ret;
  }
  
@@ -3124,7 +3457,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  static void shader_glsl_generate_stream_output_setup(struct wined3d_string_buffer *buffer,
          const struct wined3d_shader *shader)
  {
-@@ -7839,6 +7953,7 @@
+@@ -7839,6 +8270,7 @@
          shader_addline(buffer, "#extension GL_ARB_sample_shading : enable\n");
      if (gl_info->supported[ARB_SHADER_TEXTURE_LOD])
          shader_addline(buffer, "#extension GL_ARB_shader_texture_lod : enable\n");
@@ -3132,7 +3465,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      /* Base Declarations */
      shader_generate_glsl_declarations(context_gl, buffer, shader, reg_maps, &priv_ctx);
-@@ -8159,6 +8274,7 @@
+@@ -8159,6 +8591,7 @@
          shader_addline(buffer, "#extension GL_ARB_explicit_attrib_location : enable\n");
      if (gl_info->supported[ARB_SHADER_VIEWPORT_LAYER_ARRAY])
          shader_addline(buffer, "#extension GL_ARB_shader_viewport_layer_array : enable\n");
@@ -3140,7 +3473,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      /* Base Declarations */
      shader_generate_glsl_declarations(context_gl, buffer, shader, reg_maps, &priv_ctx);
-@@ -8166,10 +8282,11 @@
+@@ -8166,10 +8599,11 @@
      for (i = 0; i < shader->input_signature.element_count; ++i)
          shader_glsl_declare_generic_vertex_attribute(buffer, gl_info, &shader->input_signature.elements[i]);
  
@@ -3154,7 +3487,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
          shader_addline(buffer, "    float size_min;\n");
          shader_addline(buffer, "    float size_max;\n");
          shader_addline(buffer, "} ffp_point;\n");
-@@ -8190,7 +8307,13 @@
+@@ -8190,7 +8624,13 @@
      }
  
      if (version->major < 4)
@@ -3169,7 +3502,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      if (args->next_shader_type == WINED3D_SHADER_TYPE_PIXEL && !gl_info->supported[ARB_CLIP_CONTROL])
          shader_addline(buffer, "uniform vec4 pos_fixup;\n");
-@@ -8301,6 +8424,7 @@
+@@ -8301,6 +8741,7 @@
  
      shader_glsl_enable_extensions(buffer, gl_info);
      shader_addline(buffer, "#extension GL_ARB_tessellation_shader : enable\n");
@@ -3177,7 +3510,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      shader_generate_glsl_declarations(context_gl, buffer, shader, reg_maps, &priv_ctx);
  
-@@ -8399,6 +8523,7 @@
+@@ -8399,6 +8840,7 @@
  
      shader_glsl_enable_extensions(buffer, gl_info);
      shader_addline(buffer, "#extension GL_ARB_tessellation_shader : enable\n");
@@ -3185,7 +3518,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      shader_generate_glsl_declarations(context_gl, buffer, shader, reg_maps, &priv_ctx);
  
-@@ -8493,6 +8618,7 @@
+@@ -8493,6 +8935,7 @@
      shader_glsl_add_version_declaration(buffer, gl_info);
  
      shader_glsl_enable_extensions(buffer, gl_info);
@@ -3193,7 +3526,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      shader_generate_glsl_declarations(context_gl, buffer, shader, reg_maps, &priv_ctx);
  
-@@ -8625,6 +8751,7 @@
+@@ -8625,6 +9068,7 @@
  
      shader_glsl_enable_extensions(buffer, gl_info);
      shader_addline(buffer, "#extension GL_ARB_compute_shader : enable\n");
@@ -3201,7 +3534,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      shader_generate_glsl_declarations(context_gl, buffer, shader, reg_maps, &priv_ctx);
  
-@@ -9143,6 +9270,7 @@
+@@ -9143,6 +9587,7 @@
  
      if (shader_glsl_use_explicit_attrib_location(gl_info))
          shader_addline(buffer, "#extension GL_ARB_explicit_attrib_location : enable\n");
@@ -3209,7 +3542,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      shader_addline(buffer, "invariant gl_Position;\n");
  
-@@ -9504,6 +9632,50 @@
+@@ -9504,6 +9949,50 @@
      return ret;
  }
  
@@ -3260,7 +3593,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  static void shader_glsl_ffp_fragment_op(struct wined3d_string_buffer *buffer, unsigned int stage, BOOL color,
          BOOL alpha, BOOL tmp_dst, unsigned int op, DWORD dw_arg0, DWORD dw_arg1, DWORD dw_arg2)
  {
-@@ -9522,6 +9694,9 @@
+@@ -9522,6 +10011,9 @@
      arg1 = shader_glsl_get_ffp_fragment_op_arg(buffer, 1, stage, dw_arg1);
      arg2 = shader_glsl_get_ffp_fragment_op_arg(buffer, 2, stage, dw_arg2);
  
@@ -3270,7 +3603,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      switch (op)
      {
          case WINED3D_TOP_DISABLE:
-@@ -9648,6 +9823,9 @@
+@@ -9648,6 +10140,9 @@
              FIXME("Unhandled operation %#x.\n", op);
              break;
      }
@@ -3280,7 +3613,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  }
  
  /* Context activation is done by the caller. */
-@@ -9733,6 +9911,7 @@
+@@ -9733,6 +10228,7 @@
          shader_addline(buffer, "#extension GL_ARB_explicit_attrib_location : enable\n");
      if (gl_info->supported[ARB_SHADING_LANGUAGE_420PACK])
          shader_addline(buffer, "#extension GL_ARB_shading_language_420pack : enable\n");
@@ -3288,7 +3621,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
      if (!use_legacy_fragment_output(gl_info))
      {
-@@ -9744,6 +9923,8 @@
+@@ -9744,6 +10240,8 @@
  
      shader_addline(buffer, "vec4 tmp0, tmp1;\n");
      shader_addline(buffer, "vec4 ret;\n");
@@ -3297,7 +3630,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      if (tempreg_used || settings->sRGB_write)
          shader_addline(buffer, "vec4 temp_reg = vec4(0.0);\n");
      shader_addline(buffer, "vec4 arg0, arg1, arg2;\n");
-@@ -9947,6 +10128,48 @@
+@@ -9947,6 +10445,48 @@
  
      shader_addline(buffer, "ret = ffp_varying_diffuse;\n");
  
@@ -3346,7 +3679,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      /* Generate the main shader */
      for (stage = 0; stage < WINED3D_MAX_FFP_TEXTURES; ++stage)
      {
-@@ -10006,6 +10229,10 @@
+@@ -10006,6 +10546,10 @@
      shader_glsl_generate_fog_code(buffer, gl_info, settings->fog);
  
      shader_glsl_generate_alpha_test(buffer, gl_info, alpha_test_func);
@@ -3357,7 +3690,29 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      if (!use_legacy_fragment_output(gl_info))
          shader_addline(buffer, "color_out0 = ps_out[0];\n");
  
-@@ -10497,7 +10724,8 @@
+@@ -10271,7 +10815,20 @@
+     list_add_head(&shader->linked_programs, &entry->cs.shader_entry);
+ 
+     TRACE("Linking GLSL shader program %u.\n", program_id);
+-    GL_EXTCALL(glLinkProgram(program_id));
++    if (!mgs2_glsl_load_binary(gl_info, program_id))
++    {
++        if (mgs2_wined3d_stats())
++        {
++            double t0 = mgs2_now_ms();
++
++            GL_EXTCALL(glLinkProgram(program_id));
++            mgs2_links++;
++            mgs2_link_ms += mgs2_now_ms() - t0;
++            mgs2_shader_report();
++        }
++        else GL_EXTCALL(glLinkProgram(program_id));
++        mgs2_glsl_save_binary(gl_info, program_id);
++    }
+     shader_glsl_validate_link(gl_info, program_id);
+ 
+     GL_EXTCALL(glUseProgram(program_id));
+@@ -10497,7 +11054,8 @@
      if (vshader)
      {
          attribs_map = vshader->reg_maps.input_registers;
@@ -3367,7 +3722,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
          {
              reorder_shader_id = shader_glsl_generate_vs3_rasterizer_input_setup(priv, vshader, pshader,
                      state->primitive_type == WINED3D_PT_POINTLIST && vshader->reg_maps.point_size,
-@@ -10544,7 +10772,11 @@
+@@ -10544,7 +11102,11 @@
  
          if (!use_legacy_fragment_output(gl_info))
          {
@@ -3380,7 +3735,29 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
              {
                  string_buffer_sprintf(tmp_name, "color_out%u", i);
                  if (state->blend_state && state->blend_state->dual_source)
-@@ -10820,6 +11052,32 @@
+@@ -10598,7 +11160,20 @@
+ 
+     /* Link the program */
+     TRACE("Linking GLSL shader program %u.\n", program_id);
+-    GL_EXTCALL(glLinkProgram(program_id));
++    if (!mgs2_glsl_load_binary(gl_info, program_id))
++    {
++        if (mgs2_wined3d_stats())
++        {
++            double t0 = mgs2_now_ms();
++
++            GL_EXTCALL(glLinkProgram(program_id));
++            mgs2_links++;
++            mgs2_link_ms += mgs2_now_ms() - t0;
++            mgs2_shader_report();
++        }
++        else GL_EXTCALL(glLinkProgram(program_id));
++        mgs2_glsl_save_binary(gl_info, program_id);
++    }
+     shader_glsl_validate_link(gl_info, program_id);
+ 
+     shader_glsl_init_vs_uniform_locations(gl_info, priv, program_id, &entry->vs,
+@@ -10820,6 +11395,32 @@
      context_gl->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_COMPUTE);
  }
  
@@ -3413,7 +3790,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  static void shader_glsl_update_legacy_states(struct wined3d_context_gl *context_gl, const struct wined3d_state *state);
  
  static void shader_glsl_apply_draw_state(void *shader_priv, struct wined3d_context *context,
-@@ -10828,17 +11086,31 @@
+@@ -10828,17 +11429,31 @@
      struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
      struct shader_glsl_priv *priv = shader_priv;
  
@@ -3445,7 +3822,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  }
  
  static void shader_glsl_update_compute_program(struct shader_glsl_priv *priv,
-@@ -12603,6 +12875,7 @@
+@@ -12603,6 +13218,7 @@
  
      buffer = string_buffer_get(&blitter->string_buffers);
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -3453,7 +3830,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      shader_addline(buffer, "%s vec2 pos;\n", get_attribute_keyword(gl_info));
      shader_addline(buffer, "%s vec3 texcoord;\n", get_attribute_keyword(gl_info));
      declare_out_varying(gl_info, buffer, FALSE, "vec3 out_texcoord;\n");
-@@ -12617,6 +12890,7 @@
+@@ -12617,6 +13233,7 @@
  
      string_buffer_clear(buffer);
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -3461,7 +3838,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      shader_addline(buffer, "uniform sampler%s sampler;\n", tex_type);
      if (args->use_colour_key)
      {
-@@ -12660,7 +12934,7 @@
+@@ -12660,7 +13277,7 @@
      GL_EXTCALL(glBindAttribLocation(program, 0, "pos"));
      GL_EXTCALL(glBindAttribLocation(program, 1, "texcoord"));
  
@@ -3470,7 +3847,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
          GL_EXTCALL(glBindFragDataLocation(program, 0, "ps_out"));
  
      GL_EXTCALL(glCompileShader(vshader_id));
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/texture.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/texture.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/texture.c recovered-session/wine-11.0/dlls/wined3d/texture.c
 --- a/dlls/wined3d/texture.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/texture.c	2026-08-02 00:35:49.523481412 +0300
 @@ -20,9 +20,36 @@
@@ -3522,7 +3899,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      TRACE("texture %p, resource_type %s, format %s, multisample_type %#x, multisample_quality %#x, "
              "usage %s, bind_flags %s, access %s, width %u, height %u, depth %u, layer_count %u, level_count %u, "
              "flags %#x, device %p, parent %p, parent_ops %p, sub_resources %p, texture_ops %p.\n",
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/texture_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/texture_gl.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/texture_gl.c recovered-session/wine-11.0/dlls/wined3d/texture_gl.c
 --- a/dlls/wined3d/texture_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/texture_gl.c	2026-08-02 05:05:34.299647621 +0300
 @@ -35,6 +35,189 @@
@@ -4168,7 +4545,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
          }
  
          if (format->stencil_size)
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/utils.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/utils.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/utils.c recovered-session/wine-11.0/dlls/wined3d/utils.c
 --- a/dlls/wined3d/utils.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/utils.c	2026-08-02 12:35:21.534727571 +0300
 @@ -1053,6 +1053,258 @@
@@ -4873,7 +5250,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
          settings->flatshading = state->extra_vs_args.flat_shading;
      else
          settings->flatshading = FALSE;
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/wined3d_gl.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/wined3d_gl.h
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/wined3d_gl.h recovered-session/wine-11.0/dlls/wined3d/wined3d_gl.h
 --- a/dlls/wined3d/wined3d_gl.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/wined3d_gl.h	2026-08-01 01:26:08.750640867 +0300
 @@ -360,6 +360,7 @@
@@ -4894,7 +5271,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  }
  
  /* Checking of API calls */
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/wined3d_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/wined3d_private.h
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/wined3d/wined3d_private.h recovered-session/wine-11.0/dlls/wined3d/wined3d_private.h
 --- a/dlls/wined3d/wined3d_private.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/wined3d_private.h	2026-07-12 09:38:41.666299063 +0300
 @@ -242,6 +242,7 @@

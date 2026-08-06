@@ -1,4 +1,4 @@
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmime/audiopath.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmime/audiopath.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmime/audiopath.c recovered-session/wine-11.0/dlls/dmime/audiopath.c
 --- a/dlls/dmime/audiopath.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmime/audiopath.c	2026-08-04 11:34:26.229402017 +0300
 @@ -28,6 +28,9 @@
@@ -135,7 +135,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
      *params = port_config->params;
      if (!(params->dwValidParams & DMUS_PORTPARAMS_CHANNELGROUPS))
      {
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmime/dmime_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmime/dmime_private.h
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmime/dmime_private.h recovered-session/wine-11.0/dlls/dmime/dmime_private.h
 --- a/dlls/dmime/dmime_private.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmime/dmime_private.h	2026-08-04 11:34:26.074400461 +0300
 @@ -76,6 +76,8 @@
@@ -157,7 +157,7 @@ diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c40909
  
  /*****************************************************************************
   * Auxiliary definitions
-diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmime/performance.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmime/performance.c
+diff -uNr /tmp/claude-1000/-mnt-data-holden-mgs/c4dcb0f6-47a5-4c38-86b1-62c409095380/scratchpad/pristine/wine-11.0/dlls/dmime/performance.c recovered-session/wine-11.0/dlls/dmime/performance.c
 --- a/dlls/dmime/performance.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmime/performance.c	2026-08-05 15:41:33.870308323 +0300
 @@ -24,6 +24,10 @@
