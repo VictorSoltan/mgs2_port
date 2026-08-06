@@ -186,3 +186,21 @@ The patches are derivative of Wine and carry Wine's LGPL-2.1-or-later. Wine 11.0
 is the base; `685c5b6f6312d55c948ee15315d858777af72408` (Anton Baskanov) is
 backported in the dmsynth patch. Everything else here — launcher, harness, briefs
 — was produced for this port.
+
+## binaries/
+
+The exact set the game was verified playable on, so a device can be restored
+without a toolchain. Checksums in `binaries/SHA256SUMS`.
+
+```text
+dsound_se1.dll         makes dmsynth sink output audible at all
+dmime_se1.dll          delivers SE note-ons; shared-port support
+dmsynth_se1.dll        jitter backport, cost policy, idle-block skip
+winewayland_pbo1.so    the presenter these numbers were measured with
+```
+
+Not included, because they are large and unchanged from what the tree builds:
+`wined3d_dbg150_cxcaps.dll` (25 MB), `win32u_glfuncs3.so`,
+`opengl32_glesver1.so`, `user32_peek1.dll`, `ntdll_fastyield.so`. A full restore
+needs those too — rebuild them from `wine-patches/`, or copy them off a working
+device.
