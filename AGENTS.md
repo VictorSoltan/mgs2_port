@@ -12,8 +12,10 @@ harness, and 30 briefs recording **which hypotheses turned out wrong**.
 
 ```text
 README.md                  what works, why, and the dead-end list
-docs/briefs/MGS2_PERF_BRIEF_35.md   START HERE: every open problem on both stacks,
-                                    ranked, with the two gates that decide the rest
+docs/briefs/MGS2_PERF_BRIEF_37.md   START HERE: the whole renderer cost is the glDraw
+                                    calls themselves. What to batch, and what not to
+docs/briefs/MGS2_PERF_BRIEF_36.md   the ladder that decomposed the frame
+docs/briefs/MGS2_PERF_BRIEF_35.md   every open problem on both stacks, ranked
 docs/briefs/MGS2_PERF_BRIEF_34.md   what blocked the game on Hangover; superseded by
                                     #35 now that it renders
 docs/briefs/MGS2_PERF_BRIEF_33.md   how that was found: the EGL facade, and gates 1-4
