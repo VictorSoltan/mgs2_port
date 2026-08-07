@@ -12,8 +12,10 @@ harness, and 30 briefs recording **which hypotheses turned out wrong**.
 
 ```text
 README.md                  what works, why, and the dead-end list
-docs/briefs/MGS2_PERF_BRIEF_33.md   START HERE: the EGL facade works. Gates 1-4 of
-                                    H2 are through without patching Wine at all
+docs/briefs/MGS2_PERF_BRIEF_34.md   START HERE: exactly what blocks the game on
+                                    Hangover, self-contained, with what is ruled out
+docs/briefs/MGS2_PERF_BRIEF_33.md   how that was found: the EGL facade, and gates 1-4
+                                    of H2 passing without patching Wine at all
 docs/briefs/MGS2_PERF_BRIEF_32.md   H0/H1, and the disk-space traps. Its render 45
                                     reading is wrong; #33 corrects it
 docs/briefs/MGS2_PERF_BRIEF_31.md   why the track changed, and the H0-H4 plan
