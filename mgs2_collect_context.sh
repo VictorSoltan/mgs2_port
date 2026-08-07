@@ -176,16 +176,25 @@ run() {
   # needs a definite answer on the multi-draw entry points rather than an
   # assumption. The blob carries its extension string and its exported symbols,
   # both of which can be read without a context.
+  # ROCKNIX has no nm and no objdump, and the first version of this check piped
+  # nm into grep: every symbol came back "absent", including glDrawElementsInstanced,
+  # which is core GLES 3.0 on a GLES 3.2 device. A missing tool must never read as
+  # a missing symbol, so grep the file directly -- exported names live in .dynstr
+  # and this needs no binutils at all. readelf is used only to corroborate.
   echo "=== libmali: multi-draw and instancing symbols ==="
+  echo "tools: nm=$(command -v nm || echo MISSING) readelf=$(command -v readelf || echo MISSING)"
   for lib in /usr/lib/libmali*.so* /usr/lib/aarch64-linux-gnu/libmali*.so*; do
     [ -e "$lib" ] || continue
-    echo "--- $lib"
+    # Resolve symlinks so the size reported is the real object, not the link.
+    real=$(readlink -f "$lib" 2>/dev/null || echo "$lib")
+    echo "--- $lib -> $real ($(stat -c %s "$real" 2>/dev/null) bytes)"
     for sym in glMultiDrawArrays glMultiDrawArraysEXT glMultiDrawElements \
                glMultiDrawElementsEXT glMultiDrawElementsBaseVertexEXT \
                glDrawArraysInstanced glDrawElementsInstanced \
-               glMultiDrawArraysIndirect glDrawElementsInstancedBaseVertex; do
-      if { nm -D --defined-only "$lib" 2>/dev/null || readelf -sW "$lib" 2>/dev/null; } \
-           | grep -qw "$sym"; then
+               glMultiDrawArraysIndirect glDrawElementsInstancedBaseVertex \
+               glTexStorage2D eglCreateWindowSurface eglCreateImageKHR \
+               glEGLImageTargetTexture2DOES; do
+      if grep -qa "$sym" "$real" 2>/dev/null; then
         echo "  PRESENT $sym"
       else
         echo "  absent  $sym"
