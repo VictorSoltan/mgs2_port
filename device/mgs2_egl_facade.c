@@ -53,6 +53,11 @@ typedef void          *EGLDisplay;
 typedef void          *EGLConfig;
 typedef void          *EGLContext;
 
+typedef void          *EGLSurface;
+typedef unsigned int   GLenum;
+typedef int            GLint;
+typedef unsigned int   GLuint;
+
 #define EGL_RENDERABLE_TYPE        0x3040
 #define EGL_NONE                   0x3038
 #define EGL_OPENGL_ES_BIT          0x0001
@@ -62,6 +67,10 @@ typedef void          *EGLContext;
 #define EGL_OPENGL_ES_API          0x30A0
 #define EGL_OPENGL_API             0x30A2
 #define EGL_CONTEXT_MAJOR_VERSION  0x3098   /* == EGL_CONTEXT_CLIENT_VERSION */
+
+/* Desktop-GL-only query wined3d makes at adapter_gl.c:3409. */
+#define GL_CONTEXT_PROFILE_MASK        0x9126
+#define GL_CONTEXT_CORE_PROFILE_BIT    0x00000001
 
 /* The real implementations.
  *
@@ -79,6 +88,11 @@ typedef EGLBoolean (*fn_get_config_attrib)( EGLDisplay, EGLConfig, EGLint, EGLin
 typedef EGLBoolean (*fn_bind_api)( EGLint );
 typedef EGLContext (*fn_create_context)( EGLDisplay, EGLConfig, EGLContext, const EGLint * );
 typedef void      *(*fn_get_proc_address)( const char * );
+typedef void       (*fn_get_integerv)( GLenum, GLint * );
+typedef EGLSurface (*fn_create_window_surface)( EGLDisplay, EGLConfig, void *, const EGLint * );
+typedef EGLBoolean (*fn_destroy_surface)( EGLDisplay, EGLSurface );
+typedef EGLBoolean (*fn_make_current)( EGLDisplay, EGLSurface, EGLSurface, EGLContext );
+typedef EGLBoolean (*fn_swap_buffers)( EGLDisplay, EGLSurface );
 
 static void *real_symbol( const char *name )
 {
@@ -190,6 +204,98 @@ EGLContext mgs2_facade_eglCreateContext( EGLDisplay dpy, EGLConfig config,
     return real( dpy, config, share, attrib_list );
 }
 
+
+/* Rule 4. wined3d asks glGetIntegerv(GL_CONTEXT_PROFILE_MASK) as soon as it
+ * believes the context is >= 3.2 (adapter_gl.c:3409). GLES has no such enum, so
+ * Mali answers GL_INVALID_ENUM, and worse, wined3d then classifies the context as
+ * WINED3D_GL_LEGACY_CONTEXT -- which changes how it enumerates extensions, from
+ * glGetStringi back to the old glGetString(GL_EXTENSIONS).
+ *
+ * "Core" is not literally true of GLES; the honest answer is that wined3d is
+ * asking a question GLES does not have. But functionally the right answer is
+ * "not legacy", which is exactly what this project's own GLES work concluded
+ * earlier. Only this one enum is touched; everything else goes to Mali.
+ */
+void mgs2_facade_glGetIntegerv( GLenum pname, GLint *data )
+{
+    if (pname == GL_CONTEXT_PROFILE_MASK && data)
+    {
+        FACADE_ONCE( prof, "glGetIntegerv(GL_CONTEXT_PROFILE_MASK) -> CORE (GLES has no profiles)\n" );
+        *data = GL_CONTEXT_CORE_PROFILE_BIT;
+        return;
+    }
+    {
+        static fn_get_integerv real;
+        if (!real) real = (fn_get_integerv)real_symbol( "glGetIntegerv" );
+        if (real) real( pname, data );
+    }
+}
+
+/* Rule 5. glBindFragDataLocation is desktop GL only. The GLES shader path emits
+ * explicit layout(location = ...) instead, so the correct GLES behaviour is to do
+ * nothing rather than to fail. This is the barrier the old stack hit right after
+ * profile classification, and skipping it is what got it past the first draw. */
+void mgs2_facade_glBindFragDataLocation( GLuint program, GLuint colour, const char *name )
+{
+    (void)program; (void)colour; (void)name;
+    FACADE_ONCE( fragdata, "glBindFragDataLocation -> GLES no-op (explicit layout(location) is used)\n" );
+}
+
+/* Lifecycle telemetry. Four events, each logged once, so the question "did a frame
+ * ever reach the compositor" is answerable without a Wine trace and without
+ * logging per call. This is what separates a graphics bring-up failure from the
+ * game's own busy-loop. */
+EGLSurface mgs2_facade_eglCreateWindowSurface( EGLDisplay dpy, EGLConfig config,
+        void *win, const EGLint *attribs )
+{
+    static fn_create_window_surface real;
+    EGLSurface surface;
+
+    if (!real) real = (fn_create_window_surface)real_symbol( "eglCreateWindowSurface" );
+    if (!real) return 0;
+    surface = real( dpy, config, win, attribs );
+    if (facade_logging())
+        fprintf( stderr, "MGS2EGL: window surface created surface=%p config=%p win=%p\n",
+                 surface, config, win );
+    fflush( stderr );
+    return surface;
+}
+
+EGLBoolean mgs2_facade_eglDestroySurface( EGLDisplay dpy, EGLSurface surface )
+{
+    static fn_destroy_surface real;
+
+    if (facade_logging())
+        fprintf( stderr, "MGS2EGL: window surface destroyed surface=%p\n", surface );
+    fflush( stderr );
+    if (!real) real = (fn_destroy_surface)real_symbol( "eglDestroySurface" );
+    if (!real) return 0;
+    return real( dpy, surface );
+}
+
+EGLBoolean mgs2_facade_eglMakeCurrent( EGLDisplay dpy, EGLSurface draw,
+        EGLSurface read, EGLContext ctx )
+{
+    static fn_make_current real;
+    EGLBoolean ret;
+
+    if (!real) real = (fn_make_current)real_symbol( "eglMakeCurrent" );
+    if (!real) return 0;
+    ret = real( dpy, draw, read, ctx );
+    FACADE_ONCE( cur, "makeCurrent draw=%p context=%p ret=%u\n", draw, ctx, ret );
+    return ret;
+}
+
+EGLBoolean mgs2_facade_eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
+{
+    static fn_swap_buffers real;
+
+    FACADE_ONCE( swap, "FIRST SWAP surface=%p -- a frame reached the compositor\n", surface );
+    if (!real) real = (fn_swap_buffers)real_symbol( "eglSwapBuffers" );
+    if (!real) return 0;
+    return real( dpy, surface );
+}
+
 /* Wine takes only a couple of symbols by dlsym and asks eglGetProcAddress for the
  * rest, so the three rules have to be reachable through both routes. */
 void *mgs2_facade_eglGetProcAddress( const char *name )
@@ -199,6 +305,13 @@ void *mgs2_facade_eglGetProcAddress( const char *name )
         if (!strcmp( name, "eglGetConfigAttrib" )) return (void *)mgs2_facade_eglGetConfigAttrib;
         if (!strcmp( name, "eglBindAPI" ))         return (void *)mgs2_facade_eglBindAPI;
         if (!strcmp( name, "eglCreateContext" ))   return (void *)mgs2_facade_eglCreateContext;
+        if (!strcmp( name, "glGetIntegerv" ))            return (void *)mgs2_facade_glGetIntegerv;
+        if (!strcmp( name, "glBindFragDataLocation" ))   return (void *)mgs2_facade_glBindFragDataLocation;
+        if (!strcmp( name, "glBindFragDataLocationEXT" ))return (void *)mgs2_facade_glBindFragDataLocation;
+        if (!strcmp( name, "eglCreateWindowSurface" ))   return (void *)mgs2_facade_eglCreateWindowSurface;
+        if (!strcmp( name, "eglDestroySurface" ))        return (void *)mgs2_facade_eglDestroySurface;
+        if (!strcmp( name, "eglMakeCurrent" ))           return (void *)mgs2_facade_eglMakeCurrent;
+        if (!strcmp( name, "eglSwapBuffers" ))           return (void *)mgs2_facade_eglSwapBuffers;
     }
     REAL( real, fn_get_proc_address, "eglGetProcAddress" );
     return real( name );
@@ -214,3 +327,12 @@ EGLContext eglCreateContext( EGLDisplay dpy, EGLConfig config, EGLContext share,
     __attribute__((alias("mgs2_facade_eglCreateContext")));
 void *eglGetProcAddress( const char *name )
     __attribute__((alias("mgs2_facade_eglGetProcAddress")));
+
+EGLSurface eglCreateWindowSurface( EGLDisplay dpy, EGLConfig config, void *win, const EGLint *attribs )
+    __attribute__((alias("mgs2_facade_eglCreateWindowSurface")));
+EGLBoolean eglDestroySurface( EGLDisplay dpy, EGLSurface surface )
+    __attribute__((alias("mgs2_facade_eglDestroySurface")));
+EGLBoolean eglMakeCurrent( EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx )
+    __attribute__((alias("mgs2_facade_eglMakeCurrent")));
+EGLBoolean eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
+    __attribute__((alias("mgs2_facade_eglSwapBuffers")));
