@@ -179,7 +179,26 @@ export WINEDLLOVERRIDES="mscoree=;mshtml=;winemenubuilder.exe=;${AUDIO_OVERRIDE}
 # /storage further up.
 #   MGS2_GLSL_CACHE=          disable
 #   MGS2_GLSL_CACHE_STATS=1   log every hit, store and reject
-export MGS2_GLSL_CACHE="${MGS2_GLSL_CACHE-D:\\roms\\ports\\MGS2-Substance\\cache}"
+# Off. The persistent program cache is finished as an idea on this driver, and it
+# took two separate walls to establish that.
+#
+# First Wine: glGetProgramBinary was unreachable from PE code because the GLES
+# context does not advertise the desktop extension the entry point is gated on.
+# That one is solved -- opengl32_glesbinary1.so lets the OES spelling through, and
+# the pointers arrive (get_binary=79AAC000 instead of NULL).
+#
+# Then the blob itself. Measured 7 Aug 2026 with wined3d_release3.dll:
+#   same process, binary written then reloaded   4 stored, 3 hits, 0 rejected
+#   next process, binaries from the run before   4 stored, 3 hits, 4 REJECTED
+# It accepts its own binaries only inside the process that produced them, which
+# is precisely the case where wined3d already has the program in memory. So the
+# cache buys nothing and writes to the SD card for no reason.
+#
+# The ~200 ms link therefore has to be paid once per process no matter what. The
+# only remaining way to keep it out of gameplay is to pre-link during level load
+# by replaying recorded state combinations through wined3d's own program lookup.
+#   MGS2_GLSL_CACHE=D:\roms\ports\MGS2-Substance\cache   re-enables the experiment
+export MGS2_GLSL_CACHE="${MGS2_GLSL_CACHE-}"
 
 if [ "${MGS2_TRIAGE:-0}" = 1 ]; then
     export MGS2_GLSL_CACHE_STATS=1
@@ -230,7 +249,7 @@ export MGS2_GL_STATS="${MGS2_GL_STATS:-0}"
 # written out to memory for nothing -- MGS2_GL_INVALIDATE_DS=0 disables), and
 # frame-time distribution in the stats line, because a mean over 300 frames hides
 # exactly the hitches this port is judged on.
-WAYLAND_SO="${MGS2_WAYLAND_SO:-winewayland_mali1.so}"
+WAYLAND_SO="${MGS2_WAYLAND_SO:-winewayland_stall1.so}"
 [ -r "$GAMEDIR/$WAYLAND_SO" ] || WAYLAND_SO="winewayland_gbmshm_directbgra1.so"
 
 # Which WineD3D build to mount. dbg52 is dbg42 with a six-byte binary patch:
@@ -259,7 +278,15 @@ OPENGL32_SO="${MGS2_OPENGL32_SO:-opengl32_glesver1.so}"
 # black-quad guard is deliberately narrow (codec composite only) and was
 # validated through a 70-confirm gameplay run with zero page faults.
 export MGS2_GLES_FBO_READBACK="${MGS2_GLES_FBO_READBACK:-1}"
-export MGS2_SKIP_CODEC_BLACK_QUAD="${MGS2_SKIP_CODEC_BLACK_QUAD:-1}"
+# Was 1: this threw away the quad the game draws over the codec portrait, which
+# used to come out black and hide the face. Verified 7 Aug 2026 with it off --
+# faces render correctly -- so the CrossOver-derived capability work fixed the
+# real cause and the workaround is now just a per-draw check that discards one of
+# the game's draws. Off by default, and compiled out of wined3d_release2.dll
+# entirely, which leaves the hot draw path with no MGS2 hooks at all.
+# If a black quad ever comes back:
+#   MGS2_WINED3D_DLL=wined3d_glslcache2.dll MGS2_SKIP_CODEC_BLACK_QUAD=1
+export MGS2_SKIP_CODEC_BLACK_QUAD="${MGS2_SKIP_CODEC_BLACK_QUAD:-0}"
 
 # Unix-side ntdll. Empty means "use the stock one". The rebuilt variant makes
 # NtYieldExecution's cost switchable: stock is getrusage + sched_yield +
@@ -359,10 +386,10 @@ fi
 # it restores game SFX and removes the duplicate synth workers.  Set
 # Keep DirectMusic on the established baseline.  It is not in the gameplay
 # SFX path and is left independently overridable for diagnostics.
-DMIME_DLL="${MGS2_DMIME_DLL:-dmime_graphqi.dll}"
+DMIME_DLL="${MGS2_DMIME_DLL:-dmime_se1.dll}"
 [ -n "$DMIME_DLL" ] && [ ! -r "$GAMEDIR/$DMIME_DLL" ] && DMIME_DLL=""
 
-DSOUND_DLL="${MGS2_DSOUND_DLL:-}"
+DSOUND_DLL="${MGS2_DSOUND_DLL:-dsound_se1.dll}"
 [ -n "$DSOUND_DLL" ] && [ ! -r "$GAMEDIR/$DSOUND_DLL" ] && DSOUND_DLL=""
 
 # dmusic holds the ports. Overridable so the download/PlayBuffer census can be
@@ -370,7 +397,7 @@ DSOUND_DLL="${MGS2_DSOUND_DLL:-}"
 DMUSIC_DLL="${MGS2_DMUSIC_DLL:-}"
 [ -n "$DMUSIC_DLL" ] && [ ! -r "$GAMEDIR/$DMUSIC_DLL" ] && DMUSIC_DLL=""
 
-DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_wine112.dll}"
+DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_se1.dll}"
 [ -n "$DMSYNTH_DLL" ] && [ ! -r "$GAMEDIR/$DMSYNTH_DLL" ] && DMSYNTH_DLL=""
 
 # Which d3d8 to mount. Only meaningful because d3d8=builtin (see WINEDLLOVERRIDES
@@ -389,7 +416,7 @@ DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_wine112.dll}"
 D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_mgs2fast1.dll}"
 [ -n "$D3D8_DLL" ] && [ ! -r "$GAMEDIR/$D3D8_DLL" ] && D3D8_DLL=""
 
-WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_glslcache2.dll}"
+WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_release3.dll}"
 [ -r "$GAMEDIR/$WINED3D_DLL" ] || WINED3D_DLL="wined3d_dbg42_gles_present.dll"
 
 # ---------------------------------------------------------------------------
@@ -417,6 +444,15 @@ WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_glslcache2.dll}"
 # step was leaving a quarter of the CPU unused. scaling_available_frequencies
 # lists only up to 1800000 and cpufreq "boost" reads 0, yet 1992000 is
 # accepted and reached.
+# SE needs one shared DirectMusic port: one port per audio path meant fourteen
+# 22050 Hz sink buffers for the DirectSound mixer to resample every period under
+# box86, which was audible as stuttering the moment SE started sounding. Group 2
+# carries SE, so the count must stay above 2. Defaulted here rather than only in
+# MGS2-Substance.sh so that launching this script directly also has working sound.
+export MGS2_DMIME_SHAREDGROUPS="${MGS2_DMIME_SHAREDGROUPS:-1}"
+export MGS2_DMIME_SHAREDGROUP_COUNT="${MGS2_DMIME_SHAREDGROUP_COUNT:-4}"
+export MGS2_DMSYNTH_JITTER_MS="${MGS2_DMSYNTH_JITTER_MS:-30}"
+
 FREQ_STEPS="${MGS2_FREQ_STEPS:-1992000 1800000 1608000 1416000}"
 TEMP_DOWN="${MGS2_TEMP_DOWN:-84000}"   # step the cap down above this
 TEMP_UP="${MGS2_TEMP_UP:-76000}"       # allow stepping back up below this
