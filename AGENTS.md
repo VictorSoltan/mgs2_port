@@ -12,8 +12,10 @@ harness, and 30 briefs recording **which hypotheses turned out wrong**.
 
 ```text
 README.md                  what works, why, and the dead-end list
-docs/briefs/MGS2_PERF_BRIEF_34.md   START HERE: exactly what blocks the game on
-                                    Hangover, self-contained, with what is ruled out
+docs/briefs/MGS2_PERF_BRIEF_35.md   START HERE: every open problem on both stacks,
+                                    ranked, with the two gates that decide the rest
+docs/briefs/MGS2_PERF_BRIEF_34.md   what blocked the game on Hangover; superseded by
+                                    #35 now that it renders
 docs/briefs/MGS2_PERF_BRIEF_33.md   how that was found: the EGL facade, and gates 1-4
                                     of H2 passing without patching Wine at all
 docs/briefs/MGS2_PERF_BRIEF_32.md   H0/H1, and the disk-space traps. Its render 45
