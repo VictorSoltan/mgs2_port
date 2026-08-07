@@ -108,7 +108,9 @@ BASE_MS=""
 
 # Interleaved, and reversed, and shuffled: thermal and any slow system drift then
 # cannot favour the same rung every time.
-for rung in 0 A B R C  C R B A 0  B 0 C A R; do
+# RUNGS overrides the sequence, for re-measuring a subset without standing at the
+# spot for the full fifteen windows.
+for rung in ${RUNGS:-0 A B R C  C R B A 0  B 0 C A R}; do
     echo "$rung" > "$RUNG_FILE"
     sleep "$SETTLE"
     before=$(frames_so_far); t0=$(thread_ticks "$PID"); w0=$(sched_wait "$PID")
