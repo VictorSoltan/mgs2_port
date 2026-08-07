@@ -12,9 +12,12 @@ harness, and 30 briefs recording **which hypotheses turned out wrong**.
 
 ```text
 README.md                  what works, why, and the dead-end list
-docs/briefs/MGS2_PERF_BRIEF_29.md   start here for performance: self-contained handover
+docs/briefs/MGS2_PERF_BRIEF_32.md   START HERE: the main track is Hangover now.
+                                    H0/H1 done, H2 blocked on EGL config enumeration
+docs/briefs/MGS2_PERF_BRIEF_31.md   why the track changed, and the H0-H4 plan
+docs/briefs/MGS2_PERF_BRIEF_29.md   the old track: self-contained perf handover
 docs/briefs/MGS2_PERF_BRIEF_30.md   the game loop disassembled, and the instruments
-                                    built for the next device session (unmeasured)
+                                    built for it (the ladder is deployed, unmeasured)
 docs/briefs/MGS2_PERF_BRIEF_28.md   the measurements 29 is built on
 docs/DEVICE.md             how to run, measure and not break the console
 wine-patches/*.patch       the changes, one file per Wine module
