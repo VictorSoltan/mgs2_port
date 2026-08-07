@@ -93,6 +93,8 @@ typedef EGLSurface (*fn_create_window_surface)( EGLDisplay, EGLConfig, void *, c
 typedef EGLBoolean (*fn_destroy_surface)( EGLDisplay, EGLSurface );
 typedef EGLBoolean (*fn_make_current)( EGLDisplay, EGLSurface, EGLSurface, EGLContext );
 typedef EGLBoolean (*fn_swap_buffers)( EGLDisplay, EGLSurface );
+typedef void       (*fn_cleardepthf)( float );
+typedef void       (*fn_depthrangef)( float, float );
 
 static void *real_symbol( const char *name )
 {
@@ -296,6 +298,33 @@ EGLBoolean mgs2_facade_eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
     return real( dpy, surface );
 }
 
+
+/* Rule 6. glClearDepth and glDepthRange take doubles and exist only in desktop GL;
+ * GLES has glClearDepthf/glDepthRangef taking floats. This is not cosmetic: with
+ * glClearDepth missing, wined3d_adapter_find_polyoffset_scale (utils.c:3880) can
+ * never clear depth, and its for(;;) detection loop is what Direct3DCreate8 was
+ * observed spinning in -- 95% CPU, no further d3d8 calls, no Win32 calls at all.
+ * This is exactly the bridge patch 08 carries as gles_clear_depth/gles_depth_range,
+ * reproduced here so no Wine module has to be rebuilt.
+ */
+void mgs2_facade_glClearDepth( double depth )
+{
+    static fn_cleardepthf real;
+
+    FACADE_ONCE( cleardepth, "glClearDepth -> glClearDepthf (GLES has no double form)\n" );
+    if (!real) real = (fn_cleardepthf)real_symbol( "glClearDepthf" );
+    if (real) real( (float)depth );
+}
+
+void mgs2_facade_glDepthRange( double near_val, double far_val )
+{
+    static fn_depthrangef real;
+
+    FACADE_ONCE( depthrange, "glDepthRange -> glDepthRangef\n" );
+    if (!real) real = (fn_depthrangef)real_symbol( "glDepthRangef" );
+    if (real) real( (float)near_val, (float)far_val );
+}
+
 /* Wine takes only a couple of symbols by dlsym and asks eglGetProcAddress for the
  * rest, so the three rules have to be reachable through both routes. */
 void *mgs2_facade_eglGetProcAddress( const char *name )
@@ -307,6 +336,8 @@ void *mgs2_facade_eglGetProcAddress( const char *name )
         if (!strcmp( name, "eglCreateContext" ))   return (void *)mgs2_facade_eglCreateContext;
         if (!strcmp( name, "glGetIntegerv" ))            return (void *)mgs2_facade_glGetIntegerv;
         if (!strcmp( name, "glBindFragDataLocation" ))   return (void *)mgs2_facade_glBindFragDataLocation;
+        if (!strcmp( name, "glClearDepth" ))             return (void *)mgs2_facade_glClearDepth;
+        if (!strcmp( name, "glDepthRange" ))             return (void *)mgs2_facade_glDepthRange;
         if (!strcmp( name, "glBindFragDataLocationEXT" ))return (void *)mgs2_facade_glBindFragDataLocation;
         if (!strcmp( name, "eglCreateWindowSurface" ))   return (void *)mgs2_facade_eglCreateWindowSurface;
         if (!strcmp( name, "eglDestroySurface" ))        return (void *)mgs2_facade_eglDestroySurface;

@@ -412,3 +412,90 @@ Call user32.PeekMessageA                  0
 разница покажет последний общий вызов.
 
 Последнее — самое дешёвое и его стоит сделать первым.
+
+---
+
+# Дополнение 4: спин найден внутри `Direct3DCreate8`, и предел возможностей façade
+
+## Где именно крутится
+
+Трассировка d3d8 (`trace+d3d8`) даёт **одну строку за весь запуск**:
+
+```text
+trace:d3d8:Direct3DCreate8 sdk_version 0xdc
+```
+
+и больше ничего. То есть `Direct3DCreate8` **не возвращается**. Отсюда и всё
+остальное: ни одного draw, ни `PeekMessage`, ни `QueryPerformanceFrequency` —
+игра просто не выходит из создания D3D8.
+
+Трассировка wined3d (`trace+d3d`, диагностическая сборка) показывает последнее, что
+успевает выполниться:
+
+```text
+последние события: wined3d_init -> wined3d_output_init -> wined3d_parse_gl_version
+                   -> wined3d_adapter_init -> wined3d_adapter_init_gl_caps
+                   -> parse_extension_string (125 строк, то есть 125 расширений)
+далее лог перестаёт расти, CPU 96%
+```
+
+Поправка к промежуточному выводу: 125 строк `parse_extension_string` — это
+нормальный разбор 125 расширений, **не** цикл. Спин наступает после него, в участке
+`wined3d_adapter_init_gl_caps` без TRACE-вызовов.
+
+## Наиболее вероятный виновник, с прямым основанием
+
+`wined3d_adapter_find_polyoffset_scale` (`dlls/wined3d/utils.c:3880`) содержит
+`for (;;)` и внутри:
+
+```c
+gl_info->gl_ops.gl.p_glClearColor(0.0f, 0.0f, 0.5f, 0.0f);
+gl_info->gl_ops.gl.p_glClearDepth(0.5f);     /* desktop-only: GLES имеет glClearDepthf */
+gl_info->gl_ops.gl.p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+```
+
+Основание не только теоретическое: **на production эта функция печатает ошибку**
+`PolygonOffset scale factor detection failed, using fallback value 2^23` (видно в
+логе production-прогона), то есть там детекция не удаётся и срабатывает fallback.
+Под Hangover этой ошибки нет вообще, а CPU 96% — то есть до fallback дело не
+доходит.
+
+`glClearDepth` в GLES отсутствует. Именно это и мостит наш `08-win32u.patch`
+(`gles_clear_depth` -> `glClearDepthf`, `gles_depth_range` -> `glDepthRangef`).
+
+## Предел façade: правило 6 не сработало
+
+Добавлено правило 6 — подмена `glClearDepth`/`glDepthRange` на float-формы через
+`eglGetProcAddress`. **В логе события не появились ни разу**, поведение не
+изменилось (draws 0, swap 0, CPU 96%).
+
+Значит core-GL функции до façade не доходят. По исходникам:
+
+```text
+win32u/opengl.c:874   dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )
+win32u/opengl.c:881   dlsym( funcs->egl_handle, #name )     <- часть символов напрямую
+win32u/opengl.c:908   ALL_EGL_FUNCS через p_eglGetProcAddress
+win32u/opengl.c:2497  ALL_GL_FUNCS через driver_funcs->p_get_proc_address
+```
+
+Расширения façade перехватывает, а `glClearDepth` в лог не попал — то есть этот
+конкретный символ через `eglGetProcAddress` не запрашивается.
+
+**Вывод, меняющий план: `08-win32u.patch` для первого кадра, по-видимому, всё-таки
+нужен** — именно его depth-мост, который ранее был отнесён к «вероятно не нужен
+сразу». Façade закрыл EGL-часть (правила 1-3) и profile mask (правило 4), но
+core-GL мосты им не закрываются.
+
+## Итог по цели
+
+Цель «запустить и чтобы работало быстрее production» в этой сессии **не
+достигнута**. Достигнуто: вся EGL/контекстная часть bring-up закрыта без правок
+Wine, и блокер сведён с «где-то в графике» до одной функции с известным дефектом и
+известным готовым исправлением в собственном патче проекта.
+
+## Следующий шаг, один
+
+Собрать `win32u.so` под aarch64 из `08-win32u.patch` — только depth-мост, без
+pre-resolve списка и без PeekMessage-части, и подложить его в
+`/storage/hangover/lib/wine/aarch64-unix/`. Это первая пересборка Wine в этой
+ветке, и теперь для неё есть конкретное обоснование, а не предположение.
