@@ -1,0 +1,187 @@
+# MGS2 RG353VS — бриф #33: EGL-façade сработал, gates 1–4 пройдены, барьер сдвинулся в wined3d
+
+Дата: 7 августа 2026. Продолжение #32. Здесь исправляется ошибка #32, описывается
+маленький ARM64 EGL-façade и его результат: **ноль пиксельных форматов превратились
+в 34, ошибка `Failed creating Direct3d8 object` исчезла, пересобирать Wine не
+потребовалось.**
+
+Всё измерено на устройстве.
+
+## Исправление ошибки #32
+
+В #32 было: `render 45` = десятичное 45 = 1+4+8+32, значит `EGL_OPENGL_BIT`
+присутствует, и потому production работает. **Это неверно.** Wine печатает поле
+через `%x` (`win32u/opengl.c:497`), то есть `45` — шестнадцатеричное:
+
+```text
+0x45 = 0x01 EGL_OPENGL_ES_BIT + 0x04 EGL_OPENGL_ES2_BIT + 0x40 EGL_OPENGL_ES3_BIT_KHR
+       EGL_OPENGL_BIT (0x08) ОТСУТСТВУЕТ
+```
+
+Старый 32-битный Mali desktop GL не объявлял. Настоящая причина работоспособности
+production записана в `MGS2_RG353VS_HANDOFF.md` и была прочитана невнимательно:
+
+> `dlls/win32u/opengl.c` is still pristine upstream — the deployed
+> `win32u_glfuncs3.so` works, but rebuilding it would silently lose several fixes
+> that are binary-only today: the large pre-resolved GL entry-point list, the
+> `EGL_DEFAULT_DISPLAY` override, **acceptance of `EGL_OPENGL_ES2/ES3` config
+> bits**, and the **`EGL_CONTEXT_MAJOR_VERSION 3` default** in context creation
+> (without which EGL hands back a GLES 1.1 context).
+
+Там же: пересобранный `win32u.so` на 47 740 байт меньше развёрнутого, то есть
+рабочий бинарник действительно содержит код, которого в дереве нет.
+
+Вывод, важный для всей ветки: **правки, дающие GLES-контекст, никогда не были в
+исходниках.** Ни `06`, ни `08`, ни `10` их не содержат — проверено grep'ом по всем
+трём: совпадений с `EGL_OPENGL_BIT`, `ES2_PROFILE`, `eglBindAPI`,
+`EGL_RENDERABLE_TYPE` — ноль.
+
+## Решение: три правила в маленьком ARM64 façade, Wine не тронут
+
+`device/mgs2_egl_facade.c`, 70 КБ собранного кода, `aarch64-linux-gnu-gcc`.
+Подставляется как `libEGL.so.1` через `LD_LIBRARY_PATH`, `DT_NEEDED` указывает на
+настоящий `libmali.so.1`.
+
+Почему façade, а не патч Wine: он оставляет stock Hangover полностью нетронутым,
+включая его `winewayland.drv`, который **уже** делает нативный
+`wl_egl_window -> eglCreateWindowSurface -> eglSwapBuffers`. Это и есть главный
+приз перехода; старый readback-презентер возвращать нельзя. И он обходит ровно ту
+ловушку, на которой проект уже спотыкался: пересборку `win32u.so`, к которой
+привязаны binary-only правки.
+
+Устройство ответило на вопрос «куда грузиться»: `libmali` экспортирует все нужные
+точки напрямую, frontend не нужен.
+
+```text
+/usr/lib/libEGL.so.1  -> libEGL.so.1.1.0    131 849 байт (обёртка)
+/usr/lib/libmali.so.1 -> libmali.so.1.10.0   59 855 128 байт (реализация)
+экспортирует eglGetProcAddress, eglGetConfigAttrib, eglBindAPI, eglCreateContext,
+             eglQueryString, eglChooseConfig, eglGetConfigs, eglInitialize,
+             eglGetDisplay, eglCreateWindowSurface
+```
+
+Три правила:
+
+```text
+1  eglGetConfigAttrib: если EGL_RENDERABLE_TYPE содержит ES2/ES3 и не содержит
+   EGL_OPENGL_BIT — добавить его В ОТВЕТ Wine. Сам EGLConfig не меняется, поэтому
+   eglCreateWindowSurface позже получает настоящий ES3-конфиг
+2  eglBindAPI: EGL_OPENGL_API -> EGL_OPENGL_ES_API
+3  eglCreateContext: если major version не запрошена — подставить GLES 3
+   (именно 3, а не 3.2: это значение развёрнутый бинарник уже использовал, и
+   этот Mali на него отвечает "OpenGL ES 3.2")
+```
+
+Устройство ELF-объекта, проверено `readelf`:
+
+```text
+DT_NEEDED libmali.so.1        <- без этого dlsym Wine не найдёт остальные egl*
+SONAME    libEGL.so.1
+экспортирует ровно четыре имени: eglGetConfigAttrib, eglBindAPI,
+                                 eglCreateContext, eglGetProcAddress
+НЕ определяет eglQueryString, eglInitialize, eglChooseConfig,
+              eglCreateWindowSurface — они проходят сквозь в Mali
+```
+
+Тонкость реализации, которая сначала была сделана неправильно: объект определяет
+те же имена, которые ему нужно вызывать, поэтому прямой вызов уходил бы в
+рекурсию. Реальные адреса берутся через `dlsym(RTLD_NEXT, ...)`, с запасным
+явным `dlopen`. Логирование — одна строка на событие, не на вызов.
+
+## Результат: gates 1–4 пройдены
+
+```text
+MGS2EGL: config renderable real=0x45 -> wine=0x4d
+MGS2EGL: eglBindAPI OPENGL -> OPENGL_ES
+MGS2EGL: context without a major version -> GLES 3
+
+pixel_formats 34                      (было 0)
+"Failed to find a suitable pixel format"   ИСЧЕЗЛО
+"Failed to get a GL context for adapter"   ИСЧЕЗЛО
+```
+
+То есть конфиги, форматы, создание контекста и его активация — всё прошло, без
+единой правки Wine и без пересборки чего-либо.
+
+## Барьер сдвинулся, и наши i386 PE его частично сняли
+
+Со **stock** wined3d следующая ошибка была:
+
+```text
+err:d3d:wined3d_parse_gl_version Invalid OpenGL major version 0.
+err:d3d:wined3d_parse_gl_version Invalid OpenGL version string
+    "OpenGL ES 3.2 v1.g29p1-12eac0.d6e9c0f8499d70cc285f3f0ca2ede780"
+err:d3d:wined3d_check_gl_call GL_INVALID_ENUM from extension detection @ adapter_gl.c:3695
+```
+
+Важно: парсер, который спотыкается, — **в wined3d**, а не в `opengl32/unix_wgl.c`.
+
+После подмены на наши i386 PE (`wined3d_release3.dll` + `d3d8_mgs2fast1.dll`):
+
+```text
+ошибок parse_gl_version   НЕТ
+ошибок err:d3d вообще     НЕТ
+CPU игры                  1-3%  ->  95%
+```
+
+То есть наши DLL действительно ABI-совместимы с Hangover 11.0 и снимают разбор
+версии GLES. Гипотеза «переиспользовать i386 PE» из #31 подтверждена — в #32 она
+была объявлена закрытой преждевременно, потому что падение тогда происходило
+раньше, на unix-стороне.
+
+## Где стоим сейчас
+
+Игра жива, грузит CPU на 95%, но **окна в sway больше нет**, GPU на минимуме
+200 МГц, на экране EmulationStation. Спин односоставный:
+
+```text
+threads=10, state=R, только главный поток: ticks=18513, wchan=0
+```
+
+Это в точности форма busy-wait из #30 (`while (тиков < цель) { limiter(); }` при
+недостижимом `Sleep`). Окно при этом **сначала появлялось** и пропало только когда
+игра прошла стадию D3D8, поэтому забрал его не EmulationStation: проект её
+сознательно не усыпляет (`MGS2-Substance.sh:25`), и production с ней сосуществует.
+
+### Ловушка, стоившая часа: release-сборка молчит
+
+`wined3d_release3.dll` — release, TRACE/ERR вырезаны (#29). «Ошибок нет» на нём не
+значит «всё хорошо», это значит «ничего не сообщается». Диагностировать надо на
+`wined3d_glslcache2.dll`, и он сразу показал скрытое:
+
+```text
+warn:d3d:context_create_wgl_attribs Failed to create a WGL context with
+    wglCreateContextAttribsARB, last error 0
+warn:d3d:wined3d_adapter_gl_init Couldn't create an OpenGL 4.4 context,
+    trying fallback to a lower version
+err:d3d:wined3d_check_gl_call GL_INVALID_ENUM from Querying context profile
+    @ adapter_gl.c:3509
+```
+
+`GL_CONTEXT_PROFILE_MASK` — desktop-only запрос, в GLES его нет. Это следующий
+класс работы: desktop-GL допущения в самом wined3d при создании версионного
+контекста.
+
+## Что дальше, по убыванию ценности
+
+```text
+1  почему исчезает окно после стадии D3D8. Прогон на glslcache2 с err+wgl и
+   err+waylanddrv, смотреть создание/уничтожение поверхности, а не только d3d
+2  ограничить wined3d версией 3.2, чтобы не пытался 4.4 (MaxVersionGL в реестре
+   prefix'а) — уберёт бессмысленный probe и часть desktop-only запросов
+3  профиль контекста: GL_INVALID_ENUM на adapter_gl.c:3509 и :3695
+4  gptokeyb в launch-hangover.sh — нужен для H3, но не для первого кадра
+5  когда кадр появится: СРАЗУ H3, критерий из #31 зафиксирован заранее
+```
+
+Патч `10-winewayland.drv` по-прежнему **не переносить**: разбор показал, что все
+895 строк — presenter на pbuffer/readback/SHM/PBO плюс телеметрия, ни строки
+EGL-конфигов. И `06`/`08` тоже пока не нужны: разбор версии GLES снялся нашим
+wined3d, а не ими.
+
+## Состояние устройства
+
+Hangover возвращён к stock (наши DLL лежат рядом под своими именами), façade
+остался в `/storage/mgs2-egl` и безвреден, пока `LD_LIBRARY_PATH` на него не
+указывает. Production цел: десять модулей, `wineprefix64` 598 МБ, lock свободен,
+экземпляров ноль, 270 МБ свободно, 70.6 °C.
