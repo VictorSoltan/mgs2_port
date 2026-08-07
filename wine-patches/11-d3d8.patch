@@ -65,7 +65,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      return texture->draw_texture ? texture->draw_texture : texture->wined3d_texture;
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/d3d8/device.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/d3d8/device.c
 --- a/dlls/d3d8/device.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/d3d8/device.c	2026-08-07 17:31:50.247553480 +0300
++++ b/dlls/d3d8/device.c	2026-08-07 18:43:08.070666917 +0300
 @@ -1491,6 +1491,10 @@
      src_impl = unsafe_impl_from_IDirect3DBaseTexture8(src_texture);
      dst_impl = unsafe_impl_from_IDirect3DBaseTexture8(dst_texture);
@@ -92,7 +92,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (!dst_surface)
      {
          WARN("Invalid destination surface passed.\n");
-@@ -1988,6 +1996,99 @@
+@@ -1988,6 +1996,139 @@
              wined3d_rendertarget_view_get_resource(wined3d_dsv), d3d8_dsv->sub_resource_idx, desc.format);
  }
  
@@ -139,18 +139,58 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 +    return on;
 +}
 +
++/* Which rung of the no-op ladder is active, re-read from a file about once a
++ * second so all four rungs can be measured in one run, on one scene.
++ *
++ * An environment variable cannot do this. It is fixed at process start, which
++ * would mean four launches -- and worse, rung A draws nothing at all, so the
++ * menus needed to load the save are invisible and the scene cannot be reached
++ * blind. Reading a rung file instead means: load the save, stand still, then
++ * flip the rung from outside while the scene and the thermal state hold.
++ *
++ * One CreateFile per second against a tmpfs path, so leaving this compiled in
++ * costs nothing measurable next to ~10 500 draws a second. The env knobs still
++ * win when set, for a run that is deliberately pinned from the start.
++ */
++static char d3d8_mgs2_ladder_rung(void)
++{
++    static char cached = '0';
++    static DWORD last;
++    DWORD now = GetTickCount();
++
++    if (!last || now - last >= 1000)
++    {
++        char path[MAX_PATH], buf[8] = {0};
++        DWORD got = 0;
++        HANDLE h;
++
++        last = now ? now : 1;
++        if (!GetEnvironmentVariableA("MGS2_LADDER_FILE", path, sizeof(path)))
++            strcpy(path, "Z:\\tmp\\mgs2-ladder");
++        h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                NULL, OPEN_EXISTING, 0, NULL);
++        if (h != INVALID_HANDLE_VALUE)
++        {
++            ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
++            CloseHandle(h);
++        }
++        cached = (buf[0] == 'A' || buf[0] == 'B' || buf[0] == 'C') ? buf[0] : '0';
++    }
++    return cached;
++}
++
 +BOOL d3d8_mgs2_noop_draw(void)
 +{
-+    static int on = -1;
-+    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_NOOP_DRAW", FALSE);
-+    return on;
++    static int env = -1;
++    if (env == -1) env = d3d8_mgs2_env_on("MGS2_D3D8_NOOP_DRAW", FALSE);
++    return env || d3d8_mgs2_ladder_rung() == 'A';
 +}
 +
 +BOOL d3d8_mgs2_noop_submit(void)
 +{
-+    static int on = -1;
-+    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_NOOP_SUBMIT", FALSE);
-+    return on;
++    static int env = -1;
++    if (env == -1) env = d3d8_mgs2_env_on("MGS2_D3D8_NOOP_SUBMIT", FALSE);
++    return env || d3d8_mgs2_ladder_rung() == 'B';
 +}
 +
 +void d3d8_mgs2_count(unsigned int which)
@@ -192,7 +232,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  static HRESULT WINAPI d3d8_device_SetRenderState(IDirect3DDevice8 *iface,
          D3DRENDERSTATETYPE state, DWORD value)
  {
-@@ -1995,6 +2096,17 @@
+@@ -1995,6 +2136,17 @@
  
      TRACE("iface %p, state %#x, value %#lx.\n", iface, state, value);
  
@@ -210,7 +250,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_mutex_lock();
      wined3d_stateblock_set_render_state(device->update_state, wined3d_render_state_from_d3d(state), value);
      if (state == D3DRS_POINTSIZE && value == D3D8_RESZ_CODE)
-@@ -2407,6 +2519,28 @@
+@@ -2407,6 +2559,28 @@
  
      l = &tss_lookup[type];
  
@@ -239,7 +279,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_mutex_lock();
      if (l->sampler_state)
          wined3d_stateblock_set_sampler_state(device->update_state, stage, l->u.sampler_state, value);
-@@ -2506,6 +2640,8 @@
+@@ -2506,6 +2680,8 @@
  
      decl = wined3d_vertex_declaration_get_parent(wined3d_decl);
      map = decl->stream_map & device->sysmem_vb;
@@ -248,7 +288,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      while (map)
      {
          stream = &state->streams[wined3d_bit_scan(&map)];
-@@ -2517,6 +2653,8 @@
+@@ -2517,6 +2693,8 @@
          wined3d_resource_get_desc(dst_resource, &desc);
          box.left = stream->offset + start_vertex * stride;
          box.right = min(box.left + vertex_count * stride, desc.size);
@@ -257,7 +297,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          if (FAILED(hr = wined3d_device_context_copy_sub_resource_region(device->immediate_context,
                  dst_resource, 0, box.left, 0, 0,
                  wined3d_buffer_get_resource(d3d8_buffer->wined3d_buffer), 0, &box, 0)))
-@@ -2545,6 +2683,9 @@
+@@ -2545,6 +2723,9 @@
      src_offset = (*start_idx) * idx_size;
      buffer_size = min(idx_count * idx_size, resource_desc.size - src_offset);
  
@@ -267,7 +307,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_box_set(&box, src_offset, 0, buffer_size, 1, 0, 1);
      if (FAILED(hr = wined3d_resource_map(index_buffer, 0, &map_desc, &box, WINED3D_MAP_READ)))
      {
-@@ -2566,6 +2707,8 @@
+@@ -2566,6 +2747,8 @@
      const struct wined3d_stateblock_state *state = device->stateblock_state;
      unsigned int i;
  
@@ -276,7 +316,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      for (i = 0; i < WINED3D_MAX_FRAGMENT_SAMPLERS; ++i)
      {
          struct wined3d_texture *wined3d_texture = state->textures[i];
-@@ -2574,9 +2717,20 @@
+@@ -2574,9 +2757,20 @@
          if (!wined3d_texture)
              continue;
          d3d8_texture = wined3d_texture_get_parent(wined3d_texture);
@@ -300,7 +340,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      }
  }
  
-@@ -2590,14 +2744,22 @@
+@@ -2590,14 +2784,22 @@
      TRACE("iface %p, primitive_type %#x, start_vertex %u, primitive_count %u.\n",
              iface, primitive_type, start_vertex, primitive_count);
  
@@ -324,7 +364,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
      for (i = 0; i < ARRAY_SIZE(device->stateblock_state->streams); ++i)
      {
-@@ -2627,6 +2789,10 @@
+@@ -2627,6 +2829,10 @@
      TRACE("iface %p, primitive_type %#x, min_vertex_idx %u, vertex_count %u, start_idx %u, primitive_count %u.\n",
              iface, primitive_type, min_vertex_idx, vertex_count, start_idx, primitive_count);
  
@@ -335,7 +375,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      index_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
      wined3d_mutex_lock();
      if (!device->stateblock_state->index_buffer)
-@@ -2637,6 +2803,8 @@
+@@ -2637,6 +2843,8 @@
      }
      base_vertex_index = device->stateblock_state->base_vertex_index;
      d3d8_device_upload_managed_textures(device);
@@ -344,7 +384,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      d3d8_device_upload_sysmem_vertex_buffers(device, base_vertex_index + min_vertex_idx, vertex_count);
      wined3d_device_context_set_primitive_type(device->immediate_context,
              wined3d_primitive_type_from_d3d(primitive_type), 0);
-@@ -2646,7 +2814,10 @@
+@@ -2646,7 +2854,10 @@
          wined3d_mutex_unlock();
          return hr;
      }
@@ -356,7 +396,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
      ib = wined3d_buffer_get_parent(device->stateblock_state->index_buffer);
      ib->discarded = false;
-@@ -2683,6 +2854,11 @@
+@@ -2683,6 +2894,11 @@
          return D3D_OK;
      }
  
@@ -368,7 +408,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_mutex_lock();
  
      if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device,
-@@ -2694,6 +2870,8 @@
+@@ -2694,6 +2910,8 @@
          goto done;
  
      d3d8_device_upload_managed_textures(device);
@@ -377,7 +417,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_device_context_set_primitive_type(device->immediate_context,
              wined3d_primitive_type_from_d3d(primitive_type), 0);
      wined3d_device_apply_stateblock(device->wined3d_device, device->state);
-@@ -2729,6 +2907,10 @@
+@@ -2729,6 +2947,10 @@
          return D3D_OK;
      }
  
@@ -388,7 +428,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_mutex_lock();
  
      if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device, &device->vertex_buffer,
-@@ -2749,6 +2931,8 @@
+@@ -2749,6 +2971,8 @@
      wined3d_stateblock_set_base_vertex_index(device->state, base_vertex_idx);
  
      d3d8_device_upload_managed_textures(device);

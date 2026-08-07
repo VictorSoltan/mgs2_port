@@ -1,6 +1,6 @@
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/adapter_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/adapter_gl.c
 --- a/dlls/wined3d/adapter_gl.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/adapter_gl.c	2026-08-02 14:12:49.285229261 +0300
++++ b/dlls/wined3d/adapter_gl.c	2026-08-07 23:13:36.525871679 +0300
 @@ -487,6 +487,16 @@
      /* No PBO -> No point in testing them. */
      if (!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT]) return;
@@ -126,15 +126,27 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      /* GL_ARB_ES2_compatibility */
      USE_GL_FUNC(glReleaseShaderCompiler)
      USE_GL_FUNC(glShaderBinary)
-@@ -3397,6 +3476,7 @@
+@@ -3397,25 +3476,63 @@
          ERR("Received a NULL GL_VERSION.\n");
          return FALSE;
      }
-+    gl_info->is_gles = !!strstr(gl_version_str, "OpenGL ES");
++    /* MGS2: the marker is for the Hangover stack, where an EGL facade rewrites
++     * GL_VERSION from "OpenGL ES 3.2 ..." to "3.2 ... MGS2_GLES" so that stock
++     * ARM64 opengl32 -- which has its own atoi() version parser and gates
++     * wglGetProcAddress on the result -- sees 3.2 instead of 0 and then 1.x.
++     * That rewrite would otherwise hide GLES from this detection. */
++    gl_info->is_gles = !!strstr(gl_version_str, "OpenGL ES")
++            || !!strstr(gl_version_str, "MGS2_GLES");
      gl_version = wined3d_parse_gl_version(gl_version_str);
  
++    /* Unconditional, two lines per process: this is the only way to see whether
++     * adapter caps init completes without turning on a full d3d trace. */
++    fprintf(stderr, "MGS2CAPS: caps init, is_gles=%d version=%s\n",
++            gl_info->is_gles, gl_version_str);
++    fflush(stderr);
++
      load_gl_funcs(gl_info);
-@@ -3404,18 +3484,43 @@
+ 
      memset(gl_info->supported, 0, sizeof(gl_info->supported));
      gl_info->supported[WINED3D_GL_EXT_NONE] = TRUE;
  
@@ -185,7 +197,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      {
          const char *gl_extensions = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_EXTENSIONS);
  
-@@ -3461,6 +3566,101 @@
+@@ -3461,6 +3578,101 @@
          }
      }
  
@@ -287,7 +299,38 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (gl_info->supported[EXT_BLEND_MINMAX] || gl_info->supported[EXT_BLEND_SUBTRACT])
          gl_info->supported[WINED3D_GL_BLEND_EQUATION] = TRUE;
  
-@@ -3675,12 +3875,17 @@
+@@ -3569,6 +3781,21 @@
+         TRACE("EXT_texture_sRGB_decode is not supported, disabling ARB_framebuffer_sRGB.\n");
+         gl_info->supported[ARB_FRAMEBUFFER_SRGB] = FALSE;
+     }
++    /* MGS2: these probes are the measured hang inside adapter_init_gl_caps on the
++     * Hangover stack. core_extensions[] promotes ARB_OCCLUSION_QUERY at GL 1.5 and
++     * ARB_TIMER_QUERY at 3.3 purely from gl_version, independently of the context
++     * profile, so a GLES 3.2 context gets them regardless -- and then the probe
++     * asks for GL_SAMPLES_PASSED and GL_QUERY_COUNTER_BITS, neither of which
++     * exists in GLES (GLES 3 has only GL_ANY_SAMPLES_PASSED, and glGetQueryiv
++     * accepts only GL_CURRENT_QUERY). D3D8 needs none of these queries. */
++    if (gl_info->is_gles)
++    {
++        TRACE("MGS2 GLES: dropping occlusion/timer/primitive queries, desktop-only probes.\n");
++        gl_info->supported[ARB_OCCLUSION_QUERY] = FALSE;
++        gl_info->supported[ARB_TIMER_QUERY] = FALSE;
++        gl_info->supported[WINED3D_GL_PRIMITIVE_QUERY] = FALSE;
++    }
++
+     if (gl_info->supported[ARB_OCCLUSION_QUERY])
+     {
+         GLint counter_bits;
+@@ -3587,7 +3814,7 @@
+         if (!counter_bits)
+             gl_info->supported[ARB_TIMER_QUERY] = FALSE;
+     }
+-    if (gl_version >= MAKEDWORD_VERSION(3, 0))
++    if (!gl_info->is_gles && gl_version >= MAKEDWORD_VERSION(3, 0))
+     {
+         GLint counter_bits;
+ 
+@@ -3675,12 +3902,17 @@
      if (gl_info->supported[ARB_SHADING_LANGUAGE_100])
      {
          const char *str = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_SHADING_LANGUAGE_VERSION_ARB);
@@ -307,7 +350,17 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          gl_info->glsl_version = MAKEDWORD_VERSION(major, minor);
          if (gl_info->glsl_version > MAKEDWORD_VERSION(1, 30) && gl_version < MAKEDWORD_VERSION(3, 0))
          {
-@@ -4938,8 +5143,10 @@
+@@ -3845,6 +4077,9 @@
+     if (gl_ext_emul_mask & GL_EXT_EMUL_EXT_FOG_COORD)
+         install_gl_compat_wrapper(gl_info, EXT_FOG_COORD);
+ 
++    fprintf(stderr, "MGS2CAPS: adapter caps DONE\n");
++    fflush(stderr);
++
+     return TRUE;
+ }
+ 
+@@ -4938,8 +5173,10 @@
      TRACE("Maximum point size support - max point size %.8e.\n", f[1]);
  
      d3d_info->wined3d_creation_flags = wined3d_creation_flags;
@@ -319,7 +372,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      d3d_info->shader_double_precision = !!(shader_caps.wined3d_caps & WINED3D_SHADER_CAP_DOUBLE_PRECISION);
      d3d_info->shader_output_interpolation = !!(shader_caps.wined3d_caps & WINED3D_SHADER_CAP_OUTPUT_INTERPOLATION);
      d3d_info->viewport_array_index_any_shader = !!gl_info->supported[ARB_SHADER_VIEWPORT_LAYER_ARRAY];
-@@ -4957,7 +5164,10 @@
+@@ -4957,7 +5194,10 @@
      d3d_info->scaled_resolve = !!gl_info->supported[EXT_FRAMEBUFFER_MULTISAMPLE_BLIT_SCALED];
      d3d_info->pbo = !!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT];
      d3d_info->subpixel_viewport = gl_info->limits.viewport_subpixel_bits >= 8;
@@ -331,7 +384,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      d3d_info->feature_level = feature_level_from_caps(gl_info, &shader_caps, &d3d_info->ffp_fragment_caps);
      d3d_info->filling_convention_offset = gl_info->filling_convention_offset;
      d3d_info->persistent_map = !!gl_info->supported[ARB_BUFFER_STORAGE];
-@@ -4983,6 +5193,12 @@
+@@ -4983,6 +5223,12 @@
      unsigned int upper = ARRAY_SIZE(test_array), lower = 0, test;
      float value;
  
@@ -445,7 +498,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/context_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/context_gl.c
 --- a/dlls/wined3d/context_gl.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/context_gl.c	2026-08-07 17:35:20.216572876 +0300
++++ b/dlls/wined3d/context_gl.c	2026-08-07 18:43:08.070666917 +0300
 @@ -36,6 +36,12 @@
  
  static DWORD wined3d_context_tls_idx;
@@ -844,7 +897,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  static void wined3d_context_gl_draw_indirect(struct wined3d_context_gl *context_gl, const struct wined3d_state *state,
          const struct wined3d_indirect_draw_parameters *parameters, unsigned int idx_size)
  {
-@@ -4605,7 +4812,1975 @@
+@@ -4605,7 +4812,2005 @@
      }
  }
  
@@ -2805,22 +2858,52 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 + * against rung B this separates producer cost from consumer cost. One env read,
 + * cached, so leaving the gate compiled in costs a load and a branch per draw.
 + */
++/* Rung file, same contract as d3d8's: one read per second, so the whole ladder
++ * can be walked in a single run on a single scene. See the comment on
++ * d3d8_mgs2_ladder_rung(); the env knob still wins when set. This one is read on
++ * the CS consumer thread, which is exactly the thread whose cost rung C removes,
++ * so it stays a single file open and nothing is ever logged from here. */
 +static int mgs2_noop_gl_draw(void)
 +{
-+    static int cached = -1;
++    static int env = -1;
++    static char rung = '0';
++    static DWORD last;
++    DWORD now;
 +
-+    if (cached < 0)
++    if (env < 0)
 +    {
 +        const char *e = getenv("MGS2_WINED3D_NOOP_DRAW");
-+        cached = e && *e != '0';
++        env = e && *e != '0';
 +    }
-+    return cached;
++    if (env)
++        return 1;
++
++    now = GetTickCount();
++    if (!last || now - last >= 1000)
++    {
++        char path[MAX_PATH], buf[8] = {0};
++        DWORD got = 0;
++        HANDLE h;
++
++        last = now ? now : 1;
++        if (!GetEnvironmentVariableA("MGS2_LADDER_FILE", path, sizeof(path)))
++            strcpy(path, "Z:\\tmp\\mgs2-ladder");
++        h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                NULL, OPEN_EXISTING, 0, NULL);
++        if (h != INVALID_HANDLE_VALUE)
++        {
++            ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
++            CloseHandle(h);
++        }
++        rung = buf[0] == 'C' ? 'C' : '0';
++    }
++    return rung == 'C';
 +}
 +
  void draw_primitive(struct wined3d_device *device, const struct wined3d_state *state,
          const struct wined3d_draw_parameters *parameters)
  {
-@@ -4615,15 +6790,38 @@
+@@ -4615,15 +6820,38 @@
      const struct wined3d_gl_info *gl_info;
      struct wined3d_context_gl *context_gl;
      struct wined3d_context *context;
@@ -2860,7 +2943,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (!parameters->indirect)
          TRACE("base_vertex_idx %d, start_idx %u, index_count %u, start_instance %u, instance_count %u.\n",
                  parameters->u.direct.base_vertex_idx, parameters->u.direct.start_idx,
-@@ -4688,6 +6886,7 @@
+@@ -4688,6 +6916,7 @@
      if (parameters->indirect)
          wined3d_buffer_load(parameters->u.indirect.buffer, context, state);
  
@@ -2868,7 +2951,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (!context_apply_draw_state(context, device, state, parameters->indexed))
      {
          context_release(context);
-@@ -4695,6 +6894,17 @@
+@@ -4695,6 +6924,17 @@
          return;
      }
  
@@ -2886,7 +2969,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (dsv && (!state->depth_stencil_state || state->depth_stencil_state->writes_ds))
      {
          uint32_t location = dsv->resource->draw_binding;
-@@ -4780,18 +6990,56 @@
+@@ -4780,18 +7020,56 @@
          checkGLcall("glTextureBarrier");
      }
  
@@ -4836,7 +4919,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          if (format->stencil_size)
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/utils.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/utils.c
 --- a/dlls/wined3d/utils.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/utils.c	2026-08-02 12:35:21.534727571 +0300
++++ b/dlls/wined3d/utils.c	2026-08-07 23:13:36.568271264 +0300
 @@ -1053,6 +1053,258 @@
      }
  }
@@ -5370,7 +5453,57 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          srgb_format = NULL;
          for (j = 0; j < ARRAY_SIZE(format_srgb_info); ++j)
          {
-@@ -4065,6 +4439,131 @@
+@@ -3877,6 +4251,36 @@
+     /* One pixel was drawn, check if it is the expected one */
+     return readback[3][3] == 0xffff0000;
+ }
++/* MGS2: skip the polygon-offset probe on this GLES stack.
++ *
++ * The probe below is a desktop-GL self-test. It calls glClearDepth, which GLES
++ * does not have at all, and then glGetTexImage in its search loop, which GLES
++ * also does not have -- so bridging the depth call alone would not make it
++ * work. On Hangover this is where Direct3DCreate8 was measured hanging: the
++ * for(;;) never converges and never reaches its own fallback, so the game spins
++ * at 96%% CPU and never returns from D3D8 creation (brief #34).
++ *
++ * 2^23 is not a guess. Production on this same Mali already reports
++ *   "PolygonOffset scale factor detection failed, using fallback value 2^23"
++ * from this very function, i.e. the probe fails there too and the fallback is
++ * what the working stack has always used. This just stops running a test whose
++ * outcome is already known, and the depth_bias_scale normalisation afterwards is
++ * untouched.
++ *
++ * MGS2_POLYOFFSET_PROBE=1 runs the original probe again, for an A/B.
++ */
++static int mgs2_polyoffset_probe_enabled(void)
++{
++    static int on = -1;
++
++    if (on < 0)
++    {
++        const char *e = getenv("MGS2_POLYOFFSET_PROBE");
++        on = e && *e != '0';
++    }
++    return on;
++}
++
+ static float wined3d_adapter_find_polyoffset_scale(struct wined3d_caps_gl_ctx *ctx, GLenum format)
+ {
+     const struct wined3d_gl_info *gl_info = ctx->gl_info;
+@@ -3896,6 +4300,12 @@
+      * Nvidia. Use this as a fallback if the detection fails. */
+     unsigned int fallback = 23;
+ 
++    if (ctx->gl_info->is_gles && !mgs2_polyoffset_probe_enabled())
++    {
++        WARN("MGS2 GLES: skipping polygon offset scale probe, using 2^%u.\n", fallback);
++        return (float)(1u << fallback);
++    }
++
+     gl_info->gl_ops.gl.p_glGenTextures(1, &color);
+     gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, color);
+     gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+@@ -4065,6 +4475,131 @@
  }
  
  /* Context activation is done by the caller. */
@@ -5502,7 +5635,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  BOOL wined3d_adapter_gl_init_format_info(struct wined3d_adapter *adapter, struct wined3d_caps_gl_ctx *ctx)
  {
      struct wined3d_gl_info *gl_info = &wined3d_adapter_gl(adapter)->gl_info;
-@@ -4083,6 +4582,8 @@
+@@ -4083,6 +4618,8 @@
  
      if (!init_typeless_formats(adapter)) goto fail;
  
@@ -5511,7 +5644,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      return TRUE;
  
  fail:
-@@ -6276,7 +6777,7 @@
+@@ -6276,7 +6813,7 @@
      else
          settings->alpha_test_func = state->extra_ps_args.alpha_func - 1;
  
@@ -5520,7 +5653,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          settings->flatshading = state->extra_ps_args.flat_shading;
      else
          settings->flatshading = FALSE;
-@@ -6428,7 +6929,17 @@
+@@ -6428,7 +6965,17 @@
      else
          settings->fog_mode = WINED3D_FFP_VS_FOG_DEPTH;
  

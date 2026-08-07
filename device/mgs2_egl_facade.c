@@ -45,6 +45,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* Declared locally so the shim needs no EGL headers or target sysroot. */
 typedef int            EGLint;
@@ -69,6 +70,8 @@ typedef unsigned int   GLuint;
 #define EGL_CONTEXT_MAJOR_VERSION  0x3098   /* == EGL_CONTEXT_CLIENT_VERSION */
 
 /* Desktop-GL-only query wined3d makes at adapter_gl.c:3409. */
+#define GL_VERSION                     0x1F02
+#define GL_SHADING_LANGUAGE_VERSION    0x8B8C
 #define GL_CONTEXT_PROFILE_MASK        0x9126
 #define GL_CONTEXT_CORE_PROFILE_BIT    0x00000001
 
@@ -95,6 +98,7 @@ typedef EGLBoolean (*fn_make_current)( EGLDisplay, EGLSurface, EGLSurface, EGLCo
 typedef EGLBoolean (*fn_swap_buffers)( EGLDisplay, EGLSurface );
 typedef void       (*fn_cleardepthf)( float );
 typedef void       (*fn_depthrangef)( float, float );
+typedef const unsigned char *(*fn_get_string)( GLenum );
 
 static void *real_symbol( const char *name )
 {
@@ -306,11 +310,48 @@ EGLBoolean mgs2_facade_eglMakeCurrent( EGLDisplay dpy, EGLSurface draw,
     return ret;
 }
 
+/* Frame rate, straight from the presenting call. Hangover uses stock winewayland,
+ * so the project's own MGS2_GL_STATS is not available here and this is the only
+ * place a frame can be counted. One line per second, never per frame.
+ * MGS2_EGL_FACADE_FPS=0 turns it off. */
+static void mgs2_facade_count_frame( void )
+{
+    static struct timespec last;
+    static unsigned int frames;
+    struct timespec now;
+    long ms;
+
+    if (!facade_logging())
+        return;
+    {
+        static int on = -1;
+        if (on < 0)
+        {
+            const char *e = getenv( "MGS2_EGL_FACADE_FPS" );
+            on = !e || *e != '0';
+        }
+        if (!on) return;
+    }
+
+    ++frames;
+    clock_gettime( CLOCK_MONOTONIC, &now );
+    if (!last.tv_sec) { last = now; frames = 0; return; }
+    ms = (now.tv_sec - last.tv_sec) * 1000 + (now.tv_nsec - last.tv_nsec) / 1000000;
+    if (ms < 1000)
+        return;
+    fprintf( stderr, "MGS2FPS: %u frames in %ld ms = %.1f fps\n",
+             frames, ms, frames * 1000.0 / ms );
+    fflush( stderr );
+    last = now;
+    frames = 0;
+}
+
 EGLBoolean mgs2_facade_eglSwapBuffers( EGLDisplay dpy, EGLSurface surface )
 {
     static fn_swap_buffers real;
 
     FACADE_ONCE( swap, "FIRST SWAP surface=%p -- a frame reached the compositor\n", surface );
+    mgs2_facade_count_frame();
     if (!real) real = (fn_swap_buffers)real_symbol( "eglSwapBuffers" );
     if (!real) return 0;
     return real( dpy, surface );
@@ -343,6 +384,69 @@ void mgs2_facade_glDepthRange( double near_val, double far_val )
     if (real) real( (float)near_val, (float)far_val );
 }
 
+
+/* Rule 7. Strip the "OpenGL ES " prefix from the version strings.
+ *
+ * Two independent parsers disagree about this context and both have to be right:
+ *
+ *   stock ARM64 opengl32.so does *major = atoi(ptr) on GL_VERSION. On
+ *   "OpenGL ES 3.2 ..." that yields 0, it then substitutes 1, and from then on it
+ *   gates wglGetProcAddress by that version -- so GL 3.x entry points are refused
+ *   even though the driver has them. This is the same defect the old production
+ *   stack fixed in opengl32_glesver1.so; it is NOT fixed by our wined3d.
+ *
+ *   our wined3d detects GLES with strstr(gl_version, "OpenGL ES"), which the strip
+ *   would destroy. Hence the MGS2_GLES marker appended here, which the matching
+ *   wined3d change also accepts. Same for GLSL: wined3d sscanfs "%u.%u" and GLES
+ *   reports "OpenGL ES GLSL ES 3.20".
+ *
+ * Static buffers, not per-call allocation: GL string pointers must stay valid for
+ * the life of the context, and these are written once.
+ */
+static const unsigned char *mgs2_facade_glGetString( GLenum name )
+{
+    static fn_get_string real;
+    static char version[256], glsl[256];
+    const char *p;
+
+    if (!real) real = (fn_get_string)real_symbol( "glGetString" );
+    if (!real) return NULL;
+    p = (const char *)real( name );
+    if (!p) return (const unsigned char *)p;
+
+    if (name == GL_VERSION)
+    {
+        const char *num = p;
+
+        if (!strncmp( num, "OpenGL ES-CM ", 13 )) num += 13;
+        else if (!strncmp( num, "OpenGL ES ", 10 )) num += 10;
+        else return (const unsigned char *)p;
+
+        if (!version[0])
+        {
+            snprintf( version, sizeof(version), "%s MGS2_GLES", num );
+            FACADE_ONCE( ver, "GL_VERSION \"%s\" -> \"%s\"\n", p, version );
+        }
+        return (const unsigned char *)version;
+    }
+
+    if (name == GL_SHADING_LANGUAGE_VERSION)
+    {
+        const char *num = p;
+
+        if (strncmp( num, "OpenGL ES GLSL ES ", 18 )) return (const unsigned char *)p;
+        num += 18;
+        if (!glsl[0])
+        {
+            snprintf( glsl, sizeof(glsl), "%s MGS2_GLSL_ES", num );
+            FACADE_ONCE( glslv, "GL_SHADING_LANGUAGE_VERSION \"%s\" -> \"%s\"\n", p, glsl );
+        }
+        return (const unsigned char *)glsl;
+    }
+
+    return (const unsigned char *)p;
+}
+
 /* Wine takes only a couple of symbols by dlsym and asks eglGetProcAddress for the
  * rest, so the three rules have to be reachable through both routes. */
 void *mgs2_facade_eglGetProcAddress( const char *name )
@@ -354,6 +458,7 @@ void *mgs2_facade_eglGetProcAddress( const char *name )
         if (!strcmp( name, "eglCreateContext" ))   return (void *)mgs2_facade_eglCreateContext;
         if (!strcmp( name, "glGetIntegerv" ))            return (void *)mgs2_facade_glGetIntegerv;
         if (!strcmp( name, "glBindFragDataLocation" ))   return (void *)mgs2_facade_glBindFragDataLocation;
+        if (!strcmp( name, "glGetString" ))              return (void *)mgs2_facade_glGetString;
         if (!strcmp( name, "glClearDepth" ))             return (void *)mgs2_facade_glClearDepth;
         if (!strcmp( name, "glDepthRange" ))             return (void *)mgs2_facade_glDepthRange;
         if (!strcmp( name, "glBindFragDataLocationEXT" ))return (void *)mgs2_facade_glBindFragDataLocation;
