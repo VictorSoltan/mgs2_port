@@ -72,6 +72,8 @@ plus the shared SoC thermal budget, not memory bandwidth.
 ## Layout
 
 ```text
+AGENTS.md                 entry point for anyone, human or model, picking this up
+docs/DEVICE.md            how to run, measure and stop the console safely
 device/launch.sh          the launcher: DLL bind-mounts, audio backend, thermal
                           guard, presenter tuning. Every knob is documented with
                           the measurement that set its default.
