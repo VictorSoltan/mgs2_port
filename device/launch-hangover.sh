@@ -95,7 +95,18 @@ if [ "${MGS2_HANGOVER_BOOT:-0}" = 1 ]; then
 fi
 
 cd "$BINDIR" || exit 1
+
+# Controller input, exactly as launch.sh:557-559 does it. Needed from H2 onwards:
+# without it the game cannot be taken off the title screen, so "no draws" and "no
+# input" would be indistinguishable.
+if [ -x /usr/bin/gptokeyb ] && [ -r "$GAMEDIR/mgs2.gptk" ]; then
+    /usr/bin/gptokeyb "$EXE" -c "$GAMEDIR/mgs2.gptk" >/tmp/hangover-gptokeyb.log 2>&1 &
+    GPTOKEYB_PID=$!
+    echo "gptokeyb pid $GPTOKEYB_PID" >> "$LOG"
+fi
+
 "$WINELOADER" "$EXE" >>"$LOG" 2>&1 &
 WINE_PID=$!
 echo "wine pid $WINE_PID, log $LOG"
 wait "$WINE_PID"
+[ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
