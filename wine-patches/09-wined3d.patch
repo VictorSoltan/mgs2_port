@@ -498,7 +498,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/context_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/context_gl.c
 --- a/dlls/wined3d/context_gl.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/context_gl.c	2026-08-07 18:43:08.070666917 +0300
++++ b/dlls/wined3d/context_gl.c	2026-08-07 23:42:05.795565962 +0300
 @@ -36,6 +36,12 @@
  
  static DWORD wined3d_context_tls_idx;
@@ -3307,7 +3307,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      for (i = 0; i < ARRAY_SIZE(state->stream_output); ++i)
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/glsl_shader.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/glsl_shader.c
 --- a/dlls/wined3d/glsl_shader.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/glsl_shader.c	2026-08-06 17:26:27.646575040 +0300
++++ b/dlls/wined3d/glsl_shader.c	2026-08-07 23:42:05.795565962 +0300
 @@ -410,7 +410,21 @@
  static void shader_glsl_add_version_declaration(struct wined3d_string_buffer *buffer,
          const struct wined3d_gl_info *gl_info)
@@ -4194,7 +4194,22 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  }
  
  static void shader_glsl_update_compute_program(struct shader_glsl_priv *priv,
-@@ -12603,6 +13269,7 @@
+@@ -11996,6 +12662,14 @@
+         const struct wined3d_state *state)
+ {
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
++
++    /* MGS2: glAlphaFunc is desktop-only fixed function and absent in GLES, so every
++     * call raises GL_INVALID_OPERATION -- 829 a second was measured on Hangover.
++     * The caller only reaches here for a legacy context, and GLES should never be
++     * classified legacy; this is the belt to that braces. Alpha test has to come
++     * from the generated GLSL instead. */
++    if (gl_info->is_gles)
++        return;
+     const struct wined3d_ffp_ps_constants *constants;
+     struct wined3d_buffer *buffer;
+     GLfloat ref;
+@@ -12603,6 +13277,7 @@
  
      buffer = string_buffer_get(&blitter->string_buffers);
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -4202,7 +4217,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      shader_addline(buffer, "%s vec2 pos;\n", get_attribute_keyword(gl_info));
      shader_addline(buffer, "%s vec3 texcoord;\n", get_attribute_keyword(gl_info));
      declare_out_varying(gl_info, buffer, FALSE, "vec3 out_texcoord;\n");
-@@ -12617,6 +13284,7 @@
+@@ -12617,6 +13292,7 @@
  
      string_buffer_clear(buffer);
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -4210,7 +4225,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      shader_addline(buffer, "uniform sampler%s sampler;\n", tex_type);
      if (args->use_colour_key)
      {
-@@ -12660,7 +13328,7 @@
+@@ -12660,7 +13336,7 @@
      GL_EXTCALL(glBindAttribLocation(program, 0, "pos"));
      GL_EXTCALL(glBindAttribLocation(program, 1, "texcoord"));
  
