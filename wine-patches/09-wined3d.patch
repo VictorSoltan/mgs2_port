@@ -1,6 +1,6 @@
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/adapter_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/adapter_gl.c
 --- a/dlls/wined3d/adapter_gl.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/adapter_gl.c	2026-08-07 23:13:36.525871679 +0300
++++ b/dlls/wined3d/adapter_gl.c	2026-08-08 01:15:15.543841940 +0300
 @@ -487,6 +487,16 @@
      /* No PBO -> No point in testing them. */
      if (!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT]) return;
@@ -350,17 +350,48 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          gl_info->glsl_version = MAKEDWORD_VERSION(major, minor);
          if (gl_info->glsl_version > MAKEDWORD_VERSION(1, 30) && gl_version < MAKEDWORD_VERSION(3, 0))
          {
-@@ -3845,6 +4077,9 @@
+@@ -3845,6 +4077,40 @@
      if (gl_ext_emul_mask & GL_EXT_EMUL_EXT_FOG_COORD)
          install_gl_compat_wrapper(gl_info, EXT_FOG_COORD);
  
++    /* MGS2: multi-draw probe, once per process. The earlier check looked at libmali's
++     * ELF exports and found nothing, which proves nothing: GLES extension entry points
++     * need not be exported symbols, they come through eglGetProcAddress. An extension
++     * counts as usable only if the string advertises it AND the pointer is non-NULL. */
++    {
++        const char *ext = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_EXTENSIONS);
++        struct { const char *name; const char *proc; } probe[] =
++        {
++            {"GL_EXT_multi_draw_arrays",        "glMultiDrawElementsEXT"},
++            {"GL_EXT_multi_draw_arrays",        "glMultiDrawArraysEXT"},
++            {"GL_OES_draw_elements_base_vertex","glMultiDrawElementsBaseVertexEXT"},
++        };
++        unsigned int i;
++
++        fprintf(stderr, "MGS2MULTIDRAW: GL_EXTENSIONS %s\n", ext ? "readable" : "NULL (core context)");
++        for (i = 0; i < ARRAY_SIZE(probe); ++i)
++        {
++            /* The entry point cannot be resolved from here -- wined3d has no
++             * wglGetProcAddress in gl_ops at this stage, and these names are not in
++             * its own function tables. The extension string is the primary gate: if
++             * it is absent the extension is unusable regardless. The pointer is
++             * probed separately, in the EGL facade, which already hooks
++             * eglGetProcAddress. */
++            fprintf(stderr, "MGS2MULTIDRAW: %-34s %s   (proc %s probed in the facade)\n",
++                    probe[i].name,
++                    (ext && strstr(ext, probe[i].name)) ? "ADVERTISED" : "absent    ",
++                    probe[i].proc);
++        }
++        fflush(stderr);
++    }
++
 +    fprintf(stderr, "MGS2CAPS: adapter caps DONE\n");
 +    fflush(stderr);
 +
      return TRUE;
  }
  
-@@ -4938,8 +5173,10 @@
+@@ -4938,8 +5204,10 @@
      TRACE("Maximum point size support - max point size %.8e.\n", f[1]);
  
      d3d_info->wined3d_creation_flags = wined3d_creation_flags;
@@ -372,7 +403,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      d3d_info->shader_double_precision = !!(shader_caps.wined3d_caps & WINED3D_SHADER_CAP_DOUBLE_PRECISION);
      d3d_info->shader_output_interpolation = !!(shader_caps.wined3d_caps & WINED3D_SHADER_CAP_OUTPUT_INTERPOLATION);
      d3d_info->viewport_array_index_any_shader = !!gl_info->supported[ARB_SHADER_VIEWPORT_LAYER_ARRAY];
-@@ -4957,7 +5194,10 @@
+@@ -4957,7 +5225,10 @@
      d3d_info->scaled_resolve = !!gl_info->supported[EXT_FRAMEBUFFER_MULTISAMPLE_BLIT_SCALED];
      d3d_info->pbo = !!gl_info->supported[ARB_PIXEL_BUFFER_OBJECT];
      d3d_info->subpixel_viewport = gl_info->limits.viewport_subpixel_bits >= 8;
@@ -384,7 +415,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      d3d_info->feature_level = feature_level_from_caps(gl_info, &shader_caps, &d3d_info->ffp_fragment_caps);
      d3d_info->filling_convention_offset = gl_info->filling_convention_offset;
      d3d_info->persistent_map = !!gl_info->supported[ARB_BUFFER_STORAGE];
-@@ -4983,6 +5223,12 @@
+@@ -4983,6 +5254,12 @@
      unsigned int upper = ARRAY_SIZE(test_array), lower = 0, test;
      float value;
  
@@ -498,7 +529,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/context_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/context_gl.c
 --- a/dlls/wined3d/context_gl.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/context_gl.c	2026-08-07 23:42:05.795565962 +0300
++++ b/dlls/wined3d/context_gl.c	2026-08-08 01:14:41.052374608 +0300
 @@ -36,6 +36,12 @@
  
  static DWORD wined3d_context_tls_idx;
@@ -897,7 +928,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  static void wined3d_context_gl_draw_indirect(struct wined3d_context_gl *context_gl, const struct wined3d_state *state,
          const struct wined3d_indirect_draw_parameters *parameters, unsigned int idx_size)
  {
-@@ -4605,7 +4812,2005 @@
+@@ -4605,7 +4812,2058 @@
      }
  }
  
@@ -2863,6 +2894,59 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 + * d3d8_mgs2_ladder_rung(); the env knob still wins when set. This one is read on
 + * the CS consumer thread, which is exactly the thread whose cost rung C removes,
 + * so it stays a single file open and nothing is ever logged from here. */
++/* Rung D of the ladder. Everything runs -- context acquire, RT/DS preparation,
++ * context_apply_draw_state with its dirty-state callbacks, stream setup, resource
++ * binds, FBO and shader state, index setup -- and only the real glDraw* is skipped.
++ *
++ * Against rung C this is the cut the decomposition still lacks:
++ *   D - C = context/state/resource setup and the GL state calls
++ *   0 - D = the glDraw* itself plus Mali driver submission
++ * and that decides what to batch: merging GL draws helps only if 0-D dominates,
++ * while cutting state application helps only if D-C does.
++ *
++ * There is deliberately no inverse rung "draw without apply_state": it would leave
++ * GL state stale and produce a meaningless number.
++ */
++static int mgs2_rung_d(void)
++{
++    static int cached = -1;
++
++    if (cached < 0)
++    {
++        const char *e = getenv("MGS2_RUNG_D");
++        cached = e && *e != '0';
++    }
++    if (cached)
++        return 1;
++    {
++        /* Also reachable through the shared rung file, so D can be walked in the
++         * same process as the other rungs. */
++        static char rung = '0';
++        static DWORD last;
++        DWORD now = GetTickCount();
++
++        if (!last || now - last >= 1000)
++        {
++            char path[MAX_PATH], buf[8] = {0};
++            DWORD got = 0;
++            HANDLE h;
++
++            last = now ? now : 1;
++            if (!GetEnvironmentVariableA("MGS2_LADDER_FILE", path, sizeof(path)))
++                strcpy(path, "Z:\\tmp\\mgs2-ladder");
++            h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                    NULL, OPEN_EXISTING, 0, NULL);
++            if (h != INVALID_HANDLE_VALUE)
++            {
++                ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
++                CloseHandle(h);
++            }
++            rung = buf[0] == 'D' ? 'D' : '0';
++        }
++        return rung == 'D';
++    }
++}
++
 +static int mgs2_noop_gl_draw(void)
 +{
 +    static int env = -1;
@@ -2903,7 +2987,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  void draw_primitive(struct wined3d_device *device, const struct wined3d_state *state,
          const struct wined3d_draw_parameters *parameters)
  {
-@@ -4615,15 +6820,38 @@
+@@ -4615,15 +6873,38 @@
      const struct wined3d_gl_info *gl_info;
      struct wined3d_context_gl *context_gl;
      struct wined3d_context *context;
@@ -2943,7 +3027,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (!parameters->indirect)
          TRACE("base_vertex_idx %d, start_idx %u, index_count %u, start_instance %u, instance_count %u.\n",
                  parameters->u.direct.base_vertex_idx, parameters->u.direct.start_idx,
-@@ -4688,6 +6916,7 @@
+@@ -4688,6 +6969,7 @@
      if (parameters->indirect)
          wined3d_buffer_load(parameters->u.indirect.buffer, context, state);
  
@@ -2951,7 +3035,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (!context_apply_draw_state(context, device, state, parameters->indexed))
      {
          context_release(context);
-@@ -4695,6 +6924,17 @@
+@@ -4695,6 +6977,17 @@
          return;
      }
  
@@ -2969,7 +3053,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (dsv && (!state->depth_stencil_state || state->depth_stencil_state->writes_ds))
      {
          uint32_t location = dsv->resource->draw_binding;
-@@ -4780,18 +7020,56 @@
+@@ -4780,18 +7073,66 @@
          checkGLcall("glTextureBarrier");
      }
  
@@ -2979,6 +3063,16 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 +    mgs_codec_identity_mask = mgs_begin_codec_identity_mask(context_gl, state, parameters,
 +            mgs_saved_colour_mask);
 +    mgs_track_codec_composite_after_draw(context_gl, state, parameters, "before");
++
++    if (mgs2_rung_d())
++    {
++        /* Unwound the same way the tail of this function does, so the only thing
++         * missing is the draw. */
++        if (rasterizer_discard)
++            gl_info->gl_ops.gl.p_glDisable(GL_RASTERIZER_DISCARD);
++        context_release(&context_gl->c);
++        return;
++    }
 +
      if (parameters->indirect)
      {
@@ -3028,7 +3122,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          GL_EXTCALL(glMemoryBarrier(GL_ALL_BARRIER_BITS));
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/cs.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/cs.c
 --- a/dlls/wined3d/cs.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/cs.c	2026-08-08 00:18:36.160932948 +0300
++++ b/dlls/wined3d/cs.c	2026-08-08 01:14:41.052374608 +0300
 @@ -20,6 +20,10 @@
  #include "wined3d_gl.h"
  
@@ -3176,7 +3270,122 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  static void reference_graphics_pipeline_resources(struct wined3d_device_context *context,
          bool indexed, const struct wined3d_d3d_info *d3d_info)
  {
-@@ -1191,7 +1324,22 @@
+@@ -1171,6 +1304,114 @@
+             state->unordered_access_view[WINED3D_PIPELINE_GRAPHICS]);
+ }
+ 
++
++/* Compatible-draw-run census, MGS2_DRAW_CENSUS=1.
++ *
++ * The question batching turns on: how many consecutive WINED3D_CS_OP_DRAW packets
++ * are compatible, with no state packet in between. MGS2's own ChainObj() sets a
++ * vertex buffer, an index buffer and a world matrix once and then issues one
++ * DrawIndexedPrimitive per packet of the object, advancing only the index offset,
++ * so natural runs should exist -- this counts them instead of assuming.
++ *
++ * Counters only, one line per second. Nothing per draw is logged: on this device a
++ * per-call log has repeatedly cost more than it measured. Break reasons are counted
++ * so a low batch factor can be explained rather than just observed.
++ */
++static BOOL mgs2_draw_census(void)
++{
++    static int on = -1;
++    if (on == -1) on = mgs2_cs_env_on("MGS2_DRAW_CENSUS");
++    return on;
++}
++
++static struct
++{
++    unsigned int draws, indexed, batches, run, max_run;
++    unsigned int hist[6];              /* 1, 2, 3-4, 5-8, 9-16, 17+ */
++    unsigned int in_runs2, in_runs4;
++    unsigned int brk_prim, brk_indexed, brk_basevtx, brk_state, brk_stream, brk_idx;
++    unsigned int prev_valid, prev_prim, prev_indexed;
++    int prev_base;
++    const void *prev_ib, *prev_vb;
++    unsigned int state_since_draw;
++} mgs2_cen;
++
++static void mgs2_census_bucket(unsigned int run)
++{
++    unsigned int b = run == 1 ? 0 : run == 2 ? 1 : run <= 4 ? 2 : run <= 8 ? 3 : run <= 16 ? 4 : 5;
++
++    ++mgs2_cen.hist[b];
++    if (run >= 2) mgs2_cen.in_runs2 += run;
++    if (run >= 4) mgs2_cen.in_runs4 += run;
++    if (run > mgs2_cen.max_run) mgs2_cen.max_run = run;
++}
++
++static void mgs2_census_report(void)
++{
++    static DWORD last;
++    DWORD now;
++
++    if (!mgs2_draw_census()) return;
++    now = GetTickCount();
++    if (now - last < 1000) return;
++    last = now;
++
++    ERR_(mgs2stat)("MGS2 CENSUS draws=%u indexed=%u batches=%u factor=%u.%02u max_run=%u | "
++            "runs 1:%u 2:%u 3-4:%u 5-8:%u 9-16:%u 17+:%u | in>=2:%u in>=4:%u | "
++            "breaks prim=%u idx=%u basevtx=%u state=%u vb=%u ib=%u\n",
++            mgs2_cen.draws, mgs2_cen.indexed, mgs2_cen.batches,
++            mgs2_cen.batches ? mgs2_cen.draws / mgs2_cen.batches : 0,
++            mgs2_cen.batches ? (mgs2_cen.draws * 100 / mgs2_cen.batches) % 100 : 0,
++            mgs2_cen.max_run,
++            mgs2_cen.hist[0], mgs2_cen.hist[1], mgs2_cen.hist[2],
++            mgs2_cen.hist[3], mgs2_cen.hist[4], mgs2_cen.hist[5],
++            mgs2_cen.in_runs2, mgs2_cen.in_runs4,
++            mgs2_cen.brk_prim, mgs2_cen.brk_indexed, mgs2_cen.brk_basevtx,
++            mgs2_cen.brk_state, mgs2_cen.brk_stream, mgs2_cen.brk_idx);
++
++    memset(&mgs2_cen, 0, sizeof(mgs2_cen));
++}
++
++static void mgs2_census_draw(const struct wined3d_state *state,
++        enum wined3d_primitive_type prim, int base_vertex, bool indexed)
++{
++    const void *ib = state->index_buffer, *vb = state->streams[0].buffer;
++    unsigned int compatible = 0;
++
++    ++mgs2_cen.draws;
++    if (indexed) ++mgs2_cen.indexed;
++
++    if (mgs2_cen.prev_valid)
++    {
++        compatible = 1;
++        if (mgs2_cen.state_since_draw) { ++mgs2_cen.brk_state;    compatible = 0; }
++        if (prim != mgs2_cen.prev_prim) { ++mgs2_cen.brk_prim;     compatible = 0; }
++        if (indexed != !!mgs2_cen.prev_indexed) { ++mgs2_cen.brk_indexed; compatible = 0; }
++        if (base_vertex != mgs2_cen.prev_base) { ++mgs2_cen.brk_basevtx; compatible = 0; }
++        if (vb != mgs2_cen.prev_vb) { ++mgs2_cen.brk_stream; compatible = 0; }
++        if (ib != mgs2_cen.prev_ib) { ++mgs2_cen.brk_idx;    compatible = 0; }
++    }
++
++    if (compatible)
++    {
++        ++mgs2_cen.run;
++    }
++    else
++    {
++        if (mgs2_cen.run) mgs2_census_bucket(mgs2_cen.run);
++        ++mgs2_cen.batches;
++        mgs2_cen.run = 1;
++    }
++
++    mgs2_cen.prev_valid = 1;
++    mgs2_cen.prev_prim = prim;
++    mgs2_cen.prev_indexed = indexed;
++    mgs2_cen.prev_base = base_vertex;
++    mgs2_cen.prev_vb = vb;
++    mgs2_cen.prev_ib = ib;
++    mgs2_cen.state_since_draw = 0;
++}
++
+ void wined3d_device_context_emit_draw(struct wined3d_device_context *context,
+         enum wined3d_primitive_type primitive_type, unsigned int patch_vertex_count, int base_vertex_idx,
+         unsigned int start_idx, unsigned int index_count, unsigned int start_instance, unsigned int instance_count,
+@@ -1191,7 +1432,28 @@
      op->parameters.u.direct.instance_count = instance_count;
      op->parameters.indexed = indexed;
  
@@ -3197,10 +3406,16 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 +        ++mgs2_ref_draws;
 +        mgs2_ref_report();
 +    }
++
++    if (mgs2_draw_census())
++    {
++        mgs2_census_draw(context->state, primitive_type, base_vertex_idx, indexed);
++        mgs2_census_report();
++    }
  
      wined3d_device_context_submit(context, WINED3D_CS_QUEUE_DEFAULT);
  }
-@@ -2997,6 +3145,8 @@
+@@ -2997,6 +3259,8 @@
  
  static void wined3d_cs_reference_resource(struct wined3d_device_context *context, struct wined3d_resource *resource)
  {
@@ -3209,7 +3424,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_resource_reference(resource);
  }
  
-@@ -3663,8 +3813,13 @@
+@@ -3663,8 +3927,13 @@
      {
          if (!d3d_info->fences)
          {
