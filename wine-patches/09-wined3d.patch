@@ -3028,7 +3028,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          GL_EXTCALL(glMemoryBarrier(GL_ALL_BARRIER_BITS));
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/cs.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/cs.c
 --- a/dlls/wined3d/cs.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/cs.c	2026-08-07 17:36:47.062885818 +0300
++++ b/dlls/wined3d/cs.c	2026-08-08 00:18:36.160932948 +0300
 @@ -20,6 +20,10 @@
  #include "wined3d_gl.h"
  
@@ -3040,7 +3040,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
  WINE_DECLARE_DEBUG_CHANNEL(d3d_sync);
  WINE_DECLARE_DEBUG_CHANNEL(fps);
-@@ -1136,6 +1140,106 @@
+@@ -1136,6 +1140,135 @@
      cs->c.device->adapter->adapter_ops->adapter_draw_primitive(cs->c.device, state, &op->parameters);
  }
  
@@ -3080,6 +3080,35 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 +    static int on = -1;
 +    if (on == -1) on = mgs2_cs_env_on("MGS2_WINED3D_REFSTATS");
 +    return on;
++}
++
++/* Rung R of the ladder, read from the same rung file the other rungs use so the
++ * whole ladder can be walked in one process on one scene. */
++static BOOL mgs2_noop_refs(void)
++{
++    static char rung = '0';
++    static DWORD last;
++    DWORD now = GetTickCount();
++
++    if (!last || now - last >= 1000)
++    {
++        char path[MAX_PATH], buf[8] = {0};
++        DWORD got = 0;
++        HANDLE h;
++
++        last = now ? now : 1;
++        if (!GetEnvironmentVariableA("MGS2_LADDER_FILE", path, sizeof(path)))
++            strcpy(path, "Z:\\tmp\\mgs2-ladder");
++        h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                NULL, OPEN_EXISTING, 0, NULL);
++        if (h != INVALID_HANDLE_VALUE)
++        {
++            ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
++            CloseHandle(h);
++        }
++        rung = buf[0] == 'R' ? 'R' : '0';
++    }
++    return rung == 'R';
 +}
 +
 +static BOOL mgs2_refunique(void)
@@ -3147,20 +3176,31 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  static void reference_graphics_pipeline_resources(struct wined3d_device_context *context,
          bool indexed, const struct wined3d_d3d_info *d3d_info)
  {
-@@ -1193,6 +1297,12 @@
+@@ -1191,7 +1324,22 @@
+     op->parameters.u.direct.instance_count = instance_count;
+     op->parameters.indexed = indexed;
  
-     reference_graphics_pipeline_resources(context, indexed, d3d_info);
- 
+-    reference_graphics_pipeline_resources(context, indexed, d3d_info);
++    /* Ladder rung R: build and publish the CS packet exactly as normal, but skip the
++     * resource walk. This is the rung that was missing from A/B/C: without it,
++     * "resource bookkeeping" and "packet allocation plus queue publish" cannot be
++     * told apart, because rung B removes both at once.
++     *
++     * Diagnostic only, and unsafe by construction: the CS consumer may then run
++     * against resources the producer no longer guarantees. Fine for a 30 s window,
++     * never a shipping setting. */
++    if (!mgs2_noop_refs())
++        reference_graphics_pipeline_resources(context, indexed, d3d_info);
++
 +    if (mgs2_refstats())
 +    {
 +        ++mgs2_ref_draws;
 +        mgs2_ref_report();
 +    }
-+
+ 
      wined3d_device_context_submit(context, WINED3D_CS_QUEUE_DEFAULT);
  }
- 
-@@ -2997,6 +3107,8 @@
+@@ -2997,6 +3145,8 @@
  
  static void wined3d_cs_reference_resource(struct wined3d_device_context *context, struct wined3d_resource *resource)
  {
@@ -3169,7 +3209,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_resource_reference(resource);
  }
  
-@@ -3663,8 +3775,13 @@
+@@ -3663,8 +3813,13 @@
      {
          if (!d3d_info->fences)
          {
@@ -3307,7 +3347,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      for (i = 0; i < ARRAY_SIZE(state->stream_output); ++i)
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/glsl_shader.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/glsl_shader.c
 --- a/dlls/wined3d/glsl_shader.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/glsl_shader.c	2026-08-07 23:42:05.795565962 +0300
++++ b/dlls/wined3d/glsl_shader.c	2026-08-08 00:19:20.949137137 +0300
 @@ -410,7 +410,21 @@
  static void shader_glsl_add_version_declaration(struct wined3d_string_buffer *buffer,
          const struct wined3d_gl_info *gl_info)
@@ -4194,7 +4234,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  }
  
  static void shader_glsl_update_compute_program(struct shader_glsl_priv *priv,
-@@ -11996,6 +12662,14 @@
+@@ -11996,6 +12662,29 @@
          const struct wined3d_state *state)
  {
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
@@ -4202,14 +4242,29 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 +    /* MGS2: glAlphaFunc is desktop-only fixed function and absent in GLES, so every
 +     * call raises GL_INVALID_OPERATION -- 829 a second was measured on Hangover.
 +     * The caller only reaches here for a legacy context, and GLES should never be
-+     * classified legacy; this is the belt to that braces. Alpha test has to come
-+     * from the generated GLSL instead. */
++     * classified legacy; this is the belt to that braces.
++     *
++     * Off by default on purpose. Production has run its whole life with this call
++     * failing silently, and its measured 22-38 fps includes that, so switching it
++     * on would move the ladder's own baseline. Skipping it also means alpha test
++     * must come from the generated GLSL, which is unproven here. A/B it on its own:
++     *   MGS2_GLES_ALPHA_SKIP=1 */
 +    if (gl_info->is_gles)
-+        return;
++    {
++        static int skip = -1;
++
++        if (skip < 0)
++        {
++            const char *e = getenv("MGS2_GLES_ALPHA_SKIP");
++            skip = e && *e != '0';
++        }
++        if (skip)
++            return;
++    }
      const struct wined3d_ffp_ps_constants *constants;
      struct wined3d_buffer *buffer;
      GLfloat ref;
-@@ -12603,6 +13277,7 @@
+@@ -12603,6 +13292,7 @@
  
      buffer = string_buffer_get(&blitter->string_buffers);
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -4217,7 +4272,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      shader_addline(buffer, "%s vec2 pos;\n", get_attribute_keyword(gl_info));
      shader_addline(buffer, "%s vec3 texcoord;\n", get_attribute_keyword(gl_info));
      declare_out_varying(gl_info, buffer, FALSE, "vec3 out_texcoord;\n");
-@@ -12617,6 +13292,7 @@
+@@ -12617,6 +13307,7 @@
  
      string_buffer_clear(buffer);
      shader_glsl_add_version_declaration(buffer, gl_info);
@@ -4225,7 +4280,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      shader_addline(buffer, "uniform sampler%s sampler;\n", tex_type);
      if (args->use_colour_key)
      {
-@@ -12660,7 +13336,7 @@
+@@ -12660,7 +13351,7 @@
      GL_EXTCALL(glBindAttribLocation(program, 0, "pos"));
      GL_EXTCALL(glBindAttribLocation(program, 1, "texcoord"));
  
@@ -4934,7 +4989,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          if (format->stencil_size)
 diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/utils.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/utils.c
 --- a/dlls/wined3d/utils.c	2026-01-13 17:56:07.000000000 +0200
-+++ b/dlls/wined3d/utils.c	2026-08-07 23:13:36.568271264 +0300
++++ b/dlls/wined3d/utils.c	2026-08-08 00:19:20.949137137 +0300
 @@ -1053,6 +1053,258 @@
      }
  }
@@ -5490,13 +5545,13 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 + *
 + * MGS2_POLYOFFSET_PROBE=1 runs the original probe again, for an A/B.
 + */
-+static int mgs2_polyoffset_probe_enabled(void)
++static int mgs2_polyoffset_skip_enabled(void)
 +{
 +    static int on = -1;
 +
 +    if (on < 0)
 +    {
-+        const char *e = getenv("MGS2_POLYOFFSET_PROBE");
++        const char *e = getenv("MGS2_POLYOFFSET_SKIP");
 +        on = e && *e != '0';
 +    }
 +    return on;
@@ -5505,11 +5560,14 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  static float wined3d_adapter_find_polyoffset_scale(struct wined3d_caps_gl_ctx *ctx, GLenum format)
  {
      const struct wined3d_gl_info *gl_info = ctx->gl_info;
-@@ -3896,6 +4300,12 @@
+@@ -3896,6 +4300,15 @@
       * Nvidia. Use this as a fallback if the detection fails. */
      unsigned int fallback = 23;
  
-+    if (ctx->gl_info->is_gles && !mgs2_polyoffset_probe_enabled())
++    /* Also opt-in, and for the same reason: production runs the probe today, so
++     * skipping it by default would shift the ladder baseline.
++     *   MGS2_POLYOFFSET_SKIP=1 */
++    if (ctx->gl_info->is_gles && mgs2_polyoffset_skip_enabled())
 +    {
 +        WARN("MGS2 GLES: skipping polygon offset scale probe, using 2^%u.\n", fallback);
 +        return (float)(1u << fallback);
@@ -5518,7 +5576,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      gl_info->gl_ops.gl.p_glGenTextures(1, &color);
      gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, color);
      gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-@@ -4065,6 +4475,131 @@
+@@ -4065,6 +4478,131 @@
  }
  
  /* Context activation is done by the caller. */
@@ -5650,7 +5708,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  BOOL wined3d_adapter_gl_init_format_info(struct wined3d_adapter *adapter, struct wined3d_caps_gl_ctx *ctx)
  {
      struct wined3d_gl_info *gl_info = &wined3d_adapter_gl(adapter)->gl_info;
-@@ -4083,6 +4618,8 @@
+@@ -4083,6 +4621,8 @@
  
      if (!init_typeless_formats(adapter)) goto fail;
  
@@ -5659,7 +5717,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      return TRUE;
  
  fail:
-@@ -6276,7 +6813,7 @@
+@@ -6276,7 +6816,7 @@
      else
          settings->alpha_test_func = state->extra_ps_args.alpha_func - 1;
  
@@ -5668,7 +5726,7 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          settings->flatshading = state->extra_ps_args.flat_shading;
      else
          settings->flatshading = FALSE;
-@@ -6428,7 +6965,17 @@
+@@ -6428,7 +6968,17 @@
      else
          settings->fog_mode = WINED3D_FFP_VS_FOG_DEPTH;
  
