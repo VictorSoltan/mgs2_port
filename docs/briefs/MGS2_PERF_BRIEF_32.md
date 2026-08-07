@@ -157,19 +157,76 @@ ELF и в AArch64 Wine неприменимы в принципе.
 Stock DLL возвращены на место, наши лежат рядом под своими именами, подмена — одна
 команда.
 
-### Что нужно для H2
+### Что нужно для H2. ПОПРАВКА к первой редакции этого раздела
 
-Пересобрать под aarch64 ровно три unix-модуля с нашими патчами:
+Первая редакция говорила «фильтр в `winewayland.drv`, перенести три патча».
+Проверено по исходникам и на устройстве — **оба утверждения неверны**.
+
+**Фильтр живёт в `win32u/opengl.c`, не в драйвере.** Wine 11.0, дословно:
 
 ```text
-10-winewayland.drv.patch   895 строк   EGL-конфиги и презентер
-08-win32u.patch            271 строка  GL entry points
-06-opengl32.patch           69 строк   пропуск GLES-точек входа через фильтр Wine
+win32u/opengl.c:478   if (render & EGL_OPENGL_BIT) configs[j++] = configs[i];
+win32u/opengl.c:777   if (attribs[1] & WGL_CONTEXT_ES2_PROFILE_BIT_EXT)
+win32u/opengl.c:779       ERR( "OpenGL ES contexts are not supported\n" );
+win32u/opengl.c:811   funcs->p_eglBindAPI( EGL_OPENGL_API );
+win32u/opengl.c:1107  funcs->p_eglBindAPI( EGL_OPENGL_API );
 ```
 
-wined3d и d3d8 при этом, вероятно, остаются нашими i386 PE — подмена проверена,
-ABI совпадает. Это предположение, а не факт: оно проверяется сразу после того, как
-unix-сторона начнёт отдавать форматы.
+**Stock `winewayland.drv` уже содержит нативный презентер**, тоже дословно:
+
+```text
+winewayland.drv/opengl.c:119  wl_egl_window_create( client->wl_surface, ... )
+                        :120  eglCreateWindowSurface( egl->display, config, ... )
+                        :160  eglSwapBuffers( egl->display, gl->base.surface )
+```
+
+**И главное: почему старый стек работает, хотя этот фильтр в нём не изменён.**
+Наш production `win32u/opengl.c` несёт фильтр и отказ от ES-контекста в
+неизменном виде, а `winewayland.drv` конфиги сам не выбирает вообще. Замер на
+устройстве, production с `trace+wgl`:
+
+```text
+egldrv_init_pixel_formats: pixel_formats 34
+config 0 id 1 type 405 visual 0 native 0 render 45 rgba 8,8,8,8 depth 0 stencil 0
+```
+
+`render 45` = `0b101101` = 1 + 4 + **8** + 32, где **8 это `EGL_OPENGL_BIT`**.
+32-битный EGL, который подгружает Box86, **объявляет desktop OpenGL**, поэтому
+неизменённый фильтр Wine находит 34 конфига и создаёт «desktop GL» контекст,
+который в действительности GLES. Нативный 64-битный Mali этого бита не объявляет,
+отсюда ноль конфигов под Hangover.
+
+Отсюда состав H2 меняется. Все три наших патча лечат **последствия** того, что
+контекст называется GL, а ведёт себя как GLES, и ни один не выбирает конфиг:
+
+```text
+06-opengl32   69 строк   разбор "OpenGL ES 3.2" (stock делает *major = atoi(ptr)
+                         на unix_wgl.c:549 и получает 0), плюс OES-написания
+                         glGetProgramBinary/glProgramBinary
+08-win32u    271 строка  gles_depth_range/gles_clear_depth (double -> float),
+                         pre-resolve список GL entry points, потому что
+                         wglGetProcAddress здесь возвращает NULL с первого раза;
+                         плюс PeekMessage yield в message.c
+10-winewayland 895 строк ЦЕЛИКОМ presenter на pbuffer/readback/SHM/PBO:
+                         mgs_present_shm, mgs_copy_to_shm, mgs_acquire_shm_buffer,
+                         mgs_ensure_pbos, mgs_async_ensure, mgs_report_stats.
+                         Категорий "EGL-конфиги" и "wl_egl_window" в нём НЕТ
+```
+
+Значит:
+
+```text
+H2 требует НОВОГО кода в win32u/opengl.c, а не переноса:
+    принимать EGL_OPENGL_ES2_BIT / ES3_BIT, а не только EGL_OPENGL_BIT
+    не отвергать WGL_CONTEXT_ES2_PROFILE_BIT_EXT
+    привязывать EGL_OPENGL_ES_API вместо EGL_OPENGL_API
+затем порт 08 и 06 — они закрывают всё, что ПОСЛЕ появления контекста
+patch 10 НЕ переносить: это pbuffer+readback, существовавший только потому, что
+    нативный wl_egl_window был недостижим. Перенос отнял бы главный выигрыш
+```
+
+wined3d и d3d8 остаются нашими i386 PE — подмена проверена, ABI совпадает. Это
+по-прежнему предположение, проверяемое сразу после появления контекста.
 
 Нужен кросс-тулчейн aarch64 и sysroot с заголовками wayland/EGL под ROCKNIX,
 поверх дерева `AndreRH/wine` на теге `hangover-11.0`.
