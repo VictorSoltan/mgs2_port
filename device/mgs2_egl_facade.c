@@ -220,11 +220,29 @@ EGLContext mgs2_facade_eglCreateContext( EGLDisplay dpy, EGLConfig config,
  */
 void mgs2_facade_glGetIntegerv( GLenum pname, GLint *data )
 {
+    /* MEASURED HARMFUL, off by default. Claiming a core profile makes wined3d take
+     * the desktop-GL core path and assume every core-implied ARB extension exists:
+     * the trace fills with "GL CORE: GL_ARB_sync support" and friends, and then it
+     * calls desktop-only entry points Mali does not have. It was observed hanging in
+     * the very first of those, glGetQueryiv(GL_SAMPLES_PASSED, GL_QUERY_COUNTER_BITS)
+     * -- GLES 3 only has GL_ANY_SAMPLES_PASSED -- so Direct3DCreate8 never returned.
+     *
+     * On the working production stack this query FAILS with GL_INVALID_ENUM, wined3d
+     * classifies the context as legacy, and none of that path runs. Letting it fail
+     * is therefore the behaviour to reproduce, not something to fix.
+     *
+     * MGS2_EGL_FACADE_PROFILE=1 restores the lie, for an A/B. */
     if (pname == GL_CONTEXT_PROFILE_MASK && data)
     {
-        FACADE_ONCE( prof, "glGetIntegerv(GL_CONTEXT_PROFILE_MASK) -> CORE (GLES has no profiles)\n" );
-        *data = GL_CONTEXT_CORE_PROFILE_BIT;
-        return;
+        const char *e = getenv( "MGS2_EGL_FACADE_PROFILE" );
+
+        if (e && *e != '0')
+        {
+            FACADE_ONCE( prof, "glGetIntegerv(GL_CONTEXT_PROFILE_MASK) -> CORE (forced)\n" );
+            *data = GL_CONTEXT_CORE_PROFILE_BIT;
+            return;
+        }
+        FACADE_ONCE( profoff, "glGetIntegerv(GL_CONTEXT_PROFILE_MASK) left to fail, as on production\n" );
     }
     {
         static fn_get_integerv real;

@@ -8,10 +8,14 @@
 
 ## Ответ одной строкой
 
-**`Direct3DCreate8` не возвращается.** Игра зависает внутри инициализации адаптера
-wined3d, вероятнее всего в `wined3d_adapter_find_polyoffset_scale`, потому что тот
-вызывает `glClearDepth` — функцию, которой в GLES не существует. Всё остальное
-(нет кадров, нет окна, 96% CPU) — следствия этого одного факта.
+**`Direct3DCreate8` не возвращается.** Игра зависает внутри
+`wined3d_adapter_init_gl_caps`, то есть в определении возможностей GL, ещё до
+создания устройства. Всё остальное (нет кадров, нет окна, 96% CPU) — следствия
+этого одного факта.
+
+Точная строка внутри этой функции **не установлена**. Две конкретные гипотезы
+проверены патчами и обе отвергнуты — подробности ниже, они важнее самих гипотез,
+потому что сужают область.
 
 ## Что УЖЕ работает
 
@@ -62,38 +66,54 @@ wined3d_init -> wined3d_output_init -> wined3d_parse_gl_version
 Спин наступает после него, в участке `wined3d_adapter_init_gl_caps` без
 TRACE-вызовов, поэтому в логе он невидим.
 
-## Виновник, и почему именно он
+## Виновник: ДВЕ гипотезы проверены и обе НЕ подтвердились
 
-`wined3d_adapter_find_polyoffset_scale`, `dlls/wined3d/utils.c:3880`:
+Здесь первая редакция брифа называла `wined3d_adapter_find_polyoffset_scale`
+(`utils.c:4254` в нашем дереве) главным виновником: у неё `for(;;)`, внутри
+desktop-only `glClearDepth` и `glGetTexImage`, а production печатает из неё
+`PolygonOffset scale factor detection failed, using fallback value 2^23`, тогда
+как под Hangover это сообщение не появляется.
 
-```c
-gl_info->gl_ops.gl.p_glClearColor(0.0f, 0.0f, 0.5f, 0.0f);
-gl_info->gl_ops.gl.p_glClearDepth(0.5f);   /* desktop-only; GLES имеет glClearDepthf */
-gl_info->gl_ops.gl.p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-```
+**Проверено патчем — не подтвердилось.** Собран `wined3d_hangover1.dll`, где probe
+пропускается и сразу возвращается 2^23 (`MGS2_POLYOFFSET_PROBE=1` возвращает
+оригинал). Сообщение о пропуске в логе **не появилось вообще**, поведение не
+изменилось. Значит до этой функции дело не доходит, и она не при чём.
 
-вызывается из `for (;;)`, который подбирает масштаб polygon offset и выходит либо по
-успеху, либо по счётчику попыток с сообщением об ошибке.
-
-Доказательство не теоретическое, а сравнительное:
+Вторая гипотеза, из трассировки при активном правиле 4 façade. Последняя строка:
 
 ```text
-production:  err:d3d:wined3d_adapter_find_polyoffset_scale PolygonOffset scale
-             factor detection failed, using fallback value 2^23     (печатается)
-hangover:    этого сообщения НЕТ вообще, при CPU 96%
+wined3d_adapter_init_gl_caps EXT_texture_sRGB_decode is not supported,
+    disabling ARB_framebuffer_sRGB.
 ```
 
-То есть на production детекция не удаётся и срабатывает fallback, а под Hangover до
-fallback дело не доходит.
+Сразу после неё в `adapter_gl.c` идёт:
 
-`glClearDepth` в GLES отсутствует. Ровно этот мост есть в нашем
-`08-win32u.patch`: `gles_clear_depth` -> `glClearDepthf` и `gles_depth_range` ->
-`glDepthRangef`. Под Hangover он не применён, потому что `win32u` там stock ARM64.
+```c
+if (gl_info->supported[ARB_OCCLUSION_QUERY]) {
+    GL_EXTCALL(glGetQueryiv(GL_SAMPLES_PASSED, GL_QUERY_COUNTER_BITS, &counter_bits));
+    TRACE("Occlusion query counter has %d bits.\n", ...);   /* этой строки в логе НЕТ */
+```
 
-Оговорка: что спин именно в этой функции, **не доказано напрямую** — доказано, что
-он в `wined3d_adapter_init_gl_caps` после разбора расширений, и что эта функция
-единственная там с `for(;;)` и с desktop-only вызовом, и что её сообщение об
-ошибке под Hangover пропадает.
+`GL_SAMPLES_PASSED` — desktop-only, в GLES 3 есть только `GL_ANY_SAMPLES_PASSED`. А
+`ARB_OCCLUSION_QUERY` был помечен поддерживаемым **из-за правила 4 façade**, которое
+объявляло контекст CORE — в логе рядом стоят строки `GL CORE: GL_ARB_sync support`
+и подобные, то есть wined3d поверил в десятки desktop-ARB расширений.
+
+**Тоже проверено — тоже не подтвердилось.** Правило 4 выключено (теперь по умолчанию
+off, `MGS2_EGL_FACADE_PROFILE=1` включает обратно). Запрос профиля снова падает, как
+на production. Результат не изменился: draws 0, swap 0, CPU 94.7%.
+
+### Что из этого следует
+
+Зависание находится внутри `wined3d_adapter_init_gl_caps` и **не** объясняется ни
+polygon-offset probe, ни occlusion query, ни профилем контекста. Правило 4 при этом
+всё равно оставлено выключенным: оно объективно заставляет wined3d вызывать
+desktop-only точки входа, чего на production не происходит.
+
+Следующий шаг — не гипотеза, а измерение: прогон с `trace+d3d` на **настоящей**
+диагностической сборке при выключенном правиле 4, и взять последнюю строку. При
+правиле 4 включённом эта точка была на границе occlusion query; при выключенном она
+неизвестна, и угадывать её больше не нужно.
 
 ## Почему façade это не лечит
 
