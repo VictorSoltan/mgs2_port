@@ -7,7 +7,8 @@ learned by getting it wrong at least once.
 ## Access
 
 ```sh
-ssh root@<device-ip>          # ROCKNIX ships with the password "rocknix"
+ssh root@192.168.0.28
+# ROCKNIX ships with the password "rocknix"
 ```
 
 The game lives in `/storage/roms/ports/MGS2-Substance/`, the menu entry is

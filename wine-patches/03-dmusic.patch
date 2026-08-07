@@ -1,0 +1,93 @@
+diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dmusic/port.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmusic/port.c
+--- a/dlls/dmusic/port.c	2026-01-13 17:56:07.000000000 +0200
++++ b/dlls/dmusic/port.c	2026-08-03 11:54:47.311945909 +0300
+@@ -143,6 +143,60 @@
+     return ref;
+ }
+ 
++/* Which port each instrument download and each played buffer lands on, behind
++ * MGS2_DM_ROUTE=1.
++ *
++ * MGS2 builds fourteen audio paths, each with its own port and synth, but
++ * dmime rebuilds the PChannel map from block 0 for every one of them, so every
++ * note ends up at the port of the last path created. If the instruments were
++ * downloaded to the other ports, that port has nothing to play and the sinks
++ * render silence -- which is the symptom. These two counters show whether the
++ * downloads and the notes land on the same port.
++ */
++static int mgs_route_on(void)
++{
++    static int on = -1;
++    if (on == -1)
++    {
++        char buf[8];
++        DWORD len = GetEnvironmentVariableA("MGS2_DM_ROUTE", buf, sizeof(buf));
++        on = (len && len < sizeof(buf) && buf[0] != '0');
++    }
++    return on;
++}
++
++static struct { void *port; LONG plays; LONG downloads; } mgs_port_stat[20];
++
++static struct mgs_port_stat_entry { void *port; LONG plays; LONG downloads; } *mgs_port_stat_get(void *port)
++{
++    int i;
++    for (i = 0; i < 20; i++)
++    {
++        if (!mgs_port_stat[i].port) mgs_port_stat[i].port = port;
++        if (mgs_port_stat[i].port == port)
++            return (struct mgs_port_stat_entry *)&mgs_port_stat[i];
++    }
++    return NULL;
++}
++
++static void mgs_port_report(void)
++{
++    static DWORD last;
++    DWORD now = GetTickCount();
++    int i;
++
++    if (now - last < 1000) return;
++    last = now;
++
++    for (i = 0; i < 20 && mgs_port_stat[i].port; i++)
++    {
++        if (!mgs_port_stat[i].plays && !mgs_port_stat[i].downloads) continue;
++        ERR("MGS2 port %p plays=%ld downloads=%ld\n", mgs_port_stat[i].port,
++            mgs_port_stat[i].plays, mgs_port_stat[i].downloads);
++        mgs_port_stat[i].plays = 0;
++    }
++}
++
+ static HRESULT WINAPI synth_port_PlayBuffer(IDirectMusicPort *iface, IDirectMusicBuffer *buffer)
+ {
+     struct synth_port *This = synth_from_IDirectMusicPort(iface);
+@@ -156,6 +210,13 @@
+     if (!buffer)
+         return E_POINTER;
+ 
++    if (mgs_route_on())
++    {
++        struct mgs_port_stat_entry *e = mgs_port_stat_get(iface);
++        if (e) e->plays++;
++        mgs_port_report();
++    }
++
+     hr = IDirectMusicBuffer_GetStartTime(buffer, &time);
+ 
+     if (SUCCEEDED(hr))
+@@ -192,6 +253,14 @@
+     if (!instrument || !downloaded_instrument || (num_note_ranges && !note_ranges))
+         return E_POINTER;
+ 
++    if (mgs_route_on())
++    {
++        struct mgs_port_stat_entry *e = mgs_port_stat_get(iface);
++        if (e) e->downloads++;
++        ERR("MGS2 download instrument %p to port %p (total %ld)\n", instrument, iface,
++            e ? e->downloads : -1);
++    }
++
+     return instrument_download_to_port(instrument, &This->IDirectMusicPortDownload_iface, downloaded_instrument);
+ }
+ 

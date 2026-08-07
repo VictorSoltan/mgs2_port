@@ -85,19 +85,35 @@ harness/sink_audible_test.sh  tone injection plus speaker-monitor capture with a
 harness/jitter_ladder.sh  ladder over MGS2_DMSYNTH_JITTER_MS with detection
 harness/send_key.py       synthetic input, for harnesses only
 wine-patches/*.patch      the Wine 11.0 changes, one file per module
-docs/briefs/              26 research briefs, in order
+docs/briefs/              30 research briefs, in order
 docs/MGS2_PROJECT_STATE.md, docs/MGS2_RG353VS_HANDOFF.md
+mgs2_collect_context.sh   read-only system dump from the console
 ```
 
 ## Wine patches
 
-Against pristine Wine 11.0. Ten modules: dmime, dmsynth, dmusic, dsound, ntdll,
-opengl32, user32, win32u, wined3d, winewayland.drv.
+Against pristine Wine 11.0. Eleven modules: d3d8, dmime, dmsynth, dmusic,
+dsound, ntdll, opengl32, user32, win32u, wined3d, winewayland.drv.
 
 ```sh
 tar xf wine-11.0.tar.xz && cd wine-11.0
-for p in ../wine-patches/*.patch; do patch -p1 < "$p"; done
+for p in ../wine-patches/*.patch; do patch -p1 -F0 < "$p"; done
 ```
+
+All eleven apply with zero fuzz and reproduce the working tree byte for byte;
+`-F0` is deliberate, so a silent mismatch fails instead of being patched
+approximately. Building needs the cross compiler that ships in the repo but is
+not on PATH, and the release wined3d needs its define passed explicitly:
+
+```sh
+export PATH="$PWD/../recovered-session/mingw/bin:$PATH"
+make -j4 i386_CFLAGS="-g -O2 -DMGS2_RELEASE" dlls/wined3d/i386-windows/wined3d.dll
+```
+
+Beware: the object files in the build tree are release builds and are *newer*
+than the sources, so `make` will not rebuild them. A mixed release/diagnostic
+build links silently and lies in measurements — `touch` every source that must
+go into a variant.
 
 Highlights, all env-gated so they can be A/B tested on the device without a
 rebuild:

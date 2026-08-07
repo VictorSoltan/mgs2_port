@@ -1,0 +1,69 @@
+diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/opengl32/unix_wgl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/opengl32/unix_wgl.c
+--- a/dlls/opengl32/unix_wgl.c	2026-01-13 17:56:07.000000000 +0200
++++ b/dlls/opengl32/unix_wgl.c	2026-08-07 15:08:24.558534052 +0300
+@@ -546,6 +546,18 @@
+ {
+     const char *ptr = gl_version;
+ 
++    /* An OpenGL ES implementation reports "OpenGL ES 3.2 <vendor stuff>" or
++     * "OpenGL ES-CM 1.1 ...", per the GLES spec's GL_VERSION format. atoi() on
++     * that returns 0, the caller then substitutes major version 1, and every
++     * entry point whose registry requirement is GL_VERSION_3_x is refused --
++     * even though the driver resolves it perfectly well. That is why
++     * glClearBufferfv, glClearDepthf and glDepthRangef all come back NULL from
++     * wglGetProcAddress on this device while glDrawBuffers, which an extension
++     * name vouches for, gets through. Skip the prefix so the real version is
++     * parsed. */
++    if (!strncmp( ptr, "OpenGL ES-CM ", 13 )) ptr += 13;
++    else if (!strncmp( ptr, "OpenGL ES ", 10 )) ptr += 10;
++
+     *major = atoi( ptr );
+     if (*major <= 0)
+         ERR( "Invalid OpenGL major version %d.\n", *major );
+@@ -982,6 +994,38 @@
+         if (!is_any_extension_supported( ctx, found->extension ))
+         {
+             unsigned int i;
++            /*
++             * MGS2 on Mali: the blob is a GLES driver, so it never advertises the
++             * desktop extension strings these entry points are gated on, and Wine
++             * refuses them even though eglGetProcAddress hands them out. Measured:
++             * the driver reports GL_NUM_PROGRAM_BINARY_FORMATS = 1, yet
++             * glGetProgramBinary came back NULL through every route from the PE
++             * side, which is why linking a program costs 195 ms on every run
++             * instead of once ever.
++             *
++             * So for a short, explicit list, ask the driver under both spellings
++             * and accept whatever it actually has. Deliberately a list and not a
++             * blanket "trust the driver": a wrong pointer here is a jump to a
++             * function the caller's ABI does not match.
++             */
++            static const struct { const char *name, *es; } gles_spellings[] =
++            {
++                { "glGetProgramBinary", "glGetProgramBinaryOES" },
++                { "glProgramBinary",    "glProgramBinaryOES" },
++            };
++
++            for (i = 0; i < ARRAY_SIZE(gles_spellings); i++)
++            {
++                if (strcmp( name, gles_spellings[i].name )) continue;
++                if (!driver_func) driver_func = funcs->p_wglGetProcAddress( gles_spellings[i].es );
++                if (!driver_func) break;
++                ERR( "MGS2: %s not gated by %s on this GLES driver, using driver pointer %p\n",
++                     name, found->extension, driver_func );
++                *func_ptr = driver_func;
++                return (void *)(UINT_PTR)(found - extension_registry);
++            }
++
++            {
+             static const struct { const char *name, *alt; } alternatives[] =
+             {
+                 { "glCopyTexSubImage3DEXT", "glCopyTexSubImage3D" },     /* needed by RuneScape */
+@@ -999,6 +1043,7 @@
+ 
+             WARN( "Extension %s required for %s not supported\n", found->extension, name );
+             return (void *)-1;
++            }
+         }
+ 
+         if (driver_func == NULL)
