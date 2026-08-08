@@ -12,7 +12,23 @@ harness, and 30 briefs recording **which hypotheses turned out wrong**.
 
 ```text
 README.md                  what works, why, and the dead-end list
-docs/briefs/MGS2_PERF_BRIEF_29.md   start here for performance: self-contained handover
+docs/briefs/MGS2_PERF_BRIEF_38.md   START HERE: real batchability is 8.49x, the merge
+                                    mechanism works on this Mali, and the batcher is
+                                    written and built but NOT yet measured
+docs/briefs/MGS2_PERF_BRIEF_37.md   how that was scoped: the whole renderer cost is the
+                                    glDraw calls themselves
+docs/briefs/MGS2_PERF_BRIEF_36.md   the ladder that decomposed the frame
+docs/briefs/MGS2_PERF_BRIEF_35.md   every open problem on both stacks, ranked
+docs/briefs/MGS2_PERF_BRIEF_34.md   what blocked the game on Hangover; superseded by
+                                    #35 now that it renders
+docs/briefs/MGS2_PERF_BRIEF_33.md   how that was found: the EGL facade, and gates 1-4
+                                    of H2 passing without patching Wine at all
+docs/briefs/MGS2_PERF_BRIEF_32.md   H0/H1, and the disk-space traps. Its render 45
+                                    reading is wrong; #33 corrects it
+docs/briefs/MGS2_PERF_BRIEF_31.md   why the track changed, and the H0-H4 plan
+docs/briefs/MGS2_PERF_BRIEF_29.md   the old track: self-contained perf handover
+docs/briefs/MGS2_PERF_BRIEF_30.md   the game loop disassembled, and the instruments
+                                    built for it (the ladder is deployed, unmeasured)
 docs/briefs/MGS2_PERF_BRIEF_28.md   the measurements 29 is built on
 docs/DEVICE.md             how to run, measure and not break the console
 wine-patches/*.patch       the changes, one file per Wine module
@@ -52,6 +68,7 @@ retracted **in writing** by the later briefs.
 ```text
 the frame is CPU-bound: ~1000 draw calls and ~103 ms of CPU against 1.5 ms of GPU
 everything removable from the GPU and presentation path has been removed already
+the draws come in runs of 8.5 that can be merged; the batcher for that is unmeasured
 the largest untapped lever is thermal: the guard drops the clock 1992 -> 1104 MHz
 freezes are a wait inside Wine, not the SD card, not shaders, not throttling
 ```

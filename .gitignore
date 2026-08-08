@@ -19,3 +19,9 @@ wine-11.0/
 # Логи и записи с устройства.
 *.log
 *.wav
+__pycache__/
+
+# Collector output: machine-specific, and a PC-run copy once got mistaken for
+# the console. Send the tarball, never commit it.
+mgs2-perf-context-*/
+mgs2-perf-context-*.tar.gz

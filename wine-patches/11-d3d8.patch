@@ -1,0 +1,532 @@
+diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/d3d8/d3d8_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/d3d8/d3d8_private.h
+--- a/dlls/d3d8/d3d8_private.h	2026-01-13 17:56:07.000000000 +0200
++++ b/dlls/d3d8/d3d8_private.h	2026-08-07 17:30:08.467263976 +0300
+@@ -243,6 +243,11 @@
+     IDirect3DBaseTexture8 IDirect3DBaseTexture8_iface;
+     struct d3d8_resource resource;
+     struct wined3d_texture *wined3d_texture, *draw_texture;
++    /* MGS2: managed textures were uploaded on every draw, for every bound
++     * sampler, whether or not their contents had changed. Track the change
++     * instead. Set by every path that can alter a managed texture's content
++     * (Unlock, AddDirtyRect, CopyRects) and by creation. */
++    BOOL mgs2_content_dirty;
+     struct d3d8_device *parent_device;
+     struct list rtv_list;
+ };
+@@ -254,6 +259,49 @@
+ HRESULT d3d8_texture_cube_init(struct d3d8_texture *texture, struct d3d8_device *device,
+         unsigned int edge_length, unsigned int level_count, DWORD usage, D3DFORMAT format, D3DPOOL pool);
+ 
++/* MGS2 fast paths, all switchable at runtime so a regression can be ruled out on
++ * the device without a rebuild:
++ *   MGS2_D3D8_STATEFAST=0        stop dropping redundant state calls
++ *   MGS2_D3D8_MANAGED_DIRTY=0    upload managed textures on every draw again
++ *   MGS2_D3D8_STATS=1            one counter line per second
++ *
++ * Renderer no-op ladder. Diagnostic only: each rung deletes more of the draw
++ * path so the frame time it is worth attributing to that path can be read off
++ * directly. The picture is wrong in every rung -- these are never a shipping
++ * setting. Rung A answers "how much CPU is in D3D8+WineD3D at all", B isolates
++ * the cost of building and submitting the CS packet, C isolates the consumer
++ * side (WineD3D -> GLES -> Mali). Run all three plus a baseline at one fixed
++ * Plant spot and one fixed clock, or the numbers measure the scene.
++ *   MGS2_D3D8_NOOP_DRAW=1        rung A: Draw* returns before the mutex
++ *   MGS2_D3D8_NOOP_SUBMIT=1      rung B: everything but wined3d_device_context_draw
++ * Rung C lives in wined3d (MGS2_WINED3D_NOOP_DRAW=1).
++ */
++extern BOOL d3d8_mgs2_statefast(void);
++extern BOOL d3d8_mgs2_managed_dirty(void);
++extern BOOL d3d8_mgs2_stats(void);
++extern BOOL d3d8_mgs2_noop_draw(void);
++extern BOOL d3d8_mgs2_noop_submit(void);
++extern void d3d8_mgs2_count(unsigned int which);
++extern void d3d8_mgs2_add(unsigned int which, unsigned int amount);
++extern void d3d8_mgs2_report(void);
++
++enum d3d8_mgs2_counter
++{
++    D3D8_MGS2_RS_CALL, D3D8_MGS2_RS_REDUNDANT,
++    D3D8_MGS2_TSS_CALL, D3D8_MGS2_TSS_REDUNDANT,
++    D3D8_MGS2_SAMP_CALL, D3D8_MGS2_SAMP_REDUNDANT,
++    D3D8_MGS2_DRAW, D3D8_MGS2_DRAW_UP,
++    D3D8_MGS2_MANAGED_SCAN, D3D8_MGS2_MANAGED_SKIPPED, D3D8_MGS2_MANAGED_UPLOAD,
++    /* Wine 11.0 re-copies the used range of every system-memory vertex stream,
++     * and maps/uploads/unmaps the index range, immediately before each draw.
++     * At ~10 500 draws/s that is worth knowing the size of before optimising:
++     * if these read zero the whole direction is closed. VB_STREAM counts stream
++     * copies, which can exceed VB_DRAW when a draw uses several streams. */
++    D3D8_MGS2_SYSMEM_VB_DRAW, D3D8_MGS2_SYSMEM_VB_STREAM, D3D8_MGS2_SYSMEM_VB_BYTES,
++    D3D8_MGS2_SYSMEM_IB_DRAW, D3D8_MGS2_SYSMEM_IB_BYTES,
++    D3D8_MGS2_COUNTER_COUNT
++};
++
+ static inline struct wined3d_texture *d3d8_texture_get_draw_texture(struct d3d8_texture *texture)
+ {
+     return texture->draw_texture ? texture->draw_texture : texture->wined3d_texture;
+diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/d3d8/device.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/d3d8/device.c
+--- a/dlls/d3d8/device.c	2026-01-13 17:56:07.000000000 +0200
++++ b/dlls/d3d8/device.c	2026-08-07 18:43:08.070666917 +0300
+@@ -1491,6 +1491,10 @@
+     src_impl = unsafe_impl_from_IDirect3DBaseTexture8(src_texture);
+     dst_impl = unsafe_impl_from_IDirect3DBaseTexture8(dst_texture);
+ 
++    /* MGS2: UpdateTexture changes the destination's content without any lock, so
++     * mark it stale for the upload fast path. */
++    dst_impl->mgs2_content_dirty = TRUE;
++
+     if (src_impl->draw_texture || dst_impl->draw_texture)
+     {
+         WARN("Source or destination is managed; returning D3DERR_INVALIDCALL.\n");
+@@ -1509,10 +1513,14 @@
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     struct d3d8_surface *dst_impl = unsafe_impl_from_IDirect3DSurface8(dst_surface);
++    /* MGS2: same reasoning as UpdateTexture, one level down. */
+     HRESULT hr;
+ 
+     TRACE("iface %p, dst_surface %p.\n", iface, dst_surface);
+ 
++    if (dst_impl && dst_impl->texture)
++        dst_impl->texture->mgs2_content_dirty = TRUE;
++
+     if (!dst_surface)
+     {
+         WARN("Invalid destination surface passed.\n");
+@@ -1988,6 +1996,139 @@
+             wined3d_rendertarget_view_get_resource(wined3d_dsv), d3d8_dsv->sub_resource_idx, desc.format);
+ }
+ 
++/*
++ * MGS2-specific fast paths and their counters.
++ *
++ * Two costs showed up on an RK3566 handheld running this game through Box86:
++ * every redundant SetRenderState still took the global wined3d mutex and walked
++ * into the stateblock, and every draw re-uploaded every bound managed texture
++ * whether or not its contents had changed. Both are avoidable without changing
++ * observable D3D8 behaviour. Counters are aggregate, one line per second, never
++ * per call -- per-call logging on this device has already cost more than it
++ * measured.
++ */
++static LONG d3d8_mgs2_counters[D3D8_MGS2_COUNTER_COUNT];
++
++static BOOL d3d8_mgs2_env_on(const char *name, BOOL def)
++{
++    char value[8];
++    DWORD len = GetEnvironmentVariableA(name, value, sizeof(value));
++
++    if (!len || len >= sizeof(value)) return def;
++    return value[0] != '0';
++}
++
++BOOL d3d8_mgs2_statefast(void)
++{
++    static int on = -1;
++    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_STATEFAST", TRUE);
++    return on;
++}
++
++BOOL d3d8_mgs2_managed_dirty(void)
++{
++    static int on = -1;
++    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_MANAGED_DIRTY", TRUE);
++    return on;
++}
++
++BOOL d3d8_mgs2_stats(void)
++{
++    static int on = -1;
++    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_STATS", FALSE);
++    return on;
++}
++
++/* Which rung of the no-op ladder is active, re-read from a file about once a
++ * second so all four rungs can be measured in one run, on one scene.
++ *
++ * An environment variable cannot do this. It is fixed at process start, which
++ * would mean four launches -- and worse, rung A draws nothing at all, so the
++ * menus needed to load the save are invisible and the scene cannot be reached
++ * blind. Reading a rung file instead means: load the save, stand still, then
++ * flip the rung from outside while the scene and the thermal state hold.
++ *
++ * One CreateFile per second against a tmpfs path, so leaving this compiled in
++ * costs nothing measurable next to ~10 500 draws a second. The env knobs still
++ * win when set, for a run that is deliberately pinned from the start.
++ */
++static char d3d8_mgs2_ladder_rung(void)
++{
++    static char cached = '0';
++    static DWORD last;
++    DWORD now = GetTickCount();
++
++    if (!last || now - last >= 1000)
++    {
++        char path[MAX_PATH], buf[8] = {0};
++        DWORD got = 0;
++        HANDLE h;
++
++        last = now ? now : 1;
++        if (!GetEnvironmentVariableA("MGS2_LADDER_FILE", path, sizeof(path)))
++            strcpy(path, "Z:\\tmp\\mgs2-ladder");
++        h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                NULL, OPEN_EXISTING, 0, NULL);
++        if (h != INVALID_HANDLE_VALUE)
++        {
++            ReadFile(h, buf, sizeof(buf) - 1, &got, NULL);
++            CloseHandle(h);
++        }
++        cached = (buf[0] == 'A' || buf[0] == 'B' || buf[0] == 'C') ? buf[0] : '0';
++    }
++    return cached;
++}
++
++BOOL d3d8_mgs2_noop_draw(void)
++{
++    static int env = -1;
++    if (env == -1) env = d3d8_mgs2_env_on("MGS2_D3D8_NOOP_DRAW", FALSE);
++    return env || d3d8_mgs2_ladder_rung() == 'A';
++}
++
++BOOL d3d8_mgs2_noop_submit(void)
++{
++    static int env = -1;
++    if (env == -1) env = d3d8_mgs2_env_on("MGS2_D3D8_NOOP_SUBMIT", FALSE);
++    return env || d3d8_mgs2_ladder_rung() == 'B';
++}
++
++void d3d8_mgs2_count(unsigned int which)
++{
++    if (which < D3D8_MGS2_COUNTER_COUNT) d3d8_mgs2_counters[which]++;
++}
++
++void d3d8_mgs2_add(unsigned int which, unsigned int amount)
++{
++    if (which < D3D8_MGS2_COUNTER_COUNT) d3d8_mgs2_counters[which] += amount;
++}
++
++void d3d8_mgs2_report(void)
++{
++    static DWORD last;
++    DWORD now;
++
++    if (!d3d8_mgs2_stats()) return;
++    now = GetTickCount();
++    if (now - last < 1000) return;
++    last = now;
++
++    ERR("MGS2 D3D8STAT tick=%lu draws=%ld up_draws=%ld | rs %ld/%ld redundant | "
++        "tss %ld/%ld | samp %ld/%ld | managed scan=%ld skipped=%ld upload=%ld | "
++        "sysmem vb %ld draws %ld streams %ldKB, ib %ld draws %ldKB\n",
++        now, d3d8_mgs2_counters[D3D8_MGS2_DRAW], d3d8_mgs2_counters[D3D8_MGS2_DRAW_UP],
++        d3d8_mgs2_counters[D3D8_MGS2_RS_REDUNDANT], d3d8_mgs2_counters[D3D8_MGS2_RS_CALL],
++        d3d8_mgs2_counters[D3D8_MGS2_TSS_REDUNDANT], d3d8_mgs2_counters[D3D8_MGS2_TSS_CALL],
++        d3d8_mgs2_counters[D3D8_MGS2_SAMP_REDUNDANT], d3d8_mgs2_counters[D3D8_MGS2_SAMP_CALL],
++        d3d8_mgs2_counters[D3D8_MGS2_MANAGED_SCAN], d3d8_mgs2_counters[D3D8_MGS2_MANAGED_SKIPPED],
++        d3d8_mgs2_counters[D3D8_MGS2_MANAGED_UPLOAD],
++        d3d8_mgs2_counters[D3D8_MGS2_SYSMEM_VB_DRAW], d3d8_mgs2_counters[D3D8_MGS2_SYSMEM_VB_STREAM],
++        d3d8_mgs2_counters[D3D8_MGS2_SYSMEM_VB_BYTES] / 1024,
++        d3d8_mgs2_counters[D3D8_MGS2_SYSMEM_IB_DRAW],
++        d3d8_mgs2_counters[D3D8_MGS2_SYSMEM_IB_BYTES] / 1024);
++    memset(d3d8_mgs2_counters, 0, sizeof(d3d8_mgs2_counters));
++}
++
+ static HRESULT WINAPI d3d8_device_SetRenderState(IDirect3DDevice8 *iface,
+         D3DRENDERSTATETYPE state, DWORD value)
+ {
+@@ -1995,6 +2136,17 @@
+ 
+     TRACE("iface %p, state %#x, value %#lx.\n", iface, state, value);
+ 
++    d3d8_mgs2_count(D3D8_MGS2_RS_CALL);
++    /* Identical value, not recording a state block, and not the POINTSIZE code
++     * the RESZ hack rides on: the call cannot be observed, so skip it before the
++     * global mutex rather than after it. */
++    if (d3d8_mgs2_statefast() && !device->recording && state != D3DRS_POINTSIZE
++            && device->stateblock_state->rs[wined3d_render_state_from_d3d(state)] == value)
++    {
++        d3d8_mgs2_count(D3D8_MGS2_RS_REDUNDANT);
++        return D3D_OK;
++    }
++
+     wined3d_mutex_lock();
+     wined3d_stateblock_set_render_state(device->update_state, wined3d_render_state_from_d3d(state), value);
+     if (state == D3DRS_POINTSIZE && value == D3D8_RESZ_CODE)
+@@ -2407,6 +2559,28 @@
+ 
+     l = &tss_lookup[type];
+ 
++    d3d8_mgs2_count(l->sampler_state ? D3D8_MGS2_SAMP_CALL : D3D8_MGS2_TSS_CALL);
++    if (d3d8_mgs2_statefast() && !device->recording)
++    {
++        const struct wined3d_stateblock_state *current = device->stateblock_state;
++
++        if (l->sampler_state)
++        {
++            if (stage < ARRAY_SIZE(current->sampler_states)
++                    && current->sampler_states[stage][l->u.sampler_state] == value)
++            {
++                d3d8_mgs2_count(D3D8_MGS2_SAMP_REDUNDANT);
++                return D3D_OK;
++            }
++        }
++        else if (stage < ARRAY_SIZE(current->texture_states)
++                && current->texture_states[stage][l->u.texture_state] == value)
++        {
++            d3d8_mgs2_count(D3D8_MGS2_TSS_REDUNDANT);
++            return D3D_OK;
++        }
++    }
++
+     wined3d_mutex_lock();
+     if (l->sampler_state)
+         wined3d_stateblock_set_sampler_state(device->update_state, stage, l->u.sampler_state, value);
+@@ -2506,6 +2680,8 @@
+ 
+     decl = wined3d_vertex_declaration_get_parent(wined3d_decl);
+     map = decl->stream_map & device->sysmem_vb;
++    if (map)
++        d3d8_mgs2_count(D3D8_MGS2_SYSMEM_VB_DRAW);
+     while (map)
+     {
+         stream = &state->streams[wined3d_bit_scan(&map)];
+@@ -2517,6 +2693,8 @@
+         wined3d_resource_get_desc(dst_resource, &desc);
+         box.left = stream->offset + start_vertex * stride;
+         box.right = min(box.left + vertex_count * stride, desc.size);
++        d3d8_mgs2_count(D3D8_MGS2_SYSMEM_VB_STREAM);
++        d3d8_mgs2_add(D3D8_MGS2_SYSMEM_VB_BYTES, box.right - box.left);
+         if (FAILED(hr = wined3d_device_context_copy_sub_resource_region(device->immediate_context,
+                 dst_resource, 0, box.left, 0, 0,
+                 wined3d_buffer_get_resource(d3d8_buffer->wined3d_buffer), 0, &box, 0)))
+@@ -2545,6 +2723,9 @@
+     src_offset = (*start_idx) * idx_size;
+     buffer_size = min(idx_count * idx_size, resource_desc.size - src_offset);
+ 
++    d3d8_mgs2_count(D3D8_MGS2_SYSMEM_IB_DRAW);
++    d3d8_mgs2_add(D3D8_MGS2_SYSMEM_IB_BYTES, buffer_size);
++
+     wined3d_box_set(&box, src_offset, 0, buffer_size, 1, 0, 1);
+     if (FAILED(hr = wined3d_resource_map(index_buffer, 0, &map_desc, &box, WINED3D_MAP_READ)))
+     {
+@@ -2566,6 +2747,8 @@
+     const struct wined3d_stateblock_state *state = device->stateblock_state;
+     unsigned int i;
+ 
++    d3d8_mgs2_count(D3D8_MGS2_MANAGED_SCAN);
++
+     for (i = 0; i < WINED3D_MAX_FRAGMENT_SAMPLERS; ++i)
+     {
+         struct wined3d_texture *wined3d_texture = state->textures[i];
+@@ -2574,9 +2757,20 @@
+         if (!wined3d_texture)
+             continue;
+         d3d8_texture = wined3d_texture_get_parent(wined3d_texture);
+-        if (d3d8_texture->draw_texture)
+-            wined3d_device_update_texture(device->wined3d_device,
+-                    d3d8_texture->wined3d_texture, d3d8_texture->draw_texture);
++        if (!d3d8_texture->draw_texture)
++            continue;
++        /* A managed texture can only change through Unlock, AddDirtyRect or
++         * CopyRects, and each of those marks it. Re-uploading an unchanged one
++         * on every draw is pure cost. */
++        if (d3d8_mgs2_managed_dirty() && !d3d8_texture->mgs2_content_dirty)
++        {
++            d3d8_mgs2_count(D3D8_MGS2_MANAGED_SKIPPED);
++            continue;
++        }
++        d3d8_mgs2_count(D3D8_MGS2_MANAGED_UPLOAD);
++        wined3d_device_update_texture(device->wined3d_device,
++                d3d8_texture->wined3d_texture, d3d8_texture->draw_texture);
++        d3d8_texture->mgs2_content_dirty = FALSE;
+     }
+ }
+ 
+@@ -2590,14 +2784,22 @@
+     TRACE("iface %p, primitive_type %#x, start_vertex %u, primitive_count %u.\n",
+             iface, primitive_type, start_vertex, primitive_count);
+ 
++    /* Ladder rung A: out before the mutex, the state application and the upload. */
++    if (d3d8_mgs2_noop_draw())
++        return D3D_OK;
++
+     vertex_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
+     d3d8_device_upload_managed_textures(device);
++    d3d8_mgs2_count(D3D8_MGS2_DRAW);
++    d3d8_mgs2_report();
+     d3d8_device_upload_sysmem_vertex_buffers(device, start_vertex, vertex_count);
+     wined3d_device_context_set_primitive_type(device->immediate_context,
+             wined3d_primitive_type_from_d3d(primitive_type), 0);
+     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
+-    wined3d_device_context_draw(device->immediate_context, start_vertex, vertex_count, 0, 0);
++    /* Ladder rung B: prepared exactly as normal, never submitted to the CS. */
++    if (!d3d8_mgs2_noop_submit())
++        wined3d_device_context_draw(device->immediate_context, start_vertex, vertex_count, 0, 0);
+ 
+     for (i = 0; i < ARRAY_SIZE(device->stateblock_state->streams); ++i)
+     {
+@@ -2627,6 +2829,10 @@
+     TRACE("iface %p, primitive_type %#x, min_vertex_idx %u, vertex_count %u, start_idx %u, primitive_count %u.\n",
+             iface, primitive_type, min_vertex_idx, vertex_count, start_idx, primitive_count);
+ 
++    /* Ladder rung A: out before the mutex, the state application and the upload. */
++    if (d3d8_mgs2_noop_draw())
++        return D3D_OK;
++
+     index_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
+     if (!device->stateblock_state->index_buffer)
+@@ -2637,6 +2843,8 @@
+     }
+     base_vertex_index = device->stateblock_state->base_vertex_index;
+     d3d8_device_upload_managed_textures(device);
++    d3d8_mgs2_count(D3D8_MGS2_DRAW);
++    d3d8_mgs2_report();
+     d3d8_device_upload_sysmem_vertex_buffers(device, base_vertex_index + min_vertex_idx, vertex_count);
+     wined3d_device_context_set_primitive_type(device->immediate_context,
+             wined3d_primitive_type_from_d3d(primitive_type), 0);
+@@ -2646,7 +2854,10 @@
+         wined3d_mutex_unlock();
+         return hr;
+     }
+-    wined3d_device_context_draw_indexed(device->immediate_context, base_vertex_index, start_idx, index_count, 0, 0);
++    /* Ladder rung B: prepared exactly as normal, never submitted to the CS. */
++    if (!d3d8_mgs2_noop_submit())
++        wined3d_device_context_draw_indexed(device->immediate_context,
++                base_vertex_index, start_idx, index_count, 0, 0);
+ 
+     ib = wined3d_buffer_get_parent(device->stateblock_state->index_buffer);
+     ib->discarded = false;
+@@ -2683,6 +2894,11 @@
+         return D3D_OK;
+     }
+ 
++    /* Ladder rung A. Measured as unused by this game (up_draws=0), covered so
++     * that "no draws at all" is true rather than nearly true. */
++    if (d3d8_mgs2_noop_draw())
++        return D3D_OK;
++
+     wined3d_mutex_lock();
+ 
+     if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device,
+@@ -2694,6 +2910,8 @@
+         goto done;
+ 
+     d3d8_device_upload_managed_textures(device);
++    d3d8_mgs2_count(D3D8_MGS2_DRAW_UP);
++    d3d8_mgs2_report();
+     wined3d_device_context_set_primitive_type(device->immediate_context,
+             wined3d_primitive_type_from_d3d(primitive_type), 0);
+     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
+@@ -2729,6 +2947,10 @@
+         return D3D_OK;
+     }
+ 
++    /* Ladder rung A, see DrawPrimitiveUP. */
++    if (d3d8_mgs2_noop_draw())
++        return D3D_OK;
++
+     wined3d_mutex_lock();
+ 
+     if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device, &device->vertex_buffer,
+@@ -2749,6 +2971,8 @@
+     wined3d_stateblock_set_base_vertex_index(device->state, base_vertex_idx);
+ 
+     d3d8_device_upload_managed_textures(device);
++    d3d8_mgs2_count(D3D8_MGS2_DRAW_UP);
++    d3d8_mgs2_report();
+     wined3d_device_context_set_primitive_type(device->immediate_context,
+             wined3d_primitive_type_from_d3d(primitive_type), 0);
+     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
+diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/d3d8/surface.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/d3d8/surface.c
+--- a/dlls/d3d8/surface.c	2026-01-13 17:56:07.000000000 +0200
++++ b/dlls/d3d8/surface.c	2026-08-06 15:33:42.972743443 +0300
+@@ -273,6 +273,11 @@
+ 
+     hr = wined3d_resource_unmap(wined3d_texture_get_resource(surface->wined3d_texture), surface->sub_resource_idx);
+ 
++    /* MGS2: unlocking a surface is how the game writes a managed texture, so the
++     * upload-only-what-changed path has to learn about it here too. */
++    if (surface->texture)
++        surface->texture->mgs2_content_dirty = TRUE;
++
+     if (hr == WINEDDERR_NOTLOCKED)
+     {
+         D3DRESOURCETYPE type;
+diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/d3d8/texture.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/d3d8/texture.c
+--- a/dlls/d3d8/texture.c	2026-01-13 17:56:07.000000000 +0200
++++ b/dlls/d3d8/texture.c	2026-08-06 15:33:42.978125625 +0300
+@@ -343,6 +343,10 @@
+         hr = IDirect3DSurface8_UnlockRect(&surface_impl->IDirect3DSurface8_iface);
+     wined3d_mutex_unlock();
+ 
++    /* MGS2: a managed texture's content only changes through these
++     * paths, so this is where the upload fast path learns it is stale. */
++    texture->mgs2_content_dirty = TRUE;
++
+     return hr;
+ }
+ 
+@@ -366,6 +370,10 @@
+     }
+     wined3d_mutex_unlock();
+ 
++    /* MGS2: a managed texture's content only changes through these
++     * paths, so this is where the upload fast path learns it is stale. */
++    texture->mgs2_content_dirty = TRUE;
++
+     return hr;
+ }
+ 
+@@ -667,6 +675,10 @@
+         hr = IDirect3DSurface8_UnlockRect(&surface_impl->IDirect3DSurface8_iface);
+     wined3d_mutex_unlock();
+ 
++    /* MGS2: a managed texture's content only changes through these
++     * paths, so this is where the upload fast path learns it is stale. */
++    texture->mgs2_content_dirty = TRUE;
++
+     return hr;
+ }
+ 
+@@ -691,6 +703,10 @@
+     }
+     wined3d_mutex_unlock();
+ 
++    /* MGS2: a managed texture's content only changes through these
++     * paths, so this is where the upload fast path learns it is stale. */
++    texture->mgs2_content_dirty = TRUE;
++
+     return hr;
+ }
+ 
+@@ -970,6 +986,10 @@
+         hr = IDirect3DVolume8_UnlockBox(&volume_impl->IDirect3DVolume8_iface);
+     wined3d_mutex_unlock();
+ 
++    /* MGS2: a managed texture's content only changes through these
++     * paths, so this is where the upload fast path learns it is stale. */
++    texture->mgs2_content_dirty = TRUE;
++
+     return hr;
+ }
+ 
+@@ -984,6 +1004,10 @@
+     hr = wined3d_texture_add_dirty_region(texture->wined3d_texture, 0, (const struct wined3d_box *)dirty_box);
+     wined3d_mutex_unlock();
+ 
++    /* MGS2: a managed texture's content only changes through these
++     * paths, so this is where the upload fast path learns it is stale. */
++    texture->mgs2_content_dirty = TRUE;
++
+     return hr;
+ }
+ 
+@@ -1054,6 +1078,8 @@
+ static HRESULT d3d8_texture_init(struct d3d8_texture *texture, struct d3d8_device *device,
+         const struct wined3d_resource_desc *desc, D3DPOOL pool, unsigned int layer_count, unsigned int level_count)
+ {
++    /* MGS2: nothing has been uploaded yet, so the first draw must. */
++    texture->mgs2_content_dirty = TRUE;
+     unsigned int flags = 0;
+     HRESULT hr;
+ 

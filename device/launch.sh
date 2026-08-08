@@ -215,7 +215,29 @@ export BOX64_LOG=0 BOX64_NOBANNER=1
 export BOX86_LD_LIBRARY_PATH="/usr/share/box86/lib:$GAMEDIR/x86libs"
 export BOX86_EMULATED_LIBS="libwayland-client.so.0:libffi.so.8:libwayland-egl.so.1:libxkbcommon.so.0:libxkbregistry.so.0:libxml2.so.2:libicuuc.so.72:libicudata.so.72:liblzma.so.5:libstdc++.so.6"
 export BOX86_LOG=0 BOX86_NOBANNER=1
-export BOX86_DYNAREC_SAFEFLAGS=0 BOX86_DYNAREC_BIGBLOCK=2 BOX86_DYNAREC_FORWARD=512 BOX86_DYNAREC_CALLRET=1
+# The default is the known-good Box86 dynarec configuration. MGS2_BOX86_PROFILE
+# only selects an explicit, per-launch A/B arm; it never changes production when
+# unset. These knobs are consumed while Box86 starts, so they cannot be switched
+# inside an already-running game.
+case "${MGS2_BOX86_PROFILE:-production}" in
+    production)
+        : "${BOX86_DYNAREC_SAFEFLAGS:=0}"
+        : "${BOX86_DYNAREC_BIGBLOCK:=2}"
+        : "${BOX86_DYNAREC_FORWARD:=512}"
+        : "${BOX86_DYNAREC_CALLRET:=1}"
+        ;;
+    aggressive)
+        : "${BOX86_DYNAREC_SAFEFLAGS:=0}"
+        : "${BOX86_DYNAREC_BIGBLOCK:=3}"
+        : "${BOX86_DYNAREC_FORWARD:=1024}"
+        : "${BOX86_DYNAREC_CALLRET:=1}"
+        ;;
+    *)
+        echo "unknown MGS2_BOX86_PROFILE=${MGS2_BOX86_PROFILE}; use production or aggressive" >&2
+        exit 2
+        ;;
+esac
+export BOX86_DYNAREC_SAFEFLAGS BOX86_DYNAREC_BIGBLOCK BOX86_DYNAREC_FORWARD BOX86_DYNAREC_CALLRET
 
 # ---------------------------------------------------------------------------
 # Presentation tuning, read by winewayland_pbo1.so.
@@ -416,8 +438,51 @@ DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_se1.dll}"
 D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_mgs2fast1.dll}"
 [ -n "$D3D8_DLL" ] && [ ! -r "$GAMEDIR/$D3D8_DLL" ] && D3D8_DLL=""
 
+# Keep the measured production renderer as the default. The immutable-EBO cache
+# remains an explicit experiment until its cache overflow and FPS are solved:
+#   MGS2_WINED3D_DLL=wined3d_batch3_staticcache.dll MGS2_BATCH=1 ./launch.sh
 WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_release3.dll}"
 [ -r "$GAMEDIR/$WINED3D_DLL" ] || WINED3D_DLL="wined3d_dbg42_gles_present.dll"
+export MGS2_BATCH="${MGS2_BATCH:-0}"
+
+# ---------------------------------------------------------------------------
+# Renderer no-op ladder, brief #30. Diagnostic only, nothing here is a shipping
+# setting -- every rung draws the wrong picture on purpose. The pair
+# wined3d_ladder1.dll + d3d8_ladder1.dll carries all three rungs, so the
+# baseline and all three are the same binary:
+#
+#   MGS2_WINED3D_DLL=wined3d_ladder1.dll MGS2_D3D8_DLL=d3d8_ladder1.dll
+#     (nothing set)              baseline
+#     MGS2_D3D8_NOOP_DRAW=1      A: Draw* returns before mutex, state, upload
+#     MGS2_D3D8_NOOP_SUBMIT=1    B: prepared as normal, never submitted to CS
+#     MGS2_WINED3D_NOOP_DRAW=1   C: submitted and consumed, no GL work
+#
+# Do NOT use the older MGS2_SKIP_ALL_DRAWS for rung C. The release build defines
+# it to false, so it only works on the diagnostic build, and that build carries
+# ~30 extra calls per draw -- about 315 000 a second at the measured draw rate.
+# A ladder whose rungs come from different binaries measures the binaries.
+#
+# Read the rungs against a fixed Plant spot with MGS2_FREQ_STEPS="1416000", or
+# it measures the scene and the temperature instead. Acceptance threshold from
+# the external review: if rung A moves fps by less than ~5%, stop looking for
+# 25% inside the renderer and go after game logic under Box86 instead.
+#
+# Telemetry in the same pair, one aggregate line per second, never per call:
+#   MGS2_D3D8_STATS=1          adds sysmem VB/IB draw counts and bytes to the
+#                              existing d3d8 counter line (err+d3d8). Zero here
+#                              closes the sysmem upload direction outright.
+#   MGS2_WINED3D_REFSTATS=1    draws, resource references, refs per draw, on its
+#                              own narrow channel: WINEDEBUG="-all,err+mgs2stat"
+#   MGS2_WINED3D_REFUNIQUE=1   also counts distinct resources. Costs a hash probe
+#                              per reference, so it is off by default and is not
+#                              a valid timing baseline -- run it as its own pass.
+#
+# Note for rung A: the d3d8 counter line is emitted from the draw path, so with
+# MGS2_D3D8_NOOP_DRAW=1 there are no draws and no counter line. That is expected,
+# not a broken build. Read rung A from the presenter's fps and frame histogram
+# (MGS2_GL_STATS), which is the number the rung is about anyway.
+# Unmeasured as of brief #30: the device was unreachable when these were built.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Thermal / clock policy
@@ -453,8 +518,31 @@ export MGS2_DMIME_SHAREDGROUPS="${MGS2_DMIME_SHAREDGROUPS:-1}"
 export MGS2_DMIME_SHAREDGROUP_COUNT="${MGS2_DMIME_SHAREDGROUP_COUNT:-4}"
 export MGS2_DMSYNTH_JITTER_MS="${MGS2_DMSYNTH_JITTER_MS:-30}"
 
+# 1992000 is real and must stay, even though it looks like a typo:
+#   scaling_available_frequencies: 408000 600000 816000 1104000 1416000 1608000 1800000
+# It is absent from that list because cpufreq-dt hides turbo/boost OPPs there.
+# Verified on the device 7 Aug 2026, idle and cool, performance governor:
+#   echo 1992000 > scaling_max_freq  ->  reads back 1992000
+#   scaling_cur_freq = 1992000  AND  cpuinfo_cur_freq = 1992000
+# cpuinfo_cur_freq is the hardware counter, not the driver's opinion, so the core
+# genuinely runs at 1992 MHz. This also makes the historical "+29% from
+# 1608000 -> 1992000" arithmetically sensible: +24% clock for +29% fps.
+#
+# Do not "fix" this by trimming the list to scaling_available_frequencies. That
+# was tried on 7 Aug 2026 and it silently caps the console at 1800000.
 FREQ_STEPS="${MGS2_FREQ_STEPS:-1992000 1800000 1608000 1416000}"
 TEMP_DOWN="${MGS2_TEMP_DOWN:-84000}"   # step the cap down above this
+# TEMP_UP is deliberately left below the temperature this workload actually runs
+# at, which makes the cap a one-way ratchet: measured 7 Aug 2026, the guard went
+# 1800000 -> 1416000 in four seconds and then never stepped up again for twenty
+# minutes, because under load the SoC sits at 79-82 C and never reaches 76 C.
+#
+# That is a real defect, and raising TEMP_UP was tried. It does unstick the cap
+# (1416000 <-> 1608000 <-> 1800000), and it buys nothing: fps in heavy Plant
+# stayed 6.0-9.9, temperature went 80-82 -> 85-87.5 C, and TEMP_KILL fired at
+# 88125 mC about fifteen minutes in. The ceiling here is heat dissipation, not
+# this threshold. Left low on purpose; raise it only with a fan or a heatsink.
+#   MGS2_TEMP_UP=82000   reproduces the experiment above
 TEMP_UP="${MGS2_TEMP_UP:-76000}"       # allow stepping back up below this
 TEMP_KILL="${MGS2_TEMP_KILL:-88000}"   # hard stop, below the ~92 C reset point
 POLL="${MGS2_TEMP_POLL:-0.5}"
@@ -495,6 +583,12 @@ mount_bind() {
     local src="$1" dst="$2"
     [ -r "$src" ] || return 1
     while grep -q " $dst " /proc/mounts; do
+        # ROCKNIX may expose the same file on a regular ext4 mount before
+        # PortMaster starts.  Treat an already-identical file as satisfied;
+        # trying to unmount the system mount makes every later launch exit.
+        if [ -f "$src" ] && [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+            return 0
+        fi
         umount "$dst" 2>/dev/null || return 1
     done
     mount --bind "$src" "$dst"
