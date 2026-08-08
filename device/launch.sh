@@ -215,7 +215,29 @@ export BOX64_LOG=0 BOX64_NOBANNER=1
 export BOX86_LD_LIBRARY_PATH="/usr/share/box86/lib:$GAMEDIR/x86libs"
 export BOX86_EMULATED_LIBS="libwayland-client.so.0:libffi.so.8:libwayland-egl.so.1:libxkbcommon.so.0:libxkbregistry.so.0:libxml2.so.2:libicuuc.so.72:libicudata.so.72:liblzma.so.5:libstdc++.so.6"
 export BOX86_LOG=0 BOX86_NOBANNER=1
-export BOX86_DYNAREC_SAFEFLAGS=0 BOX86_DYNAREC_BIGBLOCK=2 BOX86_DYNAREC_FORWARD=512 BOX86_DYNAREC_CALLRET=1
+# The default is the known-good Box86 dynarec configuration. MGS2_BOX86_PROFILE
+# only selects an explicit, per-launch A/B arm; it never changes production when
+# unset. These knobs are consumed while Box86 starts, so they cannot be switched
+# inside an already-running game.
+case "${MGS2_BOX86_PROFILE:-production}" in
+    production)
+        : "${BOX86_DYNAREC_SAFEFLAGS:=0}"
+        : "${BOX86_DYNAREC_BIGBLOCK:=2}"
+        : "${BOX86_DYNAREC_FORWARD:=512}"
+        : "${BOX86_DYNAREC_CALLRET:=1}"
+        ;;
+    aggressive)
+        : "${BOX86_DYNAREC_SAFEFLAGS:=0}"
+        : "${BOX86_DYNAREC_BIGBLOCK:=3}"
+        : "${BOX86_DYNAREC_FORWARD:=1024}"
+        : "${BOX86_DYNAREC_CALLRET:=1}"
+        ;;
+    *)
+        echo "unknown MGS2_BOX86_PROFILE=${MGS2_BOX86_PROFILE}; use production or aggressive" >&2
+        exit 2
+        ;;
+esac
+export BOX86_DYNAREC_SAFEFLAGS BOX86_DYNAREC_BIGBLOCK BOX86_DYNAREC_FORWARD BOX86_DYNAREC_CALLRET
 
 # ---------------------------------------------------------------------------
 # Presentation tuning, read by winewayland_pbo1.so.
@@ -416,8 +438,12 @@ DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_se1.dll}"
 D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_mgs2fast1.dll}"
 [ -n "$D3D8_DLL" ] && [ ! -r "$GAMEDIR/$D3D8_DLL" ] && D3D8_DLL=""
 
+# Keep the measured production renderer as the default. The immutable-EBO cache
+# remains an explicit experiment until its cache overflow and FPS are solved:
+#   MGS2_WINED3D_DLL=wined3d_batch3_staticcache.dll MGS2_BATCH=1 ./launch.sh
 WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_release3.dll}"
 [ -r "$GAMEDIR/$WINED3D_DLL" ] || WINED3D_DLL="wined3d_dbg42_gles_present.dll"
+export MGS2_BATCH="${MGS2_BATCH:-0}"
 
 # ---------------------------------------------------------------------------
 # Renderer no-op ladder, brief #30. Diagnostic only, nothing here is a shipping
@@ -557,6 +583,12 @@ mount_bind() {
     local src="$1" dst="$2"
     [ -r "$src" ] || return 1
     while grep -q " $dst " /proc/mounts; do
+        # ROCKNIX may expose the same file on a regular ext4 mount before
+        # PortMaster starts.  Treat an already-identical file as satisfied;
+        # trying to unmount the system mount makes every later launch exit.
+        if [ -f "$src" ] && [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+            return 0
+        fi
         umount "$dst" 2>/dev/null || return 1
     done
     mount --bind "$src" "$dst"

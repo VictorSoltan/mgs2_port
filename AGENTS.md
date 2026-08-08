@@ -12,8 +12,11 @@ harness, and 30 briefs recording **which hypotheses turned out wrong**.
 
 ```text
 README.md                  what works, why, and the dead-end list
-docs/briefs/MGS2_PERF_BRIEF_37.md   START HERE: the whole renderer cost is the glDraw
-                                    calls themselves. What to batch, and what not to
+docs/briefs/MGS2_PERF_BRIEF_38.md   START HERE: real batchability is 8.49x, the merge
+                                    mechanism works on this Mali, and the batcher is
+                                    written and built but NOT yet measured
+docs/briefs/MGS2_PERF_BRIEF_37.md   how that was scoped: the whole renderer cost is the
+                                    glDraw calls themselves
 docs/briefs/MGS2_PERF_BRIEF_36.md   the ladder that decomposed the frame
 docs/briefs/MGS2_PERF_BRIEF_35.md   every open problem on both stacks, ranked
 docs/briefs/MGS2_PERF_BRIEF_34.md   what blocked the game on Hangover; superseded by
@@ -65,6 +68,7 @@ retracted **in writing** by the later briefs.
 ```text
 the frame is CPU-bound: ~1000 draw calls and ~103 ms of CPU against 1.5 ms of GPU
 everything removable from the GPU and presentation path has been removed already
+the draws come in runs of 8.5 that can be merged; the batcher for that is unmeasured
 the largest untapped lever is thermal: the guard drops the clock 1992 -> 1104 MHz
 freezes are a wait inside Wine, not the SD card, not shaders, not throttling
 ```

@@ -66,4 +66,13 @@ export MGS2_DMSYNTH_JITTER_MS=30
 export MGS2_GL_PBO=0
 export MGS2_GL_SHM_BUFFERS=2
 
+# Production renderer path: eviction-backed batching plus the conservative D3D8
+# producer state barrier. Diagnostic profiles stay off in the shipping launcher.
+export MGS2_WINED3D_DLL="wined3d_batch5_producer.dll"
+export MGS2_BATCH=1
+# Keep launch.sh's measured thermal ladder (1992 -> 1800 -> 1608 -> 1416).
+export WINEDEBUG="${WINEDEBUG:--all}"
+export MGS2_D3D8_DLL="d3d8_producer_batch3.dll"
+export MGS2_D3D8_PRODUCER=1
+
 exec "$GAMEDIR/launch.sh" "$GAMEDIR"
