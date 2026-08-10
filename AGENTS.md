@@ -3,15 +3,35 @@
 This repo is a working port of Metal Gear Solid 2: Substance (2003, Direct3D 8)
 to an Anbernic RG353VS handheld: RK3566, four Cortex-A55, Mali-G52, 1 GB RAM,
 ROCKNIX, sway on Wayland, 32-bit Wine under Box86. Picture, sound and saves work.
-The open work is frame rate.
+The open work is frame rate plus two intermittent runtime defects: gameplay SFX
+can disappear across encounter/map transitions, and the game can enter a
+no-render/input stall in its empty-message loop.
 
 The point of the repo is not the game. It is the Wine patches, the measurement
-harness, and 30 briefs recording **which hypotheses turned out wrong**.
+harness, and the briefs recording **which hypotheses turned out wrong**.
 
 ## Where to look, in order
 
 ```text
 README.md                  what works, why, and the dead-end list
+docs/briefs/MGS2_DSOUND_SFX_STATE_CAPTURE_2026-08-10.md
+                           current diagnostic for a missing player attack: exact
+                           persistent DirectSound-pool controls, bounded ring,
+                           valid interpretations and corrected live reader
+docs/briefs/MGS2_DMIME_STATE_CAPTURE_2026-08-10.md
+                           current one-reproduction diagnostic: capture point,
+                           exact interpretations, build verification and rollback
+docs/briefs/MGS2_DMIME_TRANSITION1_2026-08-10.md
+                           tested SFX-fix candidate: exact code scope, build
+                           checks, rollback and the negative reproduction
+docs/briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md
+                           START HERE for the still-open intermittent SFX loss:
+                           exact artefacts, retracted patch-14 CC hypothesis,
+                           independent review, and the next bounded capture
+docs/briefs/MGS2_RUNTIME_BUG_CAPTURE_2026-08-09.md
+                           full chronological record of SFX work and the captured
+                           PeekMessage no-render/input stall
+docs/briefs/MGS2_PERF_BRIEF_40.md   latest performance state and next measured work
 docs/briefs/MGS2_PERF_BRIEF_38.md   START HERE: real batchability is 8.49x, the merge
                                     mechanism works on this Mali, and the batcher is
                                     written and built but NOT yet measured
@@ -34,11 +54,92 @@ docs/DEVICE.md             how to run, measure and not break the console
 wine-patches/*.patch       the changes, one file per Wine module
 device/launch.sh           every knob, each documented with the measurement
                            that set its default
+                            The RG353VS has a second, external menu wrapper at
+                            /storage/roms/ports/MGS2-Substance.sh. When deploying
+                            device/MGS2-Substance.sh, update both it and the copy
+                            inside the game directory or the external wrapper can
+                            silently override DLL selections. Keep its defaults
+                            in the `${VAR:-default}` form so an explicit
+                            MGS2_DMIME_DLL or MGS2_DSOUND_DLL diagnostic launch
+                            reaches `launch.sh`.
+binaries/ + SHA256SUMS      complete custom production runtime selected by the
+                            launchers. Verify all entries before deployment;
+                            the proprietary game EXE and temporary recorders
+                            are deliberately not versioned here.
 ```
 
-Do not read all 30 briefs. Numbers 24, 25, 28 and 29 carry the current facts;
-everything earlier is superseded and several of those conclusions were later
-retracted **in writing** by the later briefs.
+## Shared workspace resources
+
+The port repository is the record, deployment wrapper, and patch series.  The
+source and configured i386 build deliberately live one level above it:
+
+```text
+../recovered-session/wine-11.0/
+    Recovered Wine 11.0 source tree containing the current MGS2 DLL variants.
+    Edit here when changing implementation, then export the reviewed diff into
+    wine-patches/ in this repository.
+
+../recovered-session/wine-11.0/dlls/dmusic/
+../recovered-session/wine-11.0/dlls/dmime/
+../recovered-session/wine-11.0/dlls/dmsynth/
+    DirectMusic / AudioPath / synth lifetime and SFX pipeline.  Start here for
+    missing gameplay audio; do not start in DirectSound unless evidence points
+    there.
+
+../recovered-session/wine-11.0/dlls/dmime/performance.c
+../recovered-session/wine-11.0/dlls/dmime/segmentstate.c
+../recovered-session/wine-11.0/dlls/dmime/audiopath.c
+    The transition fix lives here. Preserve AudioPath ownership and PChannel
+    remapping, and never turn the curve path into per-event stderr logging.
+    Patch 16's memory-only ring is the only permitted capture at this boundary;
+    use `harness/dmime_state.py` externally after the user reports a loss.
+
+../recovered-session/wine-11.0/dlls/dsound/buffer.c
+../recovered-session/wine-11.0/dlls/dsound/dsound_private.h
+    Player attacks and steps use MGS2's persistent 32,576-byte deferred
+    DirectSound SFX pool and may not produce a distinct DirectMusic event.
+    Patch 17's `MGS2_SFX_STATE=1` ring records only this pool's lifecycle and
+    controls. Capture it once with `harness/dsound_sfx_state.py` immediately
+    after silence; do not add stderr logging or mixer polling.
+
+../recovered-session/wine-11.0/dlls/user32/message.c
+../recovered-session/wine-11.0/dlls/win32u/message.c
+../recovered-session/wine-11.0/dlls/ntdll/thread.c
+    Input/no-render stall path.  The captured call chain is documented in the
+    runtime bug capture; inspect the caller-specific PeekMessage wait before
+    changing controller or gptokeyb code.
+
+../recovered-session/wine-11.0/dlls/wined3d/context_gl.c
+../recovered-session/wine-11.0/dlls/d3d8/device.c
+../recovered-session/wine-11.0/dlls/d3d8/buffer.c
+    Current MGS2 batch cache and D3D8 vertex-buffer dirty-range implementation.
+    These contain the production MGS2BATCH/MGS2CACHE code. Patches 1-11 alone
+    do not fully reproduce every current batch variant; apply patch 12 as well.
+
+../recovered-session/build-wine-i386/
+    Configured 32-bit Wine build tree.  Use it to rebuild the DLLs after a
+    source edit; verify its generated files still correspond to wine-11.0
+    before relying on it.
+
+../recovered-session/mingw/bin/
+    Cross-compilation toolchain retained with the recovered build.
+
+../recovered-session/scripts/
+    Earlier device and audio probes.  Useful as reference only: several sample
+    hot paths, so apply rule 2 before running or adapting them.
+
+../recovered-session/device-artifacts/
+    Historical DLLs and launchers, not automatically the deployed production
+    set.  Treat every file as an artifact and verify byte-wise before use.
+```
+
+`../crossover-android-sources-17.0.0.android21/source/wine/` is a separate,
+older vendor source tree.  Do not mix it with the Wine 11.0 source or its build
+artifacts.
+
+Do not read every brief. Use the runtime capture for sound/input defects and the
+latest numbered performance brief for renderer work; older conclusions were
+often superseded or retracted **in writing** by later measurements.
 
 ## Rules that are not negotiable
 

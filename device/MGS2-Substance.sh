@@ -53,26 +53,70 @@
 
 GAMEDIR="$(dirname "$0")/MGS2-Substance"
 
-export MGS2_DSOUND_DLL="dsound_se1.dll"
-export MGS2_DMIME_DLL="dmime_se1.dll"
-export MGS2_DMSYNTH_DLL="dmsynth_se1.dll"
+# Keep the tested sink-audible DLL as default, but respect an explicit
+# diagnostic/rollback override.  The top-level menu wrapper is the first shell
+# in the launch chain; an unconditional assignment here silently defeated
+# MGS2_DSOUND_DLL before launch.sh could bind-mount it.
+export MGS2_DSOUND_DLL="${MGS2_DSOUND_DLL:-dsound_se1.dll}"
+# Transition-correct DirectMusic: PlaySegmentEx now honours its AudioPath and
+# controller curves reach their end/reset values.  Keep the older se1 binary
+# available for immediate A/B rollback via MGS2_DMIME_DLL.
+export MGS2_DMIME_DLL="${MGS2_DMIME_DLL:-dmime_transition1.dll}"
+export MGS2_DMUSIC_DLL="${MGS2_DMUSIC_DLL:-dmusic_shared_lifetime1.dll}"
+export MGS2_DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_se4_unmute1.dll}"
 
-export MGS2_DMIME_SHAREDGROUPS=1
+export MGS2_DMIME_SHAREDGROUPS="${MGS2_DMIME_SHAREDGROUPS:-1}"
 export MGS2_DMIME_SHAREDGROUP_COUNT=4
 export MGS2_DMSYNTH_JITTER_MS=30
+# A lost note is worse than the small idle cost of the one shared synth.  The
+# rebuilt dmsynth also restores FluidSynth's status refresh before it releases
+# waves, so either setting can be A/B tested without another build.
+export MGS2_DMSYNTH_POLYPHONY="${MGS2_DMSYNTH_POLYPHONY:-48}"
+export MGS2_DMSYNTH_IDLE_SKIP="${MGS2_DMSYNTH_IDLE_SKIP:-0}"
+# Fixed-size memory recorder.  Keep it off during normal play; an explicit 1
+# enables the 256-record ring for a regression without a rebuild.  Note that
+# the 2026-08-10 se4 regression began with this off, so the failure itself was
+# not captured even though a post-Start recovery snapshot was taken.
+export MGS2_DMSYNTH_STATE="${MGS2_DMSYNTH_STATE:-0}"
+# Patch 14 is a disproved diagnostic guard.  Leave its code path disabled; the
+# transition DLL addresses curve and AudioPath semantics instead.  Setting 1
+# remains available only for an explicit regression comparison.
+export MGS2_DMSYNTH_UNMUTE_NOTES="${MGS2_DMSYNTH_UNMUTE_NOTES:-0}"
+
+# The stock-user32 control reproduced the apparent freeze: main spent 94% of a
+# core in win32u NtUserPeekMessage -> NtYieldExecution while wined3d_cs slept,
+# even though the controller, gptokeyb, Fake Keyboard and sway focus were live.
+# Restore the measured bounded wait at the one known game caller.  This removes
+# that yield spin; it is not yet claimed to cure every input-loss incident.
+export MGS2_USER32_DLL="${MGS2_USER32_DLL:-user32_peek1.dll}"
+export MGS2_PEEK_WAIT="${MGS2_PEEK_WAIT:-1}"
+export MGS2_PEEK_HOT="${MGS2_PEEK_HOT:-401176}"
+export MGS2_PEEK_WAIT_MS="${MGS2_PEEK_WAIT_MS:-4}"
 
 # Presentation: measured-best, and identical to launch.sh's own defaults. Pinned
 # explicitly so a future change to those defaults cannot silently alter this.
 export MGS2_GL_PBO=0
 export MGS2_GL_SHM_BUFFERS=2
 
-# Production renderer path: eviction-backed batching plus the conservative D3D8
-# producer state barrier. Diagnostic profiles stay off in the shipping launcher.
-export MGS2_WINED3D_DLL="wined3d_batch5_producer.dll"
-export MGS2_BATCH=1
+# Production renderer path: eviction-backed batching, proven direct hash lookup,
+# producer aggregation, and queue-owned uploads for MGS2's repeated GPU vertex
+# buffer NOOVERWRITE locks. Diagnostic profiles stay off in the shipping launcher.
+export MGS2_WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_batch16_setcache.dll}"
+export MGS2_BATCH="${MGS2_BATCH:-1}"
+export MGS2_BATCH_RESTART_HOIST="${MGS2_BATCH_RESTART_HOIST:-1}"
+export MGS2_BATCH_HASHCACHE="${MGS2_BATCH_HASHCACHE:-1}"
+export MGS2_BATCH_TRIANGLES="${MGS2_BATCH_TRIANGLES:-0}"
+export MGS2_BATCH_STATS="${MGS2_BATCH_STATS:-0}"
 # Keep launch.sh's measured thermal ladder (1992 -> 1800 -> 1608 -> 1416).
 export WINEDEBUG="${WINEDEBUG:--all}"
-export MGS2_D3D8_DLL="d3d8_producer_batch3.dll"
-export MGS2_D3D8_PRODUCER=1
+export MGS2_D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_producer_batch14_dirtyranges.dll}"
+export MGS2_D3D8_PRODUCER="${MGS2_D3D8_PRODUCER:-1}"
+export MGS2_D3D8_VB_SNAPSHOT="${MGS2_D3D8_VB_SNAPSHOT:-1}"
+export MGS2_D3D8_VB_DIRTY_AGGREGATE="${MGS2_D3D8_VB_DIRTY_AGGREGATE:-1}"
+export MGS2_D3D8_VB_CENSUS="${MGS2_D3D8_VB_CENSUS:-0}"
+export MGS2_CSMT_PROFILE="${MGS2_CSMT_PROFILE:-0}"
+export MGS2_D3D8_PROFILE="${MGS2_D3D8_PROFILE:-0}"
+export MGS2_D3D8_STATS="${MGS2_D3D8_STATS:-0}"
+export MGS2_GL_STATS="${MGS2_GL_STATS:-0}"
 
 exec "$GAMEDIR/launch.sh" "$GAMEDIR"

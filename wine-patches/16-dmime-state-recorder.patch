@@ -1,0 +1,338 @@
+--- wine-11.0/dlls/dmime/audiopath.c
++++ wine-11.0/dlls/dmime/audiopath.c
+@@ -288,7 +288,12 @@
+     FIXME("(%p, %d): semi-stub\n", This, activate);
+ 
+     if (!!activate == This->fActive)
++    {
++        dmime_state_record(DMIME_STATE_PATH_ACTIVATE, 0, This->pchannel_base,
++                This->pchannel_base, 0, activate, This->fActive, This->pchannel_count,
++                !!This->pDSBuffer, S_FALSE);
+         return S_FALSE;
++    }
+ 
+     if (!activate && This->pDSBuffer) {
+         /* Path is being deactivated */
+@@ -296,6 +301,9 @@
+     }
+ 
+     This->fActive = !!activate;
++    dmime_state_record(DMIME_STATE_PATH_ACTIVATE, 0, This->pchannel_base,
++            This->pchannel_base, 0, activate, This->fActive, This->pchannel_count,
++            !!This->pDSBuffer, S_OK);
+ 
+     return S_OK;
+ }
+@@ -307,11 +315,25 @@
+ 
+   TRACE("(%p, %li, %ld)\n", This, lVolume, dwDuration);
+ 
+-  if (!This->pDSBuffer) return DMUS_E_AUDIOPATH_NOBUFFER;
+-  if (lVolume < DSBVOLUME_MIN || lVolume > DSBVOLUME_MAX) return E_INVALIDARG;
+-  if (dwDuration) return E_NOTIMPL;
++  if (!This->pDSBuffer) {
++    dmime_state_record(DMIME_STATE_PATH_VOLUME, 0, This->pchannel_base, This->pchannel_base,
++            0, 0, lVolume, dwDuration, 0, DMUS_E_AUDIOPATH_NOBUFFER);
++    return DMUS_E_AUDIOPATH_NOBUFFER;
++  }
++  if (lVolume < DSBVOLUME_MIN || lVolume > DSBVOLUME_MAX) {
++    dmime_state_record(DMIME_STATE_PATH_VOLUME, 0, This->pchannel_base, This->pchannel_base,
++            0, 0, lVolume, dwDuration, 0, E_INVALIDARG);
++    return E_INVALIDARG;
++  }
++  if (dwDuration) {
++    dmime_state_record(DMIME_STATE_PATH_VOLUME, 0, This->pchannel_base, This->pchannel_base,
++            0, 0, lVolume, dwDuration, 0, E_NOTIMPL);
++    return E_NOTIMPL;
++  }
+ 
+   hr = IDirectSoundBuffer_SetVolume(This->pDSBuffer, lVolume);
++  dmime_state_record(DMIME_STATE_PATH_VOLUME, 0, This->pchannel_base, This->pchannel_base,
++          0, 0, lVolume, dwDuration, 0, hr);
+   if (FAILED(hr)) WARN("SetVolume failed, hr %#lx\n", hr);
+   return hr;
+ }
+@@ -321,9 +343,15 @@
+   struct IDirectMusicAudioPathImpl *This = impl_from_IDirectMusicAudioPath(iface);
+ 
+   if (!pdwPChannelOut) return E_POINTER;
+-  if (dwPChannelIn >= This->pchannel_count) return E_INVALIDARG;
++  if (dwPChannelIn >= This->pchannel_count) {
++    dmime_state_record(DMIME_STATE_PATH_CONVERT, 0, dwPChannelIn, 0, 0, 0,
++            This->pchannel_base, This->pchannel_count, 0, E_INVALIDARG);
++    return E_INVALIDARG;
++  }
+ 
+   *pdwPChannelOut = This->pchannel_base + dwPChannelIn;
++  dmime_state_record(DMIME_STATE_PATH_CONVERT, 0, dwPChannelIn, *pdwPChannelOut, 0, 0,
++          This->pchannel_base, This->pchannel_count, 0, S_OK);
+   TRACE("(%p, %ld) -> %ld\n", This, dwPChannelIn, *pdwPChannelOut);
+   return S_OK;
+ }
+--- wine-11.0/dlls/dmime/dmime_private.h
++++ wine-11.0/dlls/dmime/dmime_private.h
+@@ -50,6 +50,49 @@
+ typedef struct IDirectMusicAudioPathImpl IDirectMusicAudioPathImpl;
+ struct midi_parser;
+ 
++/* Bounded MGS2 transition recorder. It is intentionally memory-only: the
++ * affected code runs on DirectMusic's message/audio paths, so stderr tracing
++ * changes the failure it is meant to diagnose. */
++#define DMIME_STATE_MAGIC 0x31544d44 /* DMT1 */
++#define DMIME_STATE_VERSION 1
++#define DMIME_STATE_EVENTS 256
++
++enum dmime_state_event
++{
++    DMIME_STATE_STAMP_IN = 1,
++    DMIME_STATE_STAMP_OUT,
++    DMIME_STATE_STAMP_FAIL,
++    DMIME_STATE_PMSG,
++    DMIME_STATE_MIDI_PORT,
++    DMIME_STATE_MIDI_DROP,
++    DMIME_STATE_CURVE_START,
++    DMIME_STATE_CURVE_END,
++    DMIME_STATE_CURVE_RESET,
++    DMIME_STATE_PATH_ACTIVATE,
++    DMIME_STATE_PATH_VOLUME,
++    DMIME_STATE_PATH_CONVERT,
++    DMIME_STATE_PLAYSEGMENT,
++};
++
++struct dmime_state_record
++{
++    volatile LONG sequence;
++    DWORD tick, event, pmsg_type, pchannel_before, pchannel_after, track_id, flags;
++    DWORD value1, value2, value3, value4;
++};
++
++struct dmime_state_data
++{
++    DWORD magic, version, header_words, record_words, event_count, signature;
++    volatile LONG enabled, write_sequence, stamp_count, pmsg_count, midi_count, path_count;
++    struct dmime_state_record records[DMIME_STATE_EVENTS];
++};
++
++extern struct dmime_state_data dmime_state_data;
++extern void dmime_state_record(DWORD event, DWORD pmsg_type, DWORD pchannel_before,
++        DWORD pchannel_after, DWORD track_id, DWORD flags, DWORD value1, DWORD value2,
++        DWORD value3, DWORD value4);
++
+ /*****************************************************************************
+  * ClassFactory
+  */
+--- wine-11.0/dlls/dmime/performance.c
++++ wine-11.0/dlls/dmime/performance.c
+@@ -30,6 +30,61 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dmime);
+ 
++struct dmime_state_data dmime_state_data =
++{
++    .magic = DMIME_STATE_MAGIC,
++    .version = DMIME_STATE_VERSION,
++    .header_words = 12,
++    .record_words = sizeof(struct dmime_state_record) / sizeof(DWORD),
++    .event_count = DMIME_STATE_EVENTS,
++    .signature = ~DMIME_STATE_MAGIC,
++};
++
++static BOOL dmime_state_enabled(void)
++{
++    static LONG enabled = -1;
++    char text[8];
++    DWORD len;
++
++    if (enabled != -1) return enabled;
++    len = GetEnvironmentVariableA("MGS2_DMIME_STATE", text, sizeof(text));
++    enabled = len && len < sizeof(text) && text[0] != '0';
++    InterlockedExchange(&dmime_state_data.enabled, enabled);
++    return enabled;
++}
++
++void dmime_state_record(DWORD event, DWORD pmsg_type, DWORD pchannel_before,
++        DWORD pchannel_after, DWORD track_id, DWORD flags, DWORD value1, DWORD value2,
++        DWORD value3, DWORD value4)
++{
++    struct dmime_state_record *record;
++    LONG sequence;
++
++    if (!dmime_state_enabled()) return;
++
++    sequence = InterlockedIncrement(&dmime_state_data.write_sequence);
++    record = &dmime_state_data.records[(sequence - 1) % DMIME_STATE_EVENTS];
++    InterlockedExchange(&record->sequence, 0);
++    record->tick = GetTickCount();
++    record->event = event;
++    record->pmsg_type = pmsg_type;
++    record->pchannel_before = pchannel_before;
++    record->pchannel_after = pchannel_after;
++    record->track_id = track_id;
++    record->flags = flags;
++    record->value1 = value1;
++    record->value2 = value2;
++    record->value3 = value3;
++    record->value4 = value4;
++    InterlockedExchange(&record->sequence, sequence);
++
++    if (event <= DMIME_STATE_STAMP_FAIL) InterlockedIncrement(&dmime_state_data.stamp_count);
++    else if (event == DMIME_STATE_PMSG) InterlockedIncrement(&dmime_state_data.pmsg_count);
++    else if (event == DMIME_STATE_MIDI_PORT || event == DMIME_STATE_MIDI_DROP)
++        InterlockedIncrement(&dmime_state_data.midi_count);
++    else if (event >= DMIME_STATE_PATH_ACTIVATE) InterlockedIncrement(&dmime_state_data.path_count);
++}
++
+ enum dmus_internal_message_type
+ {
+     DMUS_PMSGT_INTERNAL_FIRST = 0x10,
+@@ -2092,6 +2147,9 @@
+         return hr;
+     }
+ 
++    dmime_state_record(DMIME_STATE_PLAYSEGMENT, 0, 0, 0, 0, segment_flags,
++            music_time, !!audio_path, !!selected_path, !!from);
++
+     if (from && FAILED(hr = performance_stop_object(iface, from, music_time, segment_flags)))
+     {
+         if (selected_path) IDirectMusicAudioPath_Release(selected_path);
+@@ -2637,6 +2695,18 @@
+     switch (msg->dwType)
+     {
+     case DMUS_PMSGT_MIDI:
++    case DMUS_PMSGT_NOTE:
++    case DMUS_PMSGT_CURVE:
++    case DMUS_PMSGT_PATCH:
++        dmime_state_record(DMIME_STATE_PMSG, msg->dwType, msg->dwPChannel, msg->dwPChannel,
++                msg->dwVirtualTrackID, msg->dwFlags, msg->mtTime, msg->rtTime,
++                !!msg->pTool, message ? message->curve_phase : 0);
++        break;
++    }
++
++    switch (msg->dwType)
++    {
++    case DMUS_PMSGT_MIDI:
+     {
+         static const UINT event_size = sizeof(DMUS_EVENTHEADER) + sizeof(DWORD);
+         DMUS_BUFFERDESC desc = {.dwSize = sizeof(desc), .cbBuffer = 2 * event_size};
+@@ -2650,6 +2720,9 @@
+         if (FAILED(hr = IDirectMusicPerformance_PChannelInfo(performance, msg->dwPChannel,
+                 &port, &group, &channel)))
+         {
++            dmime_state_record(DMIME_STATE_MIDI_DROP, msg->dwType, msg->dwPChannel,
++                    msg->dwPChannel, msg->dwVirtualTrackID, msg->dwFlags, hr,
++                    midi->bStatus | ((DWORD)midi->bByte1 << 8) | ((DWORD)midi->bByte2 << 16), 0, 0);
+             WARN("Failed to get message port, hr %#lx\n", hr);
+             if (mgs_route_on()) mgs_route_port_note(NULL);
+             mgs_sechain_pmsg("G3-pchannelinfo-FAILED", msg, NULL, hr);
+@@ -2677,6 +2750,10 @@
+             IDirectMusicBuffer_Release(buffer);
+         }
+ 
++        dmime_state_record(DMIME_STATE_MIDI_PORT, msg->dwType, msg->dwPChannel,
++                msg->dwPChannel, msg->dwVirtualTrackID, msg->dwFlags, group, channel,
++                midi->bStatus | ((DWORD)midi->bByte1 << 8) | ((DWORD)midi->bByte2 << 16), hr);
++
+         IDirectMusicPort_Release(port);
+         break;
+     }
+@@ -2686,6 +2763,9 @@
+         DMUS_NOTE_PMSG *note = (DMUS_NOTE_PMSG *)msg;
+ 
+         msg->mtTime += note->nOffset;
++        dmime_state_record(DMIME_STATE_PMSG, msg->dwType, msg->dwPChannel, msg->dwPChannel,
++                msg->dwVirtualTrackID, msg->dwFlags, note->bMidiValue | ((DWORD)note->bVelocity << 8)
++                | ((DWORD)note->bFlags << 16), note->mtDuration, note->nOffset, msg->mtTime);
+ 
+         if (note->bFlags & DMUS_NOTEF_NOTEON)
+         {
+@@ -2724,6 +2804,11 @@
+             if (message->curve_phase == CURVE_PHASE_START)
+             {
+                 msg->mtTime += curve->nOffset;
++                dmime_state_record(DMIME_STATE_CURVE_START, msg->dwType, msg->dwPChannel,
++                        msg->dwPChannel, msg->dwVirtualTrackID, msg->dwFlags,
++                        (WORD)curve->nStartValue | ((DWORD)(WORD)curve->nEndValue << 16),
++                        (WORD)curve->nResetValue | ((DWORD)curve->bCCData << 16)
++                        | ((DWORD)curve->bFlags << 24), curve->mtDuration, curve->mtResetDuration);
+ 
+                 if (curve->bCurveShape != DMUS_CURVES_INSTANT
+                         && !(curve->bFlags & DMUS_CURVE_START_FROM_CURRENT)
+@@ -2750,6 +2835,11 @@
+ 
+             if (message->curve_phase == CURVE_PHASE_END)
+             {
++                dmime_state_record(DMIME_STATE_CURVE_END, msg->dwType, msg->dwPChannel,
++                        msg->dwPChannel, msg->dwVirtualTrackID, msg->dwFlags,
++                        (WORD)curve->nStartValue | ((DWORD)(WORD)curve->nEndValue << 16),
++                        (WORD)curve->nResetValue | ((DWORD)curve->bCCData << 16)
++                        | ((DWORD)curve->bFlags << 24), curve->mtDuration, curve->mtResetDuration);
+                 if (FAILED(hr = performance_send_midi_pmsg(This, msg,
+                         DMUS_PMSGF_MUSICTIME | DMUS_PMSGF_TOOL_IMMEDIATE,
+                         MIDI_CONTROL_CHANGE, curve->bCCData,
+@@ -2771,12 +2861,19 @@
+                 }
+             }
+ 
+-            if (message->curve_phase == CURVE_PHASE_RESET
+-                    && FAILED(hr = performance_send_midi_pmsg(This, msg,
+-                            DMUS_PMSGF_MUSICTIME | DMUS_PMSGF_TOOL_IMMEDIATE,
+-                            MIDI_CONTROL_CHANGE, curve->bCCData,
+-                            midi_controller_value(curve->nResetValue))))
+-                WARN("Failed to reset controller curve, hr %#lx\n", hr);
++            if (message->curve_phase == CURVE_PHASE_RESET)
++            {
++                dmime_state_record(DMIME_STATE_CURVE_RESET, msg->dwType, msg->dwPChannel,
++                        msg->dwPChannel, msg->dwVirtualTrackID, msg->dwFlags,
++                        (WORD)curve->nStartValue | ((DWORD)(WORD)curve->nEndValue << 16),
++                        (WORD)curve->nResetValue | ((DWORD)curve->bCCData << 16)
++                        | ((DWORD)curve->bFlags << 24), curve->mtDuration, curve->mtResetDuration);
++                if (FAILED(hr = performance_send_midi_pmsg(This, msg,
++                        DMUS_PMSGF_MUSICTIME | DMUS_PMSGF_TOOL_IMMEDIATE,
++                        MIDI_CONTROL_CHANGE, curve->bCCData,
++                        midi_controller_value(curve->nResetValue))))
++                    WARN("Failed to reset controller curve, hr %#lx\n", hr);
++            }
+             break;
+         case DMUS_CURVET_RPNCURVE:
+         case DMUS_CURVET_NRPNCURVE:
+--- wine-11.0/dlls/dmime/segmentstate.c
++++ wine-11.0/dlls/dmime/segmentstate.c
+@@ -234,12 +234,16 @@
+ {
+     struct segment_state *This = impl_from_IDirectMusicGraph(iface);
+     HRESULT hr;
+-    DWORD pchannel;
++    DWORD pchannel, original_pchannel;
+ 
+     TRACE("(%p, %p)\n", This, msg);
+ 
+     if (!msg) return E_POINTER;
+ 
++    original_pchannel = msg->dwPChannel;
++    dmime_state_record(DMIME_STATE_STAMP_IN, msg->dwType, original_pchannel, original_pchannel,
++            msg->dwVirtualTrackID, msg->dwFlags, !!This->audio_path, 0, 0, 0);
++
+     /* Tracks use PChannels relative to the AudioPath supplied to PlaySegmentEx().
+      * Translate them before the performance graph resolves the physical port. */
+     if (This->audio_path)
+@@ -252,13 +256,20 @@
+         case DMUS_PMSGT_PATCH:
+             if (FAILED(hr = IDirectMusicAudioPath_ConvertPChannel(This->audio_path,
+                     msg->dwPChannel, &pchannel)))
++            {
++                dmime_state_record(DMIME_STATE_STAMP_FAIL, msg->dwType, original_pchannel,
++                        msg->dwPChannel, msg->dwVirtualTrackID, msg->dwFlags, hr, 0, 0, 0);
+                 return hr;
++            }
+             msg->dwPChannel = pchannel;
+             break;
+         }
+     }
+ 
+     hr = IDirectMusicGraph_StampPMsg(This->parent_graph, msg);
++    dmime_state_record(SUCCEEDED(hr) ? DMIME_STATE_STAMP_OUT : DMIME_STATE_STAMP_FAIL,
++            msg->dwType, original_pchannel, msg->dwPChannel, msg->dwVirtualTrackID,
++            msg->dwFlags, hr, !!msg->pTool, !!msg->pGraph, 0);
+     if (SUCCEEDED(hr))
+     {
+         switch (msg->dwType)

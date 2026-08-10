@@ -1,0 +1,24 @@
+{
+  "pid": 2690,
+  "address": "0x1fc8bea8",
+  "magic": "DST1",
+  "version": 1,
+  "enabled": false,
+  "counters": {
+    "write_sequence": 0,
+    "open_reset_count": 0,
+    "midi_reset_count": 0,
+    "noteon_count": 0,
+    "noteon_failed": 0,
+    "noteon_no_voice": 0,
+    "program_count": 0,
+    "bank_count": 0
+  },
+  "voices": {
+    "last_render_active": 0,
+    "maximum_observed": 0,
+    "last_render_synth": "0x0"
+  },
+  "last_tick": 0,
+  "records": []
+}

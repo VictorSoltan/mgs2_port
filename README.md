@@ -13,7 +13,10 @@ cheap instead of another month of guessing.
 
 ```text
 picture     640x480, 22-38 fps standing in gameplay, 13-18 in heavy movement
-sound       music, menu clicks and gameplay SFX (SE) all present
+sound       music/menu clicks work; gameplay SFX are audible but can vanish
+            after encounter/map state transitions and return after another map
+input       works normally, but a rare no-render/input stall remains under
+            investigation; stock user32 reproduced it in the PeekMessage loop
 saves       work
 ```
 
@@ -84,6 +87,11 @@ harness/sink_audible_test.sh  tone injection plus speaker-monitor capture with a
                           Goertzel bin, i.e. "is this audible" without ears
 harness/jitter_ladder.sh  ladder over MGS2_DMSYNTH_JITTER_MS with detection
 harness/send_key.py       synthetic input, for harnesses only
+harness/dmsynth_state.py  one-shot reader/diff for the bounded synth-state ring
+harness/dsound_live_state.py  read-only DirectSound/FluidSynth memory snapshot
+harness/dsound_sfx_state.py  one-shot reader for the bounded gameplay-SFX
+                              DirectSound-control ring
+harness/dmime_state.py    one-shot reader for the bounded DirectMusic transition ring
 wine-patches/*.patch      the Wine 11.0 changes, one file per module
 docs/briefs/              30 research briefs, in order
 docs/MGS2_PROJECT_STATE.md, docs/MGS2_RG353VS_HANDOFF.md
@@ -93,14 +101,22 @@ mgs2_collect_context.sh   read-only system dump from the console
 ## Wine patches
 
 Against pristine Wine 11.0. Eleven modules: d3d8, dmime, dmsynth, dmusic,
-dsound, ntdll, opengl32, user32, win32u, wined3d, winewayland.drv.
+dsound, ntdll, opengl32, user32, win32u, wined3d, winewayland.drv. Patch 12
+reconciles the later production batch branches with the recovered source tree;
+patch 13 adds the bounded, memory-only intermittent-audio recorder. Patch 14
+is a retained but disproved note-triggered mute-recovery experiment. Patch 15
+implements the DirectMusic transition semantics needed by MGS2: the selected
+AudioPath, controller-curve end/reset messages, flushing, and targeted stop/
+invalidation handling. Patch 16 is a diagnostic-only, bounded transition ring
+for deciding whether the next loss occurs before `dmime`, at PChannel routing,
+or after MIDI is handed to the port.
 
 ```sh
 tar xf wine-11.0.tar.xz && cd wine-11.0
 for p in ../wine-patches/*.patch; do patch -p1 -F0 < "$p"; done
 ```
 
-All eleven apply with zero fuzz and reproduce the working tree byte for byte;
+All seventeen apply with zero fuzz and reproduce the working tree byte for byte;
 `-F0` is deliberate, so a silent mismatch fails instead of being patched
 approximately. Building needs the cross compiler that ships in the repo but is
 not on PATH, and the release wined3d needs its define passed explicitly:
@@ -118,16 +134,32 @@ go into a variant.
 Highlights, all env-gated so they can be A/B tested on the device without a
 rebuild:
 
-- **dmsynth** — upstream `685c5b6` write-latency backport with the reserve made
-  tunable (`MGS2_DMSYNTH_JITTER_MS`, underruns 222 → 15); cost policy for
-  FluidSynth on this CPU (reverb/chorus off, linear interpolation, polyphony 24);
-  skip synthesis for blocks with no sounding voice; diagnostic tone and per-sink
-  meters.
+- **dmsynth / dmusic** — upstream `685c5b6` write-latency backport with the
+  reserve made tunable (`MGS2_DMSYNTH_JITTER_MS`, underruns 222 → 15); cost
+  policy for FluidSynth on this CPU (reverb/chorus off, linear interpolation,
+  polyphony 48); refresh voice status after rendering; and retain each DLS
+  download for its actual port until the last shared AudioPath releases it.
+  `MGS2_DMSYNTH_STATE=1` adds a fixed 256-record memory ring for reset,
+  program/bank, note-on result and active-voice state; it performs no logging.
+  `MGS2_DMSYNTH_UNMUTE_NOTES=1` is the patch-14 experimental guard that
+  restores exact-zero CC7/CC11 when a positive-velocity note arrives.  A
+  production regression on 10 August proved that it does **not** prevent the
+  intermittent map/encounter SFX loss; keep it only as a documented negative
+  A/B until the transition/curve capture identifies the real state change.
 - **dmime** — `IDirectMusicAudioPath::QueryInterface` answering
   `IID_IDirectMusicGraph`, which MGS2 treats as fatal when missing; one shared
-  port for all audio paths (`MGS2_DMIME_SHAREDGROUPS`); the SE-chain recorder.
+  port for all audio paths (`MGS2_DMIME_SHAREDGROUPS`); and the staged
+  `dmime_transition1.dll`, which honours selected AudioPaths and curve
+  endpoints/resets instead of leaving a transition at its initial CC value.
+  `MGS2_DMIME_STATE=1` selects `dmime_state1.dll`'s fixed 256-record
+  memory-only capture for one reproduction; it is not a production fix. Patch
+  17 is a separate 4,096-record ring at the persistent DirectSound gameplay
+  SFX pool for player attacks and steps, which are not reliably identified by
+  a DirectMusic event.
 - **dsound** — the build whose sink buffers are actually audible, plus a mix
-  census and amplitude probes.
+  census and amplitude probes. `dsound_state1.dll` adds `MGS2_SFX_STATE=1`, a
+  memory-only history of Lock/Unlock, position, volume, pan, frequency, Play
+  and Stop calls on the 32,576-byte gameplay-SFX pool. It is diagnostic only.
 - **user32 / ntdll** — the `PeekMessage` busy-loop fix (+11% fps, frame-time
   jitter roughly halved) and a cheaper `NtYieldExecution` (+3.4%).
 - **winewayland.drv** — the presenter for this ABI situation: rendering goes to
@@ -211,14 +243,30 @@ The exact set the game was verified playable on, so a device can be restored
 without a toolchain. Checksums in `binaries/SHA256SUMS`.
 
 ```text
-dsound_se1.dll         makes dmsynth sink output audible at all
-dmime_se1.dll          delivers SE note-ons; shared-port support
-dmsynth_se1.dll        jitter backport, cost policy, idle-block skip
-winewayland_pbo1.so    the presenter these numbers were measured with
+box86-clean1                               exact Box86 runtime the port bind-mounts
+d3d8_producer_batch14_dirtyranges.dll      bounded dirty-range aggregation for game VBs
+dmime_se1.dll                              DirectMusic graph and shared-port support
+dmime_transition1.dll                      se1 plus AudioPath/curve transition recovery
+dmime_state1.dll                           transition1 plus bounded diagnostic recorder
+dmusic_shared_lifetime1.dll                per-port DLS lifetime and port self-heal
+dmsynth_se1.dll                            earlier jitter/cost-policy fallback
+dmsynth_se2_lifetime.dll                   current voice-refresh and 48-voice build
+dmsynth_se3_state1.dll                     se2 plus bounded reset/note/voice recorder
+dmsynth_se4_unmute1.dll                    se3 plus note-triggered stuck-mute recovery
+dsound_se1.dll                             makes dmsynth sink output audible at all
+dsound_state1.dll                           se1 plus bounded gameplay-SFX recorder
+ntdll_fastyield.so                         measured Wine yield fast path
+opengl32_glesver1.so                       GLES entry-point/version bridge
+user32_peek1.dll                           caller-specific PeekMessage wait
+winewayland_pbo1.so                        earlier measured presenter variant
+winewayland_stall1.so                      currently selected presentation driver
+win32u_glfuncs3.so                         GLES function bridge required by the driver
+wined3d_batch16_setcache.dll               bounded 4-way batch cache, no hot telemetry
 ```
 
-Not included, because they are large and unchanged from what the tree builds:
-`wined3d_dbg150_cxcaps.dll` (25 MB), `win32u_glfuncs3.so`,
-`opengl32_glesver1.so`, `user32_peek1.dll`, `ntdll_fastyield.so`. A full restore
-needs those too — rebuild them from `wine-patches/`, or copy them off a working
-device.
+The renderer DLL is intentionally included even though it is 25 MB, as are the
+current Box86 and Unix-side Wine modules. Together this is the complete custom
+runtime selected by the production launcher; a clone no longer depends on a
+sibling build-artifact directory to restore it. The temporary `sevoice7`
+diagnostic EXE is not versioned here: it is derived from the user's game binary
+and is not part of the production launch.

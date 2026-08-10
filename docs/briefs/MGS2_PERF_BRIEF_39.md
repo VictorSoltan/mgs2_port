@@ -380,14 +380,170 @@ FPS A/B: batch-фактор измерен, но итоговые 24–30 FPS е
 
 В production уже установлены Box86 `BIGBLOCK=2`, `FORWARD=512`, `CALLRET=1`;
 они не являются нетестированными значениями. В `launch.sh` добавлен opt-in
-`MGS2_BOX86_PROFILE=aggressive` (`BIGBLOCK=3`, `FORWARD=1024`, `CALLRET=1`),
-а без этой переменной остаётся исходная production-конфигурация. Рецепт и
-откат описаны в `harness/box86_ab.md`. Ни один Box86-профиль пока не измерен
-на этой консоли.
+`MGS2_BOX86_PROFILE=aggressive` (`BIGBLOCK=2`, `FORWARD=1024`, `CALLRET=1`),
+а без этой переменной остаётся исходная production-конфигурация. В A/B меняется
+только `FORWARD`; прежняя заготовка с одновременным `BIGBLOCK=3` исправлена как
+методически невалидная. Рецепт и откат описаны в `harness/box86_ab.md`. Ни один
+Box86-профиль пока не измерен на этой консоли.
+
+### Batch6: production hoist primitive-restart
+
+По следующему плану собран отдельный, выключенный по умолчанию эксперимент:
+`wined3d_batch6_hoist.dll`.
+
+```text
+sha256 a3f92b869bb7d11477c5fb7c787ae207b3269c0c69953e2bd364b660dd9a006d
+MGS2_BATCH_RESTART_HOIST=1
+```
+
+Обычный batch5 делает `glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX)` и
+`glDisable()` вокруг каждого synthetic indexed draw. Batch6 при opt-in флаге
+оставляет restart включённым в том же GL-контексте между batch flush'ами;
+перед любым обычным indexed draw и при выключении batch он его снимает. Default
+идентичен batch5.
+
+Batch6 установлен на устройство, смонтирован byte-wise и включён в production
+вместе с producer batch3. Пользователь подтвердил корректную картинку. В
+15-секундном production-окне на подтверждённом споте, без горячего профайлера:
+
+```text
+cap=1608 МГц  temp=81.7 °C
+draws=20872/с  batches=2540/с  factor=8.22x
+dirty=0  incompat=0  full=0
+cache hits=1731/с  misses=0.7/с  entries=1921  fallback=0  evict=0
+```
+
+Это проверка живости и безопасности, не FPS A/B: thermal guard уже опустил cap
+до 1608 МГц, а frame logger был выключен. Попытка одновременно включить
+`MGS2_TRACE=1`, `MGS2_BATCH_PROFILE=1` и frame logger признана невалидной:
+пользователь сразу заметил сильные дополнительные лаги. Trace и горячие QPC
+таймеры после этого сняты, игра возвращена в production (`WINEDEBUG=-all`,
+`MGS2_GL_STATS=0`), и плавность восстановилась.
+
+### Batch7, собран: общий EBO arena
+
+Следующий opt-in заменяет тысячи отдельных cached EBO двумя ограниченными arena
+по 4 MiB, максимум по одной на GL-контекст:
+
+```text
+MGS2_BATCH_EBO_ARENA=1
+wined3d_batch7_arena.dll
+sha256 591788769a30fa228d798688d746e7bc777b5fa6217f5fcf95178e518499ef45
+```
+
+Каждая signature хранит offset внутри общего EBO. На hit остаётся bind того же
+объекта (который state cache может подавить) и `glDrawElements(..., offset)`.
+Новая signature загружается `glBufferSubData`; при заполнении 4 MiB arena
+orphan'ится одним `glBufferData`, а signatures только этого контекста удаляются.
+Суммарная память arena ограничена 8 MiB. Флаг выключен по умолчанию, поэтому без
+него DLL повторяет batch6. Release-сборка прошла; новых warning'ов нет.
+
+Batch7 был установлен и запущен byte-wise с `MGS2_BATCH_EBO_ARENA=1`, без
+профайлера и frame logger. Пользователь сразу отметил заметное падение FPS до
+начала формального замера. Этого достаточно, чтобы закрыть arena как
+production-кандидат: процесс остановлен, production batch6 восстановлен и снова
+проверен byte-wise. Возможное объяснение — общий изменяемый storage с
+`glBufferSubData` создаёт на этом Mali больше synchronization/validation work,
+чем отдельные immutable EBO; это гипотеза, а не измеренный механизм.
+
+Cached `TRIANGLE_STRIP → GL_TRIANGLES` способен сохранить один draw на batch,
+однако увеличит число индексов примерно втрое; переходить к нему стоит после
+проверки дешёвого arena-варианта.
+
+### Batch8: triangle-list live
+
+После регрессии arena собран отдельный вариант, который оставляет проверенные
+immutable EBO, но разворачивает каждый strip в triangle list с тем же winding:
+
+```text
+0,1,2,3,4,5 → 0,1,2; 2,1,3; 2,3,4; 4,3,5
+MGS2_BATCH_TRIANGLES=1
+wined3d_batch8_triangles.dll
+sha256 90ca40ec97067ccf26ee854151fdf4064c214470207c529c41f1be8177357e64
+```
+
+Batch8 установлен и проверен byte-wise. На подтверждённом споте пользователь не
+увидел поломанной геометрии или явного ухудшения плавности (`«вроде всё ок»`).
+Лёгкое 10-секундное окно без профайлера:
+
+```text
+cap=1608 МГц  temp=82.2 °C
+draws=20633/с  batches=2399/с  factor=8.60x
+idx=2165KB/с  cache entries=1455 bytes=2041KB
+fallback=0  evict=0  dirty=0  incompat=0  full=0  GL errors=0
+```
+
+Механизм корректен, но FPS-выигрыш не доказан. Индексный поток вырос примерно в
+2.5 раза относительно restart-варианта. PortMaster production остаётся batch6;
+текущий ручной процесс работает на batch8.
+
+### Batch9, собран: direct hash cache
+
+В steady state batch8 держит около 1455 signatures, а старый lookup линейно
+обходит весь массив до совпадения. Batch9 добавляет direct table на 16384 слота:
+полное сравнение ключа остаётся обязательным, а collision безопасно падает в
+старый linear lookup. Геометрия и GL-путь batch8 не меняются. Telemetry разделяет
+`fast`, `slow` и число `probes`.
+
+```text
+wined3d_batch9_hashcache.dll
+sha256 d401c31ef56a881dd3e0e1d7ab0ea1eb87458659d361be63b4d5613f9067f2de
+```
+
+Release-сборка прошла, новых warning'ов нет. Самостоятельный batch9 установлен
+рядом с production, но решающий тест выполнен следующей decision-сборкой, где
+тот же direct table переключается live.
+
+### Batch10 decision: hash-cache доказан, draw-path больше не главный предел
+
+Чтобы не включать разрушительную диагностику и не делать четыре перезапуска,
+собрана одна DLL с тремя лёгкими механизмами:
+
+```text
+wined3d_batch10_decision.dll
+sha256 fdf7efe3f5673a3c48133e5372a5846f43474daf6d11919cb79c0ac4575d8623
+MGS2_BATCH_HASHCACHE=0/1       live: /tmp/mgs2-batch-hashcache
+MGS2_BATCH_SKIP_DRAW=0/1       live: /tmp/mgs2-batch-skip-draw
+frames/fps                     один integer increment на present
+```
+
+`skip-draw` сохраняет batch aggregation, cache lookup, build/upload и EBO bind,
+но не вызывает batched `glDrawArrays/glDrawElements`. Telemetry печатается один
+раз в секунду напрямую, без `WINEDEBUG`, `TRACE`, QPC и per-draw logging.
+
+Один процесс, подтверждённый спот, фиксированные 1416 МГц, порядок
+`hash0 → hash1 → hash0 → hash1 → no-draw`:
+
+```text
+arm       fps    frame ms   factor   draws/с   fast/с   probes/с   temp
+hash0    13.62     73.42     8.64     18440         0     897533   81.1
+hash1    14.54     68.78     8.54     19805      1604       9536   81.7
+hash0    13.79     72.52     8.04     19050         0    1165976   82.8
+hash1    15.67     63.82     9.69     20294      1471       1438   82.2
+no-draw  19.93     50.18     9.07     25854      1963       3121   81.7
+```
+
+Hash-cache повторяемо убрал примерно 0.9–1.17 млн linear probes/с. Две пары дали
+6.3% и 12.0% сокращения frame time; точную величину нельзя отделить от изменения
+формы workload (`factor 8.04–9.69`), но знак и механизм подтверждены. После
+прогона normal draw автоматически восстановлен (`skip=0`), steady telemetry снова
+показывала 15–17 fps, fast hits и почти нулевые probes.
+
+No-draw поднял потолок только до 19.93 fps: относительно предшествующего hash1
+фактические batched GL draw'ы стоят около 13.6 ms/кадр; относительно среднего
+hash1 — около 16 ms/кадр. Значит старые ~50 ms renderer estimate больше не
+описывают текущий stack. Даже при полном удалении этих draw'ов остаётся
+50.18 ms/кадр вне них. Основной постоянный предел теперь надо искать в
+game/D3D8 producer/CSMT/waits/present, а не в следующем EBO allocator.
 
 ```text
 многосекундные стопы остаются необъяснёнными
-последний A/B harness неправильно привязывает telemetry к arm и требует исправления
+A/B harness исправлен: каждый arm читает только свой диапазон строк
 батчер пока не даёт подтверждённого FPS-выигрыша
-producer batch3 live FPS/telemetry ещё не снята на подтверждённом споте
+native Box86 draw timer не сделан: исходника Box86 в workspace нет
+batch7 arena дал явный пользовательский FPS-регресс и оставлен выключенным
+batch8 triangle-list геометрически корректен, но FPS-выигрыш не доказан
+batch9 hash-cache доказан live и должен войти в следующий production renderer
+no-draw ограничил выигрыш GL draw-path примерно 14–16 ms/кадр
+следующий bottleneck: оставшиеся ~50 ms game/producer/CSMT/waits/present
 ```

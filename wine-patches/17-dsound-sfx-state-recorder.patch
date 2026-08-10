@@ -1,0 +1,188 @@
+Failed to create stream fd: Operation not permitted
+Failed to create stream fd: Operation not permitted
+Failed to create stream fd: Operation not permitted
+--- a/dlls/dsound/dsound_private.h
++++ b/dlls/dsound/dsound_private.h
+@@ -219,6 +219,48 @@
+     struct list entry;
+ };
+ 
++/* The MGS2 gameplay effects reuse a small pool of 32,576-byte, 44.1 kHz mono
++ * deferred secondary buffers.  A missing punch normally changes controls on a
++ * looping member of that pool rather than starting a new buffer.  Keep the
++ * capture wholly in process memory: formatted output from this path is itself
++ * enough to disturb its timing on the RG353VS. */
++#define MGS2_SFX_STATE_MAGIC 0x31534653 /* SFS1 */
++#define MGS2_SFX_STATE_VERSION 1
++#define MGS2_SFX_STATE_EVENTS 4096
++#define MGS2_SFX_STATE_HEADER_WORDS 12
++#define MGS2_SFX_STATE_RECORD_WORDS 18
++
++enum mgs2_sfx_state_event
++{
++    MGS2_SFX_STATE_LOCK = 1,
++    MGS2_SFX_STATE_UNLOCK,
++    MGS2_SFX_STATE_POSITION,
++    MGS2_SFX_STATE_VOLUME,
++    MGS2_SFX_STATE_PAN,
++    MGS2_SFX_STATE_FREQUENCY,
++    MGS2_SFX_STATE_PLAY,
++    MGS2_SFX_STATE_STOP,
++};
++
++struct mgs2_sfx_state_record
++{
++    volatile LONG sequence;
++    DWORD tick, event, object, memory, state, playflags, sec_mixpos, writelead;
++    DWORD committed_mixpos, committed_flags, volume, pan, frequency;
++    DWORD arg0, arg1, arg2, result;
++};
++
++struct mgs2_sfx_state_data
++{
++    DWORD magic, version, header_words, record_words, event_count, signature;
++    volatile LONG enabled, write_sequence, lock_count, control_count, last_tick, flags;
++    struct mgs2_sfx_state_record records[MGS2_SFX_STATE_EVENTS];
++};
++
++extern __declspec(dllexport) volatile struct mgs2_sfx_state_data mgs2_sfx_state_data;
++void mgs2_sfx_state_record(IDirectSoundBufferImpl *buffer, DWORD event,
++        DWORD arg0, DWORD arg1, DWORD arg2, HRESULT result);
++
+ float get_mono(const IDirectSoundBufferImpl *dsb, BYTE *base, DWORD channel);
+ void put_mono2stereo(const IDirectSoundBufferImpl *dsb, DWORD pos, DWORD channel, float value);
+ void put_mono2quad(const IDirectSoundBufferImpl *dsb, DWORD pos, DWORD channel, float value);
+--- a/dlls/dsound/buffer.c
++++ b/dlls/dsound/buffer.c
+@@ -813,6 +813,67 @@
+     return (This->dsbd.dwFlags & DSBCAPS_PRIMARYBUFFER) != 0;
+ }
+ 
++__declspec(dllexport) volatile struct mgs2_sfx_state_data mgs2_sfx_state_data =
++{
++    .magic = MGS2_SFX_STATE_MAGIC,
++    .version = MGS2_SFX_STATE_VERSION,
++    .header_words = MGS2_SFX_STATE_HEADER_WORDS,
++    .record_words = MGS2_SFX_STATE_RECORD_WORDS,
++    .event_count = MGS2_SFX_STATE_EVENTS,
++    .signature = ~MGS2_SFX_STATE_MAGIC,
++};
++
++static BOOL mgs2_sfx_state_enabled(void)
++{
++    static LONG enabled = -1;
++    char value[8];
++    DWORD length;
++
++    if (enabled != -1) return enabled;
++    length = GetEnvironmentVariableA("MGS2_SFX_STATE", value, sizeof(value));
++    enabled = length && length < sizeof(value) && value[0] != '0';
++    InterlockedExchange(&mgs2_sfx_state_data.enabled, enabled);
++    return enabled;
++}
++
++void mgs2_sfx_state_record(IDirectSoundBufferImpl *buffer, DWORD event,
++        DWORD arg0, DWORD arg1, DWORD arg2, HRESULT result)
++{
++    struct mgs2_sfx_state_record *record;
++    LONG sequence;
++
++    if (!mgs2_sfx_state_enabled() || !mgs_sfx_voice(buffer)) return;
++
++    sequence = InterlockedIncrement(&mgs2_sfx_state_data.write_sequence);
++    record = (struct mgs2_sfx_state_record *)&mgs2_sfx_state_data.records[
++            (sequence - 1) % MGS2_SFX_STATE_EVENTS];
++    InterlockedExchange(&record->sequence, 0);
++    record->tick = GetTickCount();
++    record->event = event;
++    record->object = (DWORD)(ULONG_PTR)buffer;
++    record->memory = buffer->buffer ? (DWORD)(ULONG_PTR)buffer->buffer->memory : 0;
++    record->state = buffer->state;
++    record->playflags = buffer->playflags;
++    record->sec_mixpos = buffer->sec_mixpos;
++    record->writelead = buffer->writelead;
++    record->committed_mixpos = buffer->committed_mixpos;
++    record->committed_flags = (buffer->use_committed ? 1 : 0)
++            | (buffer->buffer && buffer->buffer->lockedbytes ? 2 : 0);
++    record->volume = buffer->volpan.lVolume;
++    record->pan = buffer->volpan.lPan;
++    record->frequency = buffer->freq;
++    record->arg0 = arg0;
++    record->arg1 = arg1;
++    record->arg2 = arg2;
++    record->result = result;
++    InterlockedExchange(&record->sequence, sequence);
++    InterlockedExchange(&mgs2_sfx_state_data.last_tick, record->tick);
++    if (event == MGS2_SFX_STATE_LOCK || event == MGS2_SFX_STATE_UNLOCK)
++        InterlockedIncrement(&mgs2_sfx_state_data.lock_count);
++    else
++        InterlockedIncrement(&mgs2_sfx_state_data.control_count);
++}
++
+ static HRESULT WINAPI IDirectSoundBufferImpl_SetFormat(IDirectSoundBuffer8 *iface,
+         LPCWAVEFORMATEX wfex)
+ {
+@@ -877,6 +938,7 @@
+ 		ERR("MGS2 SFX volume obj=%p vol=%ld pan=%ld amp=%#lx/%#lx state=%#lx\n",
+ 		    This, vol, This->volpan.lPan, This->volpan.dwTotalAmpFactor[0],
+ 		    This->volpan.dwTotalAmpFactor[1], This->state);
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_VOLUME, vol, oldVol, 0, hres);
+ 
+ 	ReleaseSRWLockExclusive(&This->lock);
+ 
+@@ -944,6 +1006,7 @@
+ 	}
+ 
+ 	ReleaseSRWLockExclusive(&This->lock);
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_FREQUENCY, freq, oldFreq, 0, DS_OK);
+ 
+ 	return DS_OK;
+ }
+@@ -1010,6 +1073,7 @@
+ 	for (i = 0; i < This->num_filters; i++) {
+ 		IMediaObject_Discontinuity(This->filters[i].obj, 0);
+ 	}
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_PLAY, flags, reserved1, reserved2, hres);
+ 
+ 	ReleaseSRWLockExclusive(&This->lock);
+ 
+@@ -1032,6 +1096,7 @@
+ 		This->committed_mixpos = 0;
+ 		DSOUND_CheckEvent(This, 0, 0);
+ 	}
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_STOP, 0, 0, 0, hres);
+ 
+ 	ReleaseSRWLockExclusive(&This->lock);
+ 
+@@ -1256,6 +1321,7 @@
+                       audiobytes2 ? *audiobytes2: 0, writecursor);
+ 	}
+ 
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_LOCK, writecursor, writebytes, flags, DS_OK);
+ 	ReleaseSRWLockShared(&This->lock);
+ 	mgs_sfx_producer_note_lock(This, caller, request_cursor, request_bytes, flags,
+ 	        *lplpaudioptr1, *audiobytes1,
+@@ -1289,6 +1355,7 @@
+ 
+ 	/* at this point, do not attempt to reset buffers, mess with primary mix position,
+            or anything like that to reduce latency. The data already prebuffered cannot be changed */
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_POSITION, newpos, 0, 0, hres);
+ 
+ 	ReleaseSRWLockExclusive(&This->lock);
+ 	mgs_sfx_producer_note_position(This, caller, newpos);
+@@ -1323,6 +1390,7 @@
+ 			    This, This->volpan.lVolume, pan, This->volpan.dwTotalAmpFactor[0],
+ 			    This->volpan.dwTotalAmpFactor[1], This->state);
+ 	}
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_PAN, pan, 0, 0, hres);
+ 
+ 	ReleaseSRWLockExclusive(&This->lock);
+ 
+@@ -1405,6 +1473,7 @@
+ 	}
+ 	if (hres == DS_OK)
+ 		mgs_sfx_producer_note_unlock(This, caller, p1, x1, p2, x2);
++	mgs2_sfx_state_record(This, MGS2_SFX_STATE_UNLOCK, x1, x2, 0, hres);
+ 
+ 	return hres;
+ }

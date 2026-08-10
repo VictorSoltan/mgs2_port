@@ -1,0 +1,120 @@
+[    3.786843] systemd[1]: Mounted sys-fs-fuse-connections.mount.
+[    3.787494] systemd[1]: Mounted sys-kernel-config.mount.
+[    3.789105] systemd[1]: Finished systemd-modules-load.service.
+[    3.800032] systemd[1]: Starting systemd-sysctl.service...
+[    3.867945] systemd-journald[228]: Collecting audit messages is disabled.
+[    3.910438] systemd-sysctl: vm.laptop_mode is deprecated. Ignoring setting.
+[    3.919343] systemd[1]: Finished systemd-sysctl.service.
+[    3.959945] systemd[1]: Starting systemd-resolved.service...
+[    3.961320] systemd[1]: Finished systemd-tmpfiles-setup-dev-early.service.
+[    3.967854] systemd[1]: Starting systemd-tmpfiles-setup-dev.service...
+[    4.005393] systemd[1]: Finished systemd-tmpfiles-setup-dev.service.
+[    4.005867] systemd[1]: Reached target local-fs-pre.target.
+[    4.006106] systemd[1]: var-log.mount was skipped because no trigger condition checks were met.
+[    4.006200] systemd[1]: Reached target local-fs.target.
+[    4.010634] systemd[1]: Listening on systemd-sysext.socket.
+[    4.039862] systemd[1]: Starting rocknix-memory-manager.service...
+[    4.051963] systemd[1]: Starting systemd-binfmt.service...
+[    4.075991] systemd[1]: Starting zram-swap.service...
+[    4.077280] systemd[1]: Started systemd-journald.service.
+[    4.218346] systemd-journald[228]: Received client request to flush runtime journal.
+[    4.259682] zram: Added device: zram0
+[    4.263444] zram0: detected capacity change from 0 to 1572864
+[    4.293089] khugepaged: raising min_free_kbytes from 16384 to 22528 to help transparent hugepage allocations
+[    4.325084] Adding 786428k swap on /dev/zram0.  Priority:10 extents:1 across:786428k SS
+[    6.710009] rockchip-rga fdeb0000.rga: HW Version: 0x03.02
+[    6.710525] rockchip-rga fdeb0000.rga: Registered rockchip-rga as /dev/video0
+[    6.756349] hantro-vpu fdea0000.video-codec: registered rockchip,rk3568-vpu-dec as /dev/video1
+[    6.762178] hantro-vpu fdee0000.video-codec: registered rockchip,rk3568-vepu-enc as /dev/video2
+[    6.792748] rtw88_8821cs mmc2:0001:1: sdio read32 failed (0xf0): -110
+[    6.796697] rtw88_8821cs mmc2:0001:1: sdio write8 failed (0x1c): -110
+[    6.823913] rtw88_8821cs mmc2:0001:1: Firmware version 24.11.0, H2C version 12
+[    6.900660] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_dt_parse : invert-absx = 1, inveret-absy = 1, invert-absrx = 0, invert-absry = 0
+[    6.901115] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_dt_parse : adc key cnt = 4, gpio key cnt = 17
+[    6.901134] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_dt_parse : has rumble
+[    6.901159] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : SCALE = 2, ABS min = -1800, max = 1800, fuzz = 32, flat = 32, deadzone = 64
+[    6.901169] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : adc tuning_p = 245, adc_tuning_n = 245
+[    6.901169] 
+[    6.901175] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : SCALE = 2, ABS min = -1800, max = 1800, fuzz = 32, flat = 32, deadzone = 64
+[    6.901183] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : adc tuning_p = 245, adc_tuning_n = 245
+[    6.901183] 
+[    6.901189] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : SCALE = 2, ABS min = -1800, max = 1800, fuzz = 32, flat = 32, deadzone = 64
+[    6.901197] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : adc tuning_p = 245, adc_tuning_n = 245
+[    6.901197] 
+[    6.901203] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : SCALE = 2, ABS min = -1800, max = 1800, fuzz = 32, flat = 32, deadzone = 64
+[    6.901210] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_input_setup : adc tuning_p = 245, adc_tuning_n = 245
+[    6.901210] 
+[    6.901218] rocknix-singleadc-joypad rocknix-singleadc-joypad: Boost = 0, 0
+[    6.901472] input: retrogame_joypad as /devices/platform/rocknix-singleadc-joypad/input/input4
+[    6.927549] rocknix-singleadc-joypad rocknix-singleadc-joypad: rumble setup success!
+[    6.927577] rocknix-singleadc-joypad rocknix-singleadc-joypad: joypad_probe : probe success
+[    6.942235] Bluetooth: Core ver 2.22
+[    6.942366] NET: Registered PF_BLUETOOTH protocol family
+[    6.942372] Bluetooth: HCI device and connection manager initialized
+[    6.942392] Bluetooth: HCI socket layer initialized
+[    6.942402] Bluetooth: L2CAP socket layer initialized
+[    6.942420] Bluetooth: SCO socket layer initialized
+[    7.056934] Bluetooth: HCI UART driver ver 2.3
+[    7.056961] Bluetooth: HCI UART protocol H4 registered
+[    7.056965] Bluetooth: HCI UART protocol ATH3K registered
+[    7.059566] Bluetooth: HCI UART protocol Three-wire (H5) registered
+[    7.722200] Bluetooth: hci0: RTL: examining hci_ver=08 hci_rev=000c lmp_ver=08 lmp_subver=8821
+[    7.727430] Bluetooth: hci0: RTL: rom_version status=0 version=1
+[    7.732781] Bluetooth: hci0: RTL: btrtl_initialize: key id 0
+[    7.732812] Bluetooth: hci0: RTL: loading rtl_bt/rtl8821cs_fw.bin
+[    7.756923] Bluetooth: hci0: RTL: loading rtl_bt/rtl8821cs_config.bin
+[    7.799567] Bluetooth: hci0: RTL: cfg_sz 25, total sz 36953
+[    8.173664] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[    8.197372] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[    8.620592] Bluetooth: hci0: RTL: fw version 0x75b8f098
+[    8.626131] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[    8.661830] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[    8.662746] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[    9.262234] Adding 1048572k swap on /storage/swapfile.  Priority:-1 extents:16 across:46942208k SS
+[    9.996858] wlan0: authenticate with 62:53:75:10:48:64 (local address=2c:c3:e6:46:e9:a0)
+[   10.023738] wlan0: send auth to 62:53:75:10:48:64 (try 1/3)
+[   10.028329] wlan0: authenticated
+[   10.031201] wlan0: associate with 62:53:75:10:48:64 (try 1/3)
+[   10.044983] wlan0: RX AssocResp from 62:53:75:10:48:64 (capab=0x1531 status=0 aid=3)
+[   10.062758] wlan0: associated
+[   10.070884] wlan0: Limiting TX power to 19 (19 - 0) dBm as advertised by 62:53:75:10:48:64
+[   11.575813] mali_kbase: loading out-of-tree module taints kernel.
+[   11.581733] mali fde60000.gpu: Kernel DDK version r54p2-02eac0
+[   11.582011] mali fde60000.gpu: Looking up mali-supply from device node /gpu@fde60000
+[   11.583584] mali fde60000.gpu: Looking up shadercores-supply from device node /gpu@fde60000
+[   11.583623] mali fde60000.gpu: Looking up shadercores-supply property in node /gpu@fde60000 failed
+[   11.583727] mali fde60000.gpu: Looking up mali-supply from device node /gpu@fde60000
+[   11.584311] vdd_gpu: could not add device link fde60000.gpu: -17
+[   11.584932] mali fde60000.gpu: Register LUT 00070200 initialized for GPU arch 0x00070400
+[   11.584973] mali fde60000.gpu: GPU identified as 0x2 arch 7.4.0 r1p0 status 0
+[   11.585166] mali fde60000.gpu: No priority control manager is configured
+[   11.585178] mali fde60000.gpu: Large page support was disabled at compile-time!
+[   11.585607] mali fde60000.gpu: No memory group manager is configured
+[   11.589180] mali fde60000.gpu: Using configured power model mali-g52_r1-power-model, and fallback mali-simple-power-model
+[   11.591936] workqueue: name exceeds WQ_NAME_LEN. Truncating to: kbase_job_fault_resume_work_que
+[   11.592732] mali fde60000.gpu: * MALI kbase_mmap_min_addr compiled to CONFIG_DEFAULT_MMAP_MIN_ADDR, no runtime update possible! *
+[   11.592754] mali fde60000.gpu: Probed as mali0
+[   11.694208] devfreq fde60000.gpu: Couldn't update frequency transition information.
+[   13.978936] Bluetooth: MGMT ver 1.23
+[   15.312994] file system registered
+[   38.850379] input: Fake Keyboard as /devices/virtual/input/input5
+[   39.097824] process 'roms/ports/MGS2-Substance/box86-clean1' started with executable stack
+[   55.675767] warning: `wine_sechost_se' uses wireless extensions which will stop working for Wi-Fi 7 hardware; use nl80211
+[   62.735101] cfg80211: failed to load regulatory.db
+[   67.286431] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[   67.319602] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[  100.006087] wlan0: disconnect from AP 62:53:75:10:48:64 for new auth to 62:53:75:10:48:61
+[  100.863030] wlan0: authenticate with 62:53:75:10:48:61 (local address=2c:c3:e6:46:e9:a0)
+[  101.011707] wlan0: send auth to 62:53:75:10:48:61 (try 1/3)
+[  101.032378] wlan0: authenticated
+[  101.035346] wlan0: associate with 62:53:75:10:48:61 (try 1/3)
+[  101.055369] wlan0: RX ReassocResp from 62:53:75:10:48:61 (capab=0x1431 status=0 aid=3)
+[  101.068534] wlan0: associated
+[  257.408901] wlan0: disconnect from AP 62:53:75:10:48:61 for new auth to 62:53:75:10:48:64
+[  258.300643] wlan0: authenticate with 62:53:75:10:48:64 (local address=2c:c3:e6:46:e9:a0)
+[  258.329102] wlan0: send auth to 62:53:75:10:48:64 (try 1/3)
+[  258.359889] wlan0: authenticated
+[  258.360614] wlan0: associate with 62:53:75:10:48:64 (try 1/3)
+[  258.389902] wlan0: RX ReassocResp from 62:53:75:10:48:64 (capab=0x1531 status=0 aid=3)
+[  258.408595] wlan0: associated
+[  258.499858] wlan0: Limiting TX power to 19 (19 - 0) dBm as advertised by 62:53:75:10:48:64
