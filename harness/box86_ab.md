@@ -15,8 +15,12 @@ MGS2_BOX86_PROFILE=aggressive /storage/roms/ports/MGS2-Substance.sh
 It changes only these Box86 startup parameters:
 
 ```text
-BIGBLOCK=3  FORWARD=1024  CALLRET=1
+SAFEFLAGS=0  BIGBLOCK=2  FORWARD=1024  CALLRET=1
 ```
+
+Only `FORWARD` differs from production. `BIGBLOCK=3` is deliberately excluded
+from this A/B because changing two dynarec controls at once would make the
+result uninterpretable.
 
 Run the two arms in separate launches at the same fixed spot and pinned clock.
 Do not add `STRONGMEM`, `FASTNAN`, `X87DOUBLE`, or a newer Box86 at the same

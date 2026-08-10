@@ -33,25 +33,28 @@ echo
 
 printf '%-5s %-9s %-9s %-8s %-9s %-7s %s\n' arm fps ms d_vs_off factor temp draws/s
 OFF_MS=""
+WINDOW=$(mktemp /tmp/mgs2-batch-arm.XXXXXX)
+trap 'rm -f "$WINDOW"' EXIT
 for arm in ${ARMS:-0 1 1 0 0 1 1 0}; do
     echo "$arm" > "$FILE"
     sleep "$SETTLE"
-    n0=$(grep -Ec 'mgs_report_stats|MGS2FPS:' "$LOG")
+    line0=$(wc -l < "$LOG")
     sleep "$DWELL"
     alive || { echo "game died during arm $arm" >&2; break; }
-    n1=$(grep -Ec 'mgs_report_stats|MGS2FPS:' "$LOG")
+    line1=$(wc -l < "$LOG")
+    : > "$WINDOW"
+    [ "$line1" -gt "$line0" ] && sed -n "$((line0 + 1)),${line1}p" "$LOG" > "$WINDOW"
 
-    read -r fps <<<"$(tail -n $(( (n1-n0)*40 + 200 )) "$LOG" \
-        | grep -E 'mgs_report_stats|MGS2FPS:' \
+    read -r fps <<<"$(grep -E 'mgs_report_stats|MGS2FPS:' "$WINDOW" \
         | grep -oE '= [0-9.]+ fps|= [0-9.]+ fps' | grep -oE '[0-9.]+' \
-        | tail -n $((n1-n0)) | awk '{n++;s+=$1} END{if(n)printf "%.1f",s/n; else printf "-"}')"
+        | awk '{n++;s+=$1} END{if(n)printf "%.1f",s/n; else printf "-"}')"
     ms="-"; d="-"
     if [ "$fps" != "-" ]; then
         ms=$(awk -v f="$fps" 'BEGIN{printf "%.1f", 1000/f}')
         [ "$arm" = 0 ] && [ -z "$OFF_MS" ] && OFF_MS=$ms
         [ -n "$OFF_MS" ] && d=$(awk -v a="$ms" -v b="$OFF_MS" 'BEGIN{printf "%+.1f", a-b}')
     fi
-    read -r fac dps <<<"$(grep MGS2BATCH "$LOG" | grep -v switched | tail -$((DWELL/1>8?8:DWELL)) | awk '
+    read -r fac dps <<<"$(grep MGS2BATCH "$WINDOW" | grep -v switched | awk '
         {for(i=1;i<=NF;i++){split($i,a,"="); if(a[1]=="draws")d+=a[2]; if(a[1]=="batches")b+=a[2]}}
         END{if(b>0) printf "%.2fx %d", d/b, d/NR; else printf "- -"}')"
     printf '%-5s %-9s %-9s %-8s %-9s %-7s %s\n' "$arm" "$fps" "$ms" "$d" "$fac" \
