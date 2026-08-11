@@ -1,0 +1,470 @@
+diff --git a/dlls/d3d8/d3d8_private.h b/dlls/d3d8/d3d8_private.h
+--- a/dlls/d3d8/d3d8_private.h
++++ b/dlls/d3d8/d3d8_private.h
+@@ -40,6 +40,7 @@
+ #define D3D8_MAX_PIXEL_SHADER_CONSTANTF 8
+ #define D3D8_MAX_STREAMS 16
+ #define D3D8_MGS2_SNAPSHOT_DIRTY_RANGES 8
++#define D3D8_MGS2_GEOMETRY_VALID_RANGES 16
+ 
+ #define D3DFMT_RESZ MAKEFOURCC('R','E','S','Z')
+ #define D3D8_RESZ_CODE 0x7fa05000
+@@ -240,6 +241,19 @@
+     } mgs2_snapshot_dirty_ranges[D3D8_MGS2_SNAPSHOT_DIRTY_RANGES];
+     UINT mgs2_snapshot_dirty_count;
+     BOOL mgs2_snapshot_dirty;
++    /* Exact producer-shadow coverage for the diagnostic repeated-geometry
++     * census. Unlike upload dirty ranges, these ranges never bridge gaps. */
++    struct
++    {
++        UINT left;
++        UINT right;
++    } mgs2_geometry_valid_ranges[D3D8_MGS2_GEOMETRY_VALID_RANGES];
++    UINT mgs2_geometry_valid_count;
++    BOOL mgs2_geometry_valid_overflow;
++    BYTE *mgs2_geometry_mapped_data;
++    UINT mgs2_geometry_mapped_offset;
++    UINT mgs2_geometry_mapped_length;
++    BOOL mgs2_geometry_mapped_writable;
+     struct wined3d_device_context *mgs2_context;
+     DWORD fvf, usage;
+     bool discarded;
+@@ -308,6 +322,7 @@
+ extern BOOL d3d8_mgs2_stats(void);
+ extern BOOL d3d8_mgs2_vb_snapshot(void);
+ extern BOOL d3d8_mgs2_vb_dirty_aggregate(void);
++extern BOOL d3d8_mgs2_geometry_repeat_census(void);
+ extern BOOL d3d8_mgs2_noop_draw(void);
+ extern BOOL d3d8_mgs2_noop_submit(void);
+ extern void d3d8_mgs2_count(unsigned int which);
+diff --git a/dlls/d3d8/buffer.c b/dlls/d3d8/buffer.c
+--- a/dlls/d3d8/buffer.c
++++ b/dlls/d3d8/buffer.c
+@@ -211,6 +211,8 @@
+          * snapshot range need not be uploaded before Wine renames the BO. */
+         buffer->mgs2_snapshot_dirty = FALSE;
+         buffer->mgs2_snapshot_dirty_count = 0;
++        buffer->mgs2_geometry_valid_count = 0;
++        buffer->mgs2_geometry_valid_overflow = FALSE;
+     }
+ 
+     /* DISCARD already has WineD3D's mapped upload-BO path. After the first
+@@ -243,11 +245,65 @@
+             wined3dmapflags_from_d3dmapflags(flags, buffer->usage));
+     *data = wined3d_map_desc.data;
+     if (SUCCEEDED(hr) && !(flags & D3DLOCK_READONLY))
++    {
+         d3d8_mgs2_projected_barrier(impl_from_IDirect3DDevice8(buffer->parent_device), TRUE);
++        if (d3d8_mgs2_geometry_repeat_census() && buffer->mgs2_snapshot
++                && offset <= buffer->mgs2_snapshot_size
++                && (!size || size <= buffer->mgs2_snapshot_size - offset))
++        {
++            buffer->mgs2_geometry_mapped_data = wined3d_map_desc.data;
++            buffer->mgs2_geometry_mapped_offset = offset;
++            buffer->mgs2_geometry_mapped_length = size
++                    ? size : buffer->mgs2_snapshot_size - offset;
++            buffer->mgs2_geometry_mapped_writable = TRUE;
++        }
++    }
+ 
+     return hr;
+ }
+ 
++static void d3d8_vertexbuffer_add_geometry_valid_range(struct d3d8_vertexbuffer *buffer,
++        unsigned int left, unsigned int right)
++{
++    unsigned int i;
++
++    if (left >= right || buffer->mgs2_geometry_valid_overflow)
++        return;
++    for (i = 0; i < buffer->mgs2_geometry_valid_count;)
++    {
++        const unsigned int range_left = buffer->mgs2_geometry_valid_ranges[i].left;
++        const unsigned int range_right = buffer->mgs2_geometry_valid_ranges[i].right;
++
++        if (right < range_left)
++            break;
++        if (left > range_right)
++        {
++            ++i;
++            continue;
++        }
++        left = min(left, range_left);
++        right = max(right, range_right);
++        memmove(&buffer->mgs2_geometry_valid_ranges[i],
++                &buffer->mgs2_geometry_valid_ranges[i + 1],
++                (buffer->mgs2_geometry_valid_count - i - 1)
++                * sizeof(buffer->mgs2_geometry_valid_ranges[0]));
++        --buffer->mgs2_geometry_valid_count;
++    }
++    if (buffer->mgs2_geometry_valid_count == D3D8_MGS2_GEOMETRY_VALID_RANGES)
++    {
++        buffer->mgs2_geometry_valid_count = 0;
++        buffer->mgs2_geometry_valid_overflow = TRUE;
++        return;
++    }
++    memmove(&buffer->mgs2_geometry_valid_ranges[i + 1],
++            &buffer->mgs2_geometry_valid_ranges[i],
++            (buffer->mgs2_geometry_valid_count - i)
++            * sizeof(buffer->mgs2_geometry_valid_ranges[0]));
++    buffer->mgs2_geometry_valid_ranges[i].left = left;
++    buffer->mgs2_geometry_valid_ranges[i].right = right;
++    ++buffer->mgs2_geometry_valid_count;
++}
++
+ static void d3d8_vertexbuffer_remove_dirty_range(struct d3d8_vertexbuffer *buffer, unsigned int index)
+ {
+     memmove(&buffer->mgs2_snapshot_dirty_ranges[index],
+@@ -329,6 +385,10 @@
+         BOOL uploads = writable && !d3d8_mgs2_vb_dirty_aggregate();
+ 
+         buffer->mgs2_snapshot_locked = FALSE;
++        if (writable && d3d8_mgs2_geometry_repeat_census())
++            d3d8_vertexbuffer_add_geometry_valid_range(buffer,
++                    buffer->mgs2_snapshot_offset,
++                    buffer->mgs2_snapshot_offset + buffer->mgs2_snapshot_length);
+         d3d8_mgs2_vb_census_unlock(buffer, buffer->mgs2_snapshot_offset,
+                 buffer->mgs2_snapshot_length, writable, uploads);
+ 
+@@ -354,6 +414,16 @@
+         return D3D_OK;
+     }
+ 
++    if (buffer->mgs2_geometry_mapped_writable)
++    {
++        memcpy(buffer->mgs2_snapshot + buffer->mgs2_geometry_mapped_offset,
++                buffer->mgs2_geometry_mapped_data, buffer->mgs2_geometry_mapped_length);
++        d3d8_vertexbuffer_add_geometry_valid_range(buffer,
++                buffer->mgs2_geometry_mapped_offset,
++                buffer->mgs2_geometry_mapped_offset + buffer->mgs2_geometry_mapped_length);
++        buffer->mgs2_geometry_mapped_data = NULL;
++        buffer->mgs2_geometry_mapped_writable = FALSE;
++    }
+     wined3d_resource_unmap(wined3d_buffer_get_resource(buffer->wined3d_buffer), 0);
+ 
+     return D3D_OK;
+diff --git a/dlls/d3d8/device.c b/dlls/d3d8/device.c
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -64,12 +64,22 @@
+         const struct wined3d_light *old_light, BOOL old_enabled, BOOL old_present,
+         const struct wined3d_light *new_light, BOOL new_enabled, BOOL new_present);
+ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+-        D3DPRIMITIVETYPE primitive_type, BOOL batchable);
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable,
++        unsigned int start_vertex, unsigned int vertex_count);
+ static void d3d8_mgs2_projected_batch_flushed(unsigned int source_draws);
+ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device);
++static void d3d8_mgs2_geometry_repeat_draw(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable,
++        unsigned int start_vertex, unsigned int vertex_count,
++        BOOL compatible, unsigned int diff_mask, unsigned int stream_diff);
++static void d3d8_mgs2_geometry_repeat_present(void);
+ void d3d8_mgs2_flush_pending(struct d3d8_device *device);
+ static void d3d8_mgs2_vbo_cleanup(struct d3d8_device *device);
+ static void d3d8_mgs2_vbo_present(struct d3d8_device *device);
++static BOOL d3d8_mgs2_vbo_source(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, unsigned int start_vertex, unsigned int vertex_count,
++        unsigned int *stream_idx, struct d3d8_vertexbuffer **buffer,
++        unsigned int *stride, unsigned int *left);
+ 
+ static void STDMETHODCALLTYPE d3d8_null_wined3d_object_destroyed(void *parent) {}
+ 
+@@ -1088,6 +1098,7 @@
+     d3d8_mgs2_vb_census_present();
+     d3d8_mgs2_vbo_census_present();
+     d3d8_mgs2_barrier_census_present();
++    d3d8_mgs2_geometry_repeat_present();
+     d3d8_mgs2_projected_census_present(device);
+ 
+     /* Fraps does not hook IDirect3DDevice8::Present regardless of the hotpatch
+@@ -2318,12 +2329,36 @@
+     unsigned int frames;
+ } d3d8_mgs2_projected;
+ 
++#define D3D8_MGS2_GEOMETRY_REPORT_FRAMES 300
++#define D3D8_MGS2_GEOMETRY_SAMPLE_PERIOD 10
++static struct
++{
++    struct d3d8_mgs2_fingerprint last_geometry;
++    unsigned int last_stride, last_vertex_count;
++    unsigned int current_run, repeat_run;
++    BOOL have_last, last_geometry_eligible, last_geometry_valid;
++    ULONGLONG draws, current_batches, repeat_batches;
++    ULONGLONG eligible, valid, invalid_coverage, validity_overflow;
++    ULONGLONG wv_buffer_boundaries, same_shape, comparable, same_bytes;
++    unsigned int frames, sampled_frames;
++} d3d8_mgs2_geometry_repeat;
++
++BOOL d3d8_mgs2_geometry_repeat_census(void)
++{
++    static int on = -1;
++
++    if (on == -1)
++        on = d3d8_mgs2_env_on("MGS2_D3D8_GEOMETRY_REPEAT_CENSUS", FALSE);
++    return on;
++}
++
+ static BOOL d3d8_mgs2_projected_census_on(void)
+ {
+     static int on = -1;
+ 
+     if (on == -1)
+-        on = d3d8_mgs2_env_on("MGS2_D3D8_PROJECTED_BREAK_CENSUS", FALSE);
++        on = d3d8_mgs2_env_on("MGS2_D3D8_PROJECTED_BREAK_CENSUS", FALSE)
++                || d3d8_mgs2_geometry_repeat_census();
+     return on;
+ }
+ 
+@@ -2663,10 +2698,11 @@
+ }
+ 
+ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+-        D3DPRIMITIVETYPE primitive_type, BOOL batchable)
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable,
++        unsigned int start_vertex, unsigned int vertex_count)
+ {
+     enum d3d8_mgs2_projected_break kind = D3D8_MGS2_BREAK_HARD_ORDER_BARRIER;
+-    unsigned int i, diff_mask = 0;
++    unsigned int i, diff_mask = 0, stream_diff = 0;
+     BOOL compatible = FALSE;
+ 
+     if (!d3d8_mgs2_projected_census_on())
+@@ -2698,7 +2734,7 @@
+             ++d3d8_mgs2_projected.mask_boundaries[diff_mask];
+             if (diff_mask & (1u << D3D8_MGS2_FP_STREAM_VB))
+             {
+-                unsigned int stream_diff = d3d8_mgs2_projected_stream_diff(device->stateblock_state);
++                stream_diff = d3d8_mgs2_projected_stream_diff(device->stateblock_state);
+ 
+                 ++d3d8_mgs2_projected.stream_boundaries[stream_diff];
+                 if (diff_mask == ((1u << D3D8_MGS2_FP_WORLD)
+@@ -2741,6 +2777,8 @@
+ 
+     if (!batchable)
+         ++d3d8_mgs2_projected.actual_batches;
++    d3d8_mgs2_geometry_repeat_draw(device, primitive_type, batchable,
++            start_vertex, vertex_count, compatible, diff_mask, stream_diff);
+     memcpy(d3d8_mgs2_projected.last_draw, d3d8_mgs2_projected.current,
+             sizeof(d3d8_mgs2_projected.last_draw));
+     d3d8_mgs2_projected_stream_snapshot(device->stateblock_state);
+@@ -3272,6 +3310,172 @@
+     return TRUE;
+ }
+ 
++static BOOL d3d8_mgs2_geometry_range_valid(const struct d3d8_vertexbuffer *buffer,
++        unsigned int left, unsigned int right)
++{
++    unsigned int i;
++
++    if (buffer->mgs2_geometry_valid_overflow)
++        return FALSE;
++    for (i = 0; i < buffer->mgs2_geometry_valid_count; ++i)
++        if (left >= buffer->mgs2_geometry_valid_ranges[i].left
++                && right <= buffer->mgs2_geometry_valid_ranges[i].right)
++            return TRUE;
++    return FALSE;
++}
++
++/* Diagnostic-only census for the one remaining cheap interpretation of the
++ * WORLD + vertex-buffer-pointer boundary: distinct D3D buffers may contain the
++ * same strip and therefore be instanceable without copying vertex bytes. Hash
++ * every tenth frame, and accept only shadow ranges whose exact Lock coverage
++ * is known. No draw, state or upload decision is changed here. */
++static void d3d8_mgs2_geometry_repeat_draw(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable,
++        unsigned int start_vertex, unsigned int vertex_count,
++        BOOL compatible, unsigned int diff_mask, unsigned int stream_diff)
++{
++    const unsigned int wv_mask = (1u << D3D8_MGS2_FP_WORLD)
++            | (1u << D3D8_MGS2_FP_STREAM_VB);
++    struct d3d8_mgs2_fingerprint geometry = {0};
++    struct d3d8_vertexbuffer *buffer = NULL;
++    unsigned int stream_idx, stride = 0, left = 0, right = 0;
++    BOOL eligible = FALSE, valid = FALSE, wv_buffer, same_shape = FALSE, same_bytes = FALSE;
++    BOOL current_merge, repeat_merge;
++    size_t bytes = 0;
++    ULONGLONG slot;
++
++    if (!d3d8_mgs2_geometry_repeat_census()
++            || d3d8_mgs2_geometry_repeat.frames % D3D8_MGS2_GEOMETRY_SAMPLE_PERIOD)
++        return;
++
++    ++d3d8_mgs2_geometry_repeat.draws;
++    if (batchable && d3d8_mgs2_vbo_source(device, primitive_type, start_vertex, vertex_count,
++            &stream_idx, &buffer, &stride, &left))
++    {
++        (void)stream_idx;
++        eligible = TRUE;
++        ++d3d8_mgs2_geometry_repeat.eligible;
++        bytes = (size_t)vertex_count * stride;
++        right = left + bytes;
++        if (buffer->mgs2_geometry_valid_overflow)
++            ++d3d8_mgs2_geometry_repeat.validity_overflow;
++        else if (!d3d8_mgs2_geometry_range_valid(buffer, left, right))
++            ++d3d8_mgs2_geometry_repeat.invalid_coverage;
++        else
++        {
++            slot = ((ULONGLONG)stride << 32) | vertex_count;
++            geometry.lo = d3d8_mgs2_fingerprint_hash(0xcbf29ce484222325ull,
++                    slot, buffer->mgs2_snapshot + left, bytes);
++            geometry.hi = d3d8_mgs2_fingerprint_hash(0x84222325cbf29ce4ull,
++                    slot ^ 0xd6e8feb86659fd93ull, buffer->mgs2_snapshot + left, bytes);
++            valid = TRUE;
++            ++d3d8_mgs2_geometry_repeat.valid;
++        }
++    }
++
++    wv_buffer = d3d8_mgs2_geometry_repeat.have_last && compatible
++            && diff_mask == wv_mask && stream_diff == D3D8_MGS2_STREAM_DIFF_BUFFER;
++    if (wv_buffer)
++    {
++        ++d3d8_mgs2_geometry_repeat.wv_buffer_boundaries;
++        same_shape = eligible && d3d8_mgs2_geometry_repeat.last_geometry_eligible
++                && stride == d3d8_mgs2_geometry_repeat.last_stride
++                && vertex_count == d3d8_mgs2_geometry_repeat.last_vertex_count;
++        if (same_shape)
++        {
++            ++d3d8_mgs2_geometry_repeat.same_shape;
++            if (valid && d3d8_mgs2_geometry_repeat.last_geometry_valid)
++            {
++                ++d3d8_mgs2_geometry_repeat.comparable;
++                same_bytes = d3d8_mgs2_fingerprint_equal(&geometry,
++                        &d3d8_mgs2_geometry_repeat.last_geometry);
++                if (same_bytes)
++                    ++d3d8_mgs2_geometry_repeat.same_bytes;
++            }
++        }
++    }
++
++    current_merge = d3d8_mgs2_geometry_repeat.have_last && compatible && !d3d8_mgs2_state_dirty
++            && d3d8_mgs2_geometry_repeat.current_run < D3D8_MGS2_DRAW_BATCH_MAX;
++    if (current_merge)
++        ++d3d8_mgs2_geometry_repeat.current_run;
++    else
++    {
++        ++d3d8_mgs2_geometry_repeat.current_batches;
++        d3d8_mgs2_geometry_repeat.current_run = 1;
++    }
++
++    repeat_merge = d3d8_mgs2_geometry_repeat.have_last
++            && ((compatible && !d3d8_mgs2_state_dirty)
++            || (wv_buffer && same_shape && same_bytes))
++            && d3d8_mgs2_geometry_repeat.repeat_run < D3D8_MGS2_DRAW_BATCH_MAX;
++    if (repeat_merge)
++        ++d3d8_mgs2_geometry_repeat.repeat_run;
++    else
++    {
++        ++d3d8_mgs2_geometry_repeat.repeat_batches;
++        d3d8_mgs2_geometry_repeat.repeat_run = 1;
++    }
++
++    d3d8_mgs2_geometry_repeat.last_geometry = geometry;
++    d3d8_mgs2_geometry_repeat.last_stride = stride;
++    d3d8_mgs2_geometry_repeat.last_vertex_count = vertex_count;
++    d3d8_mgs2_geometry_repeat.last_geometry_eligible = eligible;
++    d3d8_mgs2_geometry_repeat.last_geometry_valid = valid;
++    d3d8_mgs2_geometry_repeat.have_last = TRUE;
++}
++
++static void d3d8_mgs2_geometry_repeat_present(void)
++{
++    ULONGLONG removed;
++    double frames;
++
++    if (!d3d8_mgs2_geometry_repeat_census())
++        return;
++    if (!(d3d8_mgs2_geometry_repeat.frames % D3D8_MGS2_GEOMETRY_SAMPLE_PERIOD))
++        ++d3d8_mgs2_geometry_repeat.sampled_frames;
++    ++d3d8_mgs2_geometry_repeat.frames;
++    d3d8_mgs2_geometry_repeat.have_last = FALSE;
++    d3d8_mgs2_geometry_repeat.last_geometry_eligible = FALSE;
++    d3d8_mgs2_geometry_repeat.last_geometry_valid = FALSE;
++    d3d8_mgs2_geometry_repeat.current_run = 0;
++    d3d8_mgs2_geometry_repeat.repeat_run = 0;
++    if (d3d8_mgs2_geometry_repeat.frames < D3D8_MGS2_GEOMETRY_REPORT_FRAMES)
++        return;
++
++    frames = d3d8_mgs2_geometry_repeat.sampled_frames;
++    removed = d3d8_mgs2_geometry_repeat.current_batches
++            > d3d8_mgs2_geometry_repeat.repeat_batches
++            ? d3d8_mgs2_geometry_repeat.current_batches
++            - d3d8_mgs2_geometry_repeat.repeat_batches : 0;
++    fprintf(stderr, "MGS2GEOMETRY_REPEAT: frames=%u sampled=%u source=%I64u %.2f/f "
++            "current=%I64u %.2f/f repeat=%I64u %.2f/f removed=%I64u %.2f/f "
++            "eligible=%I64u %.2f/f valid=%I64u %.2f/f wvB=%I64u %.2f/f "
++            "shape=%I64u %.2f/f comparable=%I64u %.2f/f same=%I64u %.2f/f "
++            "invalid=%I64u overflow=%I64u\n",
++            d3d8_mgs2_geometry_repeat.frames, d3d8_mgs2_geometry_repeat.sampled_frames,
++            d3d8_mgs2_geometry_repeat.draws, d3d8_mgs2_geometry_repeat.draws / frames,
++            d3d8_mgs2_geometry_repeat.current_batches,
++            d3d8_mgs2_geometry_repeat.current_batches / frames,
++            d3d8_mgs2_geometry_repeat.repeat_batches,
++            d3d8_mgs2_geometry_repeat.repeat_batches / frames,
++            removed, removed / frames,
++            d3d8_mgs2_geometry_repeat.eligible, d3d8_mgs2_geometry_repeat.eligible / frames,
++            d3d8_mgs2_geometry_repeat.valid, d3d8_mgs2_geometry_repeat.valid / frames,
++            d3d8_mgs2_geometry_repeat.wv_buffer_boundaries,
++            d3d8_mgs2_geometry_repeat.wv_buffer_boundaries / frames,
++            d3d8_mgs2_geometry_repeat.same_shape,
++            d3d8_mgs2_geometry_repeat.same_shape / frames,
++            d3d8_mgs2_geometry_repeat.comparable,
++            d3d8_mgs2_geometry_repeat.comparable / frames,
++            d3d8_mgs2_geometry_repeat.same_bytes,
++            d3d8_mgs2_geometry_repeat.same_bytes / frames,
++            d3d8_mgs2_geometry_repeat.invalid_coverage,
++            d3d8_mgs2_geometry_repeat.validity_overflow);
++    fflush(stderr);
++    memset(&d3d8_mgs2_geometry_repeat, 0, sizeof(d3d8_mgs2_geometry_repeat));
++}
++
+ /* Copy a strip while its producer shadow is known to represent this draw.
+  * Delaying the copy until flush would race a later Lock that mutates the same
+  * shadow before the preceding draw packet reaches CSMT. */
+@@ -3493,7 +3697,8 @@
+ BOOL d3d8_mgs2_vb_snapshot(void)
+ {
+     static int on = -1;
+-    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_VB_SNAPSHOT", FALSE);
++    if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_VB_SNAPSHOT", FALSE)
++            || d3d8_mgs2_geometry_repeat_census();
+     return on;
+ }
+ 
+@@ -4331,7 +4536,7 @@
+ 
+     vertex_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
+-    d3d8_mgs2_projected_draw(device, primitive_type, TRUE);
++    d3d8_mgs2_projected_draw(device, primitive_type, TRUE, start_vertex, vertex_count);
+     d3d8_mgs2_vbo_census_draw(device, primitive_type, start_vertex, vertex_count);
+     if (d3d8_mgs2_producer() && d3d8_mgs2_pending.count
+             && (d3d8_mgs2_state_dirty
+@@ -4413,7 +4618,7 @@
+ 
+     index_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
+-    d3d8_mgs2_projected_draw(device, primitive_type, FALSE);
++    d3d8_mgs2_projected_draw(device, primitive_type, FALSE, 0, 0);
+     d3d8_mgs2_flush_pending(device);
+     d3d8_device_flush_snapshot_vertex_buffers(device);
+     if (!device->stateblock_state->index_buffer)
+@@ -4482,7 +4687,7 @@
+ 
+     wined3d_mutex_lock();
+ 
+-    d3d8_mgs2_projected_draw(device, primitive_type, FALSE);
++    d3d8_mgs2_projected_draw(device, primitive_type, FALSE, 0, 0);
+     d3d8_mgs2_flush_pending(device);
+ 
+     if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device,
+@@ -4537,7 +4742,7 @@
+ 
+     wined3d_mutex_lock();
+ 
+-    d3d8_mgs2_projected_draw(device, primitive_type, FALSE);
++    d3d8_mgs2_projected_draw(device, primitive_type, FALSE, 0, 0);
+     if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device, &device->vertex_buffer,
+             (char *)vertex_data + min_vertex_idx * vertex_stride, vtx_size, vertex_stride, &vb_pos)))
+         goto done;
+

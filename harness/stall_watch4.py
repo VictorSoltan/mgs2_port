@@ -55,6 +55,14 @@ def cpu_ticks(pid):
         return None
 
 
+def file_stamp(path):
+    try:
+        stat = os.stat(path)
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return None
+
+
 def fd_map(pid):
     result = []
     path = "/proc/%d/fd" % pid
@@ -135,7 +143,7 @@ def snapshot_target(label, pid, tid):
 
 
 def capture(output, game_pid, cs_tid, server_pid, game_fds, server_fds,
-        stalled_ms, ticks):
+        stalled_ms, ticks, reason="main-cpu-no-progress"):
     targets = [("main", game_pid, game_pid)]
     if cs_tid:
         targets.append(("wined3d_cs", game_pid, cs_tid))
@@ -143,8 +151,8 @@ def capture(output, game_pid, cs_tid, server_pid, game_fds, server_fds,
         targets.append(("wineserver", server_pid, server_pid))
 
     with open(output, "w") as handle:
-        handle.write("MGS2 STALLWATCH4 trigger wall=%.6f stalled_ms=%.1f main_ticks=%s\n" %
-                (time.time(), stalled_ms, ticks))
+        handle.write("MGS2 STALLWATCH4 trigger wall=%.6f reason=%s stalled_ms=%.1f main_ticks=%s\n" %
+                (time.time(), reason, stalled_ms, ticks))
         handle.write("cap=%s temp=%s\n" % (
                 read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq", "?"),
                 read("/sys/class/thermal/thermal_zone0/temp", "?")))
@@ -178,6 +186,10 @@ def main():
     parser.add_argument("--wait-cs", type=float, default=60.0,
             help="seconds to wait for wined3d_cs when --require-cs is used")
     parser.add_argument("--output", default="/tmp/mgs2-stall-watch4-capture.log")
+    parser.add_argument("--progress-file",
+            help="also trigger when this rendered-frame log stops growing")
+    parser.add_argument("--progress-trigger-ms", type=float, default=5000.0,
+            help="render-log inactivity threshold; armed after its first change")
     args = parser.parse_args()
 
     game_pid = find_process(GAME_COMM)
@@ -205,9 +217,14 @@ def main():
     start = time.monotonic()
     last_progress = start
     last_ticks = cpu_ticks(game_pid)
+    progress_stamp = file_stamp(args.progress_file) if args.progress_file else None
+    progress_armed = False
+    progress_last_change = start
     interval = max(args.interval_ms, 50.0) / 1000.0
-    print("watching game=%d cs=%s wineserver=%s interval=%.3fs trigger=%.3fs" %
-            (game_pid, cs_tid, server_pid, interval, args.trigger_ms / 1000.0), flush=True)
+    print("watching game=%d cs=%s wineserver=%s interval=%.3fs trigger=%.3fs "
+            "progress=%s progress_trigger=%.3fs" %
+            (game_pid, cs_tid, server_pid, interval, args.trigger_ms / 1000.0,
+            args.progress_file or "off", args.progress_trigger_ms / 1000.0), flush=True)
 
     while time.monotonic() - start < args.duration:
         time.sleep(interval)
@@ -215,6 +232,25 @@ def main():
         ticks = cpu_ticks(game_pid)
         if ticks is None:
             raise SystemExit("game exited before trigger")
+
+        if args.progress_file:
+            stamp = file_stamp(args.progress_file)
+            if stamp is not None and stamp != progress_stamp:
+                progress_stamp = stamp
+                progress_last_change = now
+                progress_armed = True
+            elif progress_armed:
+                render_idle_ms = (now - progress_last_change) * 1000.0
+                if render_idle_ms >= args.progress_trigger_ms:
+                    if cs_tid is None:
+                        cs_tid = find_thread(game_pid, "wined3d_cs")
+                    capture(args.output, game_pid, cs_tid, server_pid,
+                            game_fds, server_fds, render_idle_ms, ticks,
+                            reason="render-log-no-progress")
+                    print("render progress stopped for %.1f ms -> %s" %
+                            (render_idle_ms, args.output), flush=True)
+                    return 0
+
         if ticks != last_ticks:
             last_ticks = ticks
             last_progress = now

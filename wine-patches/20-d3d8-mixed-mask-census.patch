@@ -1,0 +1,142 @@
+diff --git a/dlls/d3d8/device.c b/dlls/d3d8/device.c
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -2252,6 +2252,8 @@ static void d3d8_mgs2_barrier_census_present(void)
+  * existing dirty/apply/flush decisions. */
+ #define D3D8_MGS2_PROJECTED_REPORT_FRAMES 300
+ #define D3D8_MGS2_PROJECTED_LIGHTS 64
++#define D3D8_MGS2_PROJECTED_MASK_COUNT (1u << D3D8_MGS2_FP_GROUP_COUNT)
++#define D3D8_MGS2_PROJECTED_TOP_MIXED 8
+ struct d3d8_mgs2_fingerprint
+ {
+     ULONGLONG lo, hi;
+@@ -2293,8 +2295,11 @@ static struct
+     D3DPRIMITIVETYPE last_primitive;
+     enum d3d8_mgs2_pending_barrier pending_barrier;
+     unsigned int projected_run[D3D8_MGS2_BREAK_STREAM_VB + 1];
++    unsigned int mask_projected_run[D3D8_MGS2_PROJECTED_MASK_COUNT];
+     ULONGLONG boundaries[D3D8_MGS2_BREAK_COUNT];
++    ULONGLONG mask_boundaries[D3D8_MGS2_PROJECTED_MASK_COUNT];
+     ULONGLONG projected_draws[D3D8_MGS2_BREAK_STREAM_VB + 1];
++    ULONGLONG mask_projected_draws[D3D8_MGS2_PROJECTED_MASK_COUNT];
+     ULONGLONG source_draws, actual_batches;
+     ULONGLONG net_same_dirty, changed_without_dirty;
+     unsigned int frames;
+@@ -2582,6 +2587,18 @@ static enum d3d8_mgs2_projected_break d3d8_mgs2_projected_classify(unsigned int
+     return D3D8_MGS2_BREAK_WORLD_ONLY + group;
+ }
+ 
++static void d3d8_mgs2_projected_mask_name(unsigned int mask,
++        char name[D3D8_MGS2_FP_GROUP_COUNT + 1])
++{
++    static const char group_names[D3D8_MGS2_FP_GROUP_COUNT] = {'W', 'M', 'T', 'R', 'C', 'V'};
++    unsigned int i, length = 0;
++
++    for (i = 0; i < ARRAY_SIZE(group_names); ++i)
++        if (mask & (1u << i))
++            name[length++] = group_names[i];
++    name[length] = '\0';
++}
++
+ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+         D3DPRIMITIVETYPE primitive_type, BOOL batchable)
+ {
+@@ -2613,6 +2630,8 @@ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+                 ++d3d8_mgs2_projected.changed_without_dirty;
+         }
+         ++d3d8_mgs2_projected.boundaries[kind];
++        if (compatible)
++            ++d3d8_mgs2_projected.mask_boundaries[diff_mask];
+     }
+ 
+     for (i = 0; i <= D3D8_MGS2_BREAK_STREAM_VB; ++i)
+@@ -2631,6 +2650,21 @@ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+         }
+     }
+ 
++    for (i = 0; i < D3D8_MGS2_PROJECTED_MASK_COUNT; ++i)
++    {
++        BOOL merge = d3d8_mgs2_projected.have_last_draw && compatible
++                && !(diff_mask & ~i)
++                && d3d8_mgs2_projected.mask_projected_run[i] < D3D8_MGS2_DRAW_BATCH_MAX;
++
++        if (merge)
++            ++d3d8_mgs2_projected.mask_projected_run[i];
++        else
++        {
++            ++d3d8_mgs2_projected.mask_projected_draws[i];
++            d3d8_mgs2_projected.mask_projected_run[i] = 1;
++        }
++    }
++
+     if (!batchable)
+         ++d3d8_mgs2_projected.actual_batches;
+     memcpy(d3d8_mgs2_projected.last_draw, d3d8_mgs2_projected.current,
+@@ -2649,7 +2683,8 @@ static void d3d8_mgs2_projected_batch_flushed(unsigned int source_draws)
+ 
+ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+ {
+-    unsigned int i;
++    BOOL emitted[D3D8_MGS2_PROJECTED_MASK_COUNT] = {0};
++    unsigned int i, mask, rank;
+     double frames;
+ 
+     if (!d3d8_mgs2_projected_census_on())
+@@ -2659,6 +2694,8 @@ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+     d3d8_mgs2_projected.have_last_draw = FALSE;
+     d3d8_mgs2_projected.pending_barrier = D3D8_MGS2_PENDING_BARRIER_NONE;
+     memset(d3d8_mgs2_projected.projected_run, 0, sizeof(d3d8_mgs2_projected.projected_run));
++    memset(d3d8_mgs2_projected.mask_projected_run, 0,
++            sizeof(d3d8_mgs2_projected.mask_projected_run));
+     if (d3d8_mgs2_projected.frames < D3D8_MGS2_PROJECTED_REPORT_FRAMES)
+         return;
+ 
+@@ -2699,6 +2736,35 @@ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+             d3d8_mgs2_projected.net_same_dirty,
+             d3d8_mgs2_projected.changed_without_dirty,
+             d3d8_mgs2_projected.light_overflow);
++    for (rank = 0; rank < D3D8_MGS2_PROJECTED_TOP_MIXED; ++rank)
++    {
++        ULONGLONG best_count = 0, projected, removed;
++        unsigned int best_mask = 0;
++        char groups[D3D8_MGS2_FP_GROUP_COUNT + 1];
++
++        for (mask = 1; mask < D3D8_MGS2_PROJECTED_MASK_COUNT; ++mask)
++        {
++            if (emitted[mask] || !(mask & (mask - 1)))
++                continue;
++            if (d3d8_mgs2_projected.mask_boundaries[mask] > best_count)
++            {
++                best_count = d3d8_mgs2_projected.mask_boundaries[mask];
++                best_mask = mask;
++            }
++        }
++        if (!best_count)
++            break;
++
++        emitted[best_mask] = TRUE;
++        projected = d3d8_mgs2_projected.mask_projected_draws[best_mask];
++        removed = d3d8_mgs2_projected.actual_batches > projected
++                ? d3d8_mgs2_projected.actual_batches - projected : 0;
++        d3d8_mgs2_projected_mask_name(best_mask, groups);
++        fprintf(stderr, "MGS2PROJECTED_MIXED: rank=%u mask=0x%02x groups=%s "
++                "boundaries=%I64u %.2f/f projected=%I64u %.2f/f removed=%I64u %.2f/f\n",
++                rank + 1, best_mask, groups, best_count, best_count / frames,
++                projected, projected / frames, removed, removed / frames);
++    }
+     fflush(stderr);
+ 
+     d3d8_mgs2_projected.frames = 0;
+@@ -2707,8 +2773,12 @@ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+     d3d8_mgs2_projected.net_same_dirty = 0;
+     d3d8_mgs2_projected.changed_without_dirty = 0;
+     memset(d3d8_mgs2_projected.boundaries, 0, sizeof(d3d8_mgs2_projected.boundaries));
++    memset(d3d8_mgs2_projected.mask_boundaries, 0,
++            sizeof(d3d8_mgs2_projected.mask_boundaries));
+     for (i = 0; i <= D3D8_MGS2_BREAK_STREAM_VB; ++i)
+         d3d8_mgs2_projected.projected_draws[i] = 0;
++    memset(d3d8_mgs2_projected.mask_projected_draws, 0,
++            sizeof(d3d8_mgs2_projected.mask_projected_draws));
+ }
+ 
+ #define D3D8_MGS2_VB_CENSUS_MAX_BUFFERS 64

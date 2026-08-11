@@ -422,20 +422,16 @@ DMUSIC_DLL="${MGS2_DMUSIC_DLL:-}"
 DMSYNTH_DLL="${MGS2_DMSYNTH_DLL:-dmsynth_se1.dll}"
 [ -n "$DMSYNTH_DLL" ] && [ ! -r "$GAMEDIR/$DMSYNTH_DLL" ] && DMSYNTH_DLL=""
 
-# Which d3d8 to mount. Only meaningful because d3d8=builtin (see WINEDLLOVERRIDES
-# above) put Wine's own module back in the chain. d3d8_mgs2fast1.dll carries two
-# MGS2-specific fast paths, both switchable:
-#   MGS2_D3D8_STATEFAST=0       stop dropping redundant SetRenderState /
-#                               SetTextureStageState / SetSamplerState calls.
-#                               Each redundant call otherwise takes the global
-#                               wined3d mutex and walks into the stateblock.
-#   MGS2_D3D8_MANAGED_DIRTY=0   go back to re-uploading every bound managed
-#                               texture on every draw. The fast path only uploads
-#                               after Unlock, AddDirtyRect, UpdateTexture,
-#                               CopyRects or creation, which are the only ways a
-#                               managed texture's content can change.
-# If textures ever look stale, MGS2_D3D8_MANAGED_DIRTY=0 is the first thing to try.
-D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_mgs2fast1.dll}"
+# Which d3d8 to mount. Only meaningful because d3d8=builtin (see
+# WINEDLLOVERRIDES above) puts Wine's module back in the chain. Patch 24 retains
+# the producer/dirty-range path and adds conservative fixed-function frustum
+# culling. A matched device A/B/A/B reduced frame time 49.43 -> 47.89 ms and
+# WineD3D batches 166.58 -> 136.81 per frame, with correct visuals on the tested
+# heavy spot. Keep the fast path independently reversible.
+export MGS2_D3D8_VISIBILITY_CULL="${MGS2_D3D8_VISIBILITY_CULL:-1}"
+export MGS2_D3D8_VISIBILITY_CULL_LIVE="${MGS2_D3D8_VISIBILITY_CULL_LIVE:-0}"
+export MGS2_D3D8_VISIBILITY_CULL_STATS="${MGS2_D3D8_VISIBILITY_CULL_STATS:-0}"
+D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_producer_batch20_visibilitycull.dll}"
 [ -n "$D3D8_DLL" ] && [ ! -r "$GAMEDIR/$D3D8_DLL" ] && D3D8_DLL=""
 
 # Keep the measured production renderer as the default. The immutable-EBO cache

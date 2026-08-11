@@ -1,0 +1,367 @@
+diff --git a/dlls/d3d8/d3d8_private.h b/dlls/d3d8/d3d8_private.h
+--- a/dlls/d3d8/d3d8_private.h
++++ b/dlls/d3d8/d3d8_private.h
+@@ -323,6 +323,8 @@
+ extern BOOL d3d8_mgs2_vb_snapshot(void);
+ extern BOOL d3d8_mgs2_vb_dirty_aggregate(void);
+ extern BOOL d3d8_mgs2_geometry_repeat_census(void);
++extern BOOL d3d8_mgs2_visibility_census(void);
++extern BOOL d3d8_mgs2_shadow_coverage_census(void);
+ extern BOOL d3d8_mgs2_noop_draw(void);
+ extern BOOL d3d8_mgs2_noop_submit(void);
+ extern void d3d8_mgs2_count(unsigned int which);
+diff --git a/dlls/d3d8/buffer.c b/dlls/d3d8/buffer.c
+--- a/dlls/d3d8/buffer.c
++++ b/dlls/d3d8/buffer.c
+@@ -247,7 +247,7 @@
+     if (SUCCEEDED(hr) && !(flags & D3DLOCK_READONLY))
+     {
+         d3d8_mgs2_projected_barrier(impl_from_IDirect3DDevice8(buffer->parent_device), TRUE);
+-        if (d3d8_mgs2_geometry_repeat_census() && buffer->mgs2_snapshot
++        if (d3d8_mgs2_shadow_coverage_census() && buffer->mgs2_snapshot
+                 && offset <= buffer->mgs2_snapshot_size
+                 && (!size || size <= buffer->mgs2_snapshot_size - offset))
+         {
+@@ -385,7 +385,7 @@
+         BOOL uploads = writable && !d3d8_mgs2_vb_dirty_aggregate();
+ 
+         buffer->mgs2_snapshot_locked = FALSE;
+-        if (writable && d3d8_mgs2_geometry_repeat_census())
++        if (writable && d3d8_mgs2_shadow_coverage_census())
+             d3d8_vertexbuffer_add_geometry_valid_range(buffer,
+                     buffer->mgs2_snapshot_offset,
+                     buffer->mgs2_snapshot_offset + buffer->mgs2_snapshot_length);
+diff --git a/dlls/d3d8/device.c b/dlls/d3d8/device.c
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -21,6 +21,8 @@
+ 
+ #include "d3d8_private.h"
+ 
++#include <math.h>
++
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d8);
+ 
+ enum d3d8_mgs2_fingerprint_group
+@@ -73,6 +75,11 @@
+         unsigned int start_vertex, unsigned int vertex_count,
+         BOOL compatible, unsigned int diff_mask, unsigned int stream_diff);
+ static void d3d8_mgs2_geometry_repeat_present(void);
++static void d3d8_mgs2_visibility_draw(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable,
++        unsigned int start_vertex, unsigned int vertex_count,
++        BOOL compatible);
++static void d3d8_mgs2_visibility_present(void);
+ void d3d8_mgs2_flush_pending(struct d3d8_device *device);
+ static void d3d8_mgs2_vbo_cleanup(struct d3d8_device *device);
+ static void d3d8_mgs2_vbo_present(struct d3d8_device *device);
+@@ -1099,6 +1106,7 @@
+     d3d8_mgs2_vbo_census_present();
+     d3d8_mgs2_barrier_census_present();
+     d3d8_mgs2_geometry_repeat_present();
++    d3d8_mgs2_visibility_present();
+     d3d8_mgs2_projected_census_present(device);
+ 
+     /* Fraps does not hook IDirect3DDevice8::Present regardless of the hotpatch
+@@ -2343,6 +2351,18 @@
+     unsigned int frames, sampled_frames;
+ } d3d8_mgs2_geometry_repeat;
+ 
++#define D3D8_MGS2_VISIBILITY_REPORT_FRAMES 300
++#define D3D8_MGS2_VISIBILITY_SAMPLE_PERIOD 10
++static struct
++{
++    unsigned int current_run;
++    BOOL have_last, have_batch, batch_all_culled;
++    ULONGLONG draws, batches, culled_draws, removed_batches;
++    ULONGLONG eligible, custom_shader, vertex_blend, position_unsupported;
++    ULONGLONG source_unsupported, invalid_coverage, validity_overflow, nonfinite;
++    unsigned int frames, sampled_frames;
++} d3d8_mgs2_visibility;
++
+ BOOL d3d8_mgs2_geometry_repeat_census(void)
+ {
+     static int on = -1;
+@@ -2352,13 +2372,27 @@
+     return on;
+ }
+ 
++BOOL d3d8_mgs2_visibility_census(void)
++{
++    static int on = -1;
++
++    if (on == -1)
++        on = d3d8_mgs2_env_on("MGS2_D3D8_VISIBILITY_CENSUS", FALSE);
++    return on;
++}
++
++BOOL d3d8_mgs2_shadow_coverage_census(void)
++{
++    return d3d8_mgs2_geometry_repeat_census() || d3d8_mgs2_visibility_census();
++}
++
+ static BOOL d3d8_mgs2_projected_census_on(void)
+ {
+     static int on = -1;
+ 
+     if (on == -1)
+         on = d3d8_mgs2_env_on("MGS2_D3D8_PROJECTED_BREAK_CENSUS", FALSE)
+-                || d3d8_mgs2_geometry_repeat_census();
++                || d3d8_mgs2_shadow_coverage_census();
+     return on;
+ }
+ 
+@@ -2779,6 +2813,8 @@
+         ++d3d8_mgs2_projected.actual_batches;
+     d3d8_mgs2_geometry_repeat_draw(device, primitive_type, batchable,
+             start_vertex, vertex_count, compatible, diff_mask, stream_diff);
++    d3d8_mgs2_visibility_draw(device, primitive_type, batchable,
++            start_vertex, vertex_count, compatible);
+     memcpy(d3d8_mgs2_projected.last_draw, d3d8_mgs2_projected.current,
+             sizeof(d3d8_mgs2_projected.last_draw));
+     d3d8_mgs2_projected_stream_snapshot(device->stateblock_state);
+@@ -3476,6 +3512,234 @@
+     memset(&d3d8_mgs2_geometry_repeat, 0, sizeof(d3d8_mgs2_geometry_repeat));
+ }
+ 
++static BOOL d3d8_mgs2_visibility_position_offset(
++        const struct d3d8_vertex_declaration *decl, unsigned int wanted_stream,
++        unsigned int *position_offset)
++{
++    static const unsigned int type_sizes[] = {4, 8, 12, 16, 4, 4, 4, 8};
++    const DWORD *token, *end;
++    unsigned int stream = ~0u, offset = 0;
++
++    if (!decl->elements)
++    {
++        if (wanted_stream || (decl->shader_handle & D3DFVF_POSITION_MASK) != D3DFVF_XYZ)
++            return FALSE;
++        *position_offset = 0;
++        return TRUE;
++    }
++
++    token = decl->elements;
++    end = token + decl->elements_size / sizeof(*token);
++    while (token < end && *token != D3DVSD_END())
++    {
++        D3DVSD_TOKENTYPE token_type = (*token & D3DVSD_TOKENTYPEMASK)
++                >> D3DVSD_TOKENTYPESHIFT;
++
++        if (token_type == D3DVSD_TOKEN_STREAM && !(*token & D3DVSD_STREAMTESSMASK))
++        {
++            stream = (*token & D3DVSD_STREAMNUMBERMASK) >> D3DVSD_STREAMNUMBERSHIFT;
++            offset = 0;
++        }
++        else if (token_type == D3DVSD_TOKEN_STREAMDATA)
++        {
++            if (*token & D3DVSD_DATALOADTYPEMASK)
++            {
++                offset += sizeof(DWORD) * ((*token & D3DVSD_SKIPCOUNTMASK)
++                        >> D3DVSD_SKIPCOUNTSHIFT);
++            }
++            else
++            {
++                unsigned int type = (*token & D3DVSD_DATATYPEMASK) >> D3DVSD_DATATYPESHIFT;
++                unsigned int reg = (*token & D3DVSD_VERTEXREGMASK) >> D3DVSD_VERTEXREGSHIFT;
++
++                if (type >= ARRAY_SIZE(type_sizes))
++                    return FALSE;
++                if (stream == wanted_stream && reg == D3DVSDE_POSITION)
++                {
++                    if (type != D3DVSDT_FLOAT3)
++                        return FALSE;
++                    *position_offset = offset;
++                    return TRUE;
++                }
++                offset += type_sizes[type];
++            }
++        }
++        token += parse_token(token);
++    }
++    return FALSE;
++}
++
++static void d3d8_mgs2_visibility_transform(float dst[4], const float src[4],
++        const struct wined3d_matrix *m)
++{
++    float tmp[4];
++
++    tmp[0] = src[0] * m->_11 + src[1] * m->_21 + src[2] * m->_31 + src[3] * m->_41;
++    tmp[1] = src[0] * m->_12 + src[1] * m->_22 + src[2] * m->_32 + src[3] * m->_42;
++    tmp[2] = src[0] * m->_13 + src[1] * m->_23 + src[2] * m->_33 + src[3] * m->_43;
++    tmp[3] = src[0] * m->_14 + src[1] * m->_24 + src[2] * m->_34 + src[3] * m->_44;
++    memcpy(dst, tmp, sizeof(tmp));
++}
++
++static unsigned int d3d8_mgs2_visibility_clip_code(const float v[4])
++{
++    unsigned int code = 0;
++
++    if (v[0] < -v[3]) code |= 0x01;
++    if (v[0] >  v[3]) code |= 0x02;
++    if (v[1] < -v[3]) code |= 0x04;
++    if (v[1] >  v[3]) code |= 0x08;
++    if (v[2] <  0.0f) code |= 0x10;
++    if (v[2] >  v[3]) code |= 0x20;
++    return code;
++}
++
++static void d3d8_mgs2_visibility_finish_batch(void)
++{
++    if (d3d8_mgs2_visibility.have_batch && d3d8_mgs2_visibility.batch_all_culled)
++        ++d3d8_mgs2_visibility.removed_batches;
++    d3d8_mgs2_visibility.have_batch = FALSE;
++    d3d8_mgs2_visibility.batch_all_culled = FALSE;
++}
++
++/* Conservative diagnostic only. A draw is invisible only when every source
++ * vertex lies outside the same D3D homogeneous clip plane. Unsupported vertex
++ * shaders, blending, declarations and incomplete shadows are always treated as
++ * visible. Count only current producer batches whose every source draw is
++ * rejected; this is the submission reduction a real culler could guarantee. */
++static void d3d8_mgs2_visibility_draw(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable,
++        unsigned int start_vertex, unsigned int vertex_count,
++        BOOL compatible)
++{
++    const struct wined3d_stateblock_state *state = device->stateblock_state;
++    struct d3d8_vertex_declaration *decl;
++    struct d3d8_vertexbuffer *buffer;
++    unsigned int stream_idx, stride, left, position_offset, i, clip_and = 0x3f;
++    BOOL eligible = FALSE, culled = FALSE, current_merge, finite = TRUE;
++    float object[4], world[4], view[4], clip[4];
++
++    if (!d3d8_mgs2_visibility_census()
++            || d3d8_mgs2_visibility.frames % D3D8_MGS2_VISIBILITY_SAMPLE_PERIOD)
++        return;
++
++    ++d3d8_mgs2_visibility.draws;
++    if (!batchable)
++        ++d3d8_mgs2_visibility.source_unsupported;
++    else if (state->vs)
++        ++d3d8_mgs2_visibility.custom_shader;
++    else if (state->rs[WINED3D_RS_VERTEXBLEND]
++            || state->rs[WINED3D_RS_INDEXEDVERTEXBLENDENABLE])
++        ++d3d8_mgs2_visibility.vertex_blend;
++    else if (!d3d8_mgs2_vbo_source(device, primitive_type, start_vertex, vertex_count,
++            &stream_idx, &buffer, &stride, &left))
++        ++d3d8_mgs2_visibility.source_unsupported;
++    else
++    {
++        decl = wined3d_vertex_declaration_get_parent(state->vertex_declaration);
++        if (!d3d8_mgs2_visibility_position_offset(decl, stream_idx, &position_offset)
++                || position_offset > stride || sizeof(float) * 3 > stride - position_offset)
++            ++d3d8_mgs2_visibility.position_unsupported;
++        else if (buffer->mgs2_geometry_valid_overflow)
++            ++d3d8_mgs2_visibility.validity_overflow;
++        else if (!d3d8_mgs2_geometry_range_valid(buffer, left, left + vertex_count * stride))
++            ++d3d8_mgs2_visibility.invalid_coverage;
++        else
++        {
++            eligible = TRUE;
++            ++d3d8_mgs2_visibility.eligible;
++            for (i = 0; i < vertex_count; ++i)
++            {
++                memcpy(object, buffer->mgs2_snapshot + left + i * stride + position_offset,
++                        sizeof(float) * 3);
++                object[3] = 1.0f;
++                if (!isfinite(object[0]) || !isfinite(object[1]) || !isfinite(object[2]))
++                {
++                    finite = FALSE;
++                    break;
++                }
++                d3d8_mgs2_visibility_transform(world, object,
++                        &state->transforms[WINED3D_TS_WORLD]);
++                d3d8_mgs2_visibility_transform(view, world,
++                        &state->transforms[WINED3D_TS_VIEW]);
++                d3d8_mgs2_visibility_transform(clip, view,
++                        &state->transforms[WINED3D_TS_PROJECTION]);
++                if (!isfinite(clip[0]) || !isfinite(clip[1])
++                        || !isfinite(clip[2]) || !isfinite(clip[3]))
++                {
++                    finite = FALSE;
++                    break;
++                }
++                clip_and &= d3d8_mgs2_visibility_clip_code(clip);
++            }
++            if (!finite)
++                ++d3d8_mgs2_visibility.nonfinite;
++            else if (clip_and)
++            {
++                culled = TRUE;
++                ++d3d8_mgs2_visibility.culled_draws;
++            }
++        }
++    }
++
++    current_merge = d3d8_mgs2_visibility.have_last && compatible && !d3d8_mgs2_state_dirty
++            && d3d8_mgs2_visibility.current_run < D3D8_MGS2_DRAW_BATCH_MAX;
++    if (!current_merge)
++    {
++        d3d8_mgs2_visibility_finish_batch();
++        d3d8_mgs2_visibility.have_batch = TRUE;
++        d3d8_mgs2_visibility.batch_all_culled = eligible && culled;
++        d3d8_mgs2_visibility.current_run = 1;
++        ++d3d8_mgs2_visibility.batches;
++    }
++    else
++    {
++        ++d3d8_mgs2_visibility.current_run;
++        d3d8_mgs2_visibility.batch_all_culled &= eligible && culled;
++    }
++    d3d8_mgs2_visibility.have_last = TRUE;
++}
++
++static void d3d8_mgs2_visibility_present(void)
++{
++    double frames;
++
++    if (!d3d8_mgs2_visibility_census())
++        return;
++    if (!(d3d8_mgs2_visibility.frames % D3D8_MGS2_VISIBILITY_SAMPLE_PERIOD))
++    {
++        ++d3d8_mgs2_visibility.sampled_frames;
++        d3d8_mgs2_visibility_finish_batch();
++    }
++    ++d3d8_mgs2_visibility.frames;
++    d3d8_mgs2_visibility.have_last = FALSE;
++    d3d8_mgs2_visibility.current_run = 0;
++    if (d3d8_mgs2_visibility.frames < D3D8_MGS2_VISIBILITY_REPORT_FRAMES)
++        return;
++
++    frames = d3d8_mgs2_visibility.sampled_frames;
++    fprintf(stderr, "MGS2VISIBILITY: frames=%u sampled=%u source=%I64u %.2f/f "
++            "batches=%I64u %.2f/f eligible=%I64u %.2f/f culled=%I64u %.2f/f "
++            "removed_batches=%I64u %.2f/f custom_vs=%I64u blend=%I64u "
++            "position=%I64u source_bad=%I64u invalid=%I64u overflow=%I64u nonfinite=%I64u\n",
++            d3d8_mgs2_visibility.frames, d3d8_mgs2_visibility.sampled_frames,
++            d3d8_mgs2_visibility.draws, d3d8_mgs2_visibility.draws / frames,
++            d3d8_mgs2_visibility.batches, d3d8_mgs2_visibility.batches / frames,
++            d3d8_mgs2_visibility.eligible, d3d8_mgs2_visibility.eligible / frames,
++            d3d8_mgs2_visibility.culled_draws,
++            d3d8_mgs2_visibility.culled_draws / frames,
++            d3d8_mgs2_visibility.removed_batches,
++            d3d8_mgs2_visibility.removed_batches / frames,
++            d3d8_mgs2_visibility.custom_shader, d3d8_mgs2_visibility.vertex_blend,
++            d3d8_mgs2_visibility.position_unsupported,
++            d3d8_mgs2_visibility.source_unsupported,
++            d3d8_mgs2_visibility.invalid_coverage,
++            d3d8_mgs2_visibility.validity_overflow,
++            d3d8_mgs2_visibility.nonfinite);
++    fflush(stderr);
++    memset(&d3d8_mgs2_visibility, 0, sizeof(d3d8_mgs2_visibility));
++}
++
+ /* Copy a strip while its producer shadow is known to represent this draw.
+  * Delaying the copy until flush would race a later Lock that mutates the same
+  * shadow before the preceding draw packet reaches CSMT. */
+@@ -3698,7 +3962,7 @@
+ {
+     static int on = -1;
+     if (on == -1) on = d3d8_mgs2_env_on("MGS2_D3D8_VB_SNAPSHOT", FALSE)
+-            || d3d8_mgs2_geometry_repeat_census();
++            || d3d8_mgs2_shadow_coverage_census();
+     return on;
+ }
+ 
+

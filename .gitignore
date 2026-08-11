@@ -20,6 +20,7 @@ wine-11.0/
 *.log
 *.wav
 __pycache__/
+/handoff
 
 # Collector output: machine-specific, and a PC-run copy once got mistaken for
 # the console. Send the tarball, never commit it.
