@@ -99,8 +99,12 @@ export MGS2_GL_PBO=0
 export MGS2_GL_SHM_BUFFERS=2
 
 # Production renderer path: eviction-backed batching, proven direct hash lookup,
-# producer aggregation, and queue-owned uploads for MGS2's repeated GPU vertex
-# buffer NOOVERWRITE locks. Diagnostic profiles stay off in the shipping launcher.
+# producer aggregation, queue-owned uploads for MGS2's repeated GPU vertex
+# buffer NOOVERWRITE locks, and conservative fixed-function frustum culling.
+# The matched 1800 MHz A/B/A/B reduced frame time 49.43 -> 47.89 ms and
+# WineD3D batches 166.58 -> 136.81 per frame. Visual validation passed on the
+# measured heavy spot; MGS2_D3D8_VISIBILITY_CULL=0 is the immediate rollback.
+# Diagnostic polling and counters stay off in the shipping launcher.
 export MGS2_WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_batch16_setcache.dll}"
 export MGS2_BATCH="${MGS2_BATCH:-1}"
 export MGS2_BATCH_RESTART_HOIST="${MGS2_BATCH_RESTART_HOIST:-1}"
@@ -109,11 +113,14 @@ export MGS2_BATCH_TRIANGLES="${MGS2_BATCH_TRIANGLES:-0}"
 export MGS2_BATCH_STATS="${MGS2_BATCH_STATS:-0}"
 # Keep launch.sh's measured thermal ladder (1992 -> 1800 -> 1608 -> 1416).
 export WINEDEBUG="${WINEDEBUG:--all}"
-export MGS2_D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_producer_batch14_dirtyranges.dll}"
+export MGS2_D3D8_DLL="${MGS2_D3D8_DLL:-d3d8_producer_batch20_visibilitycull.dll}"
 export MGS2_D3D8_PRODUCER="${MGS2_D3D8_PRODUCER:-1}"
 export MGS2_D3D8_VB_SNAPSHOT="${MGS2_D3D8_VB_SNAPSHOT:-1}"
 export MGS2_D3D8_VB_DIRTY_AGGREGATE="${MGS2_D3D8_VB_DIRTY_AGGREGATE:-1}"
 export MGS2_D3D8_VB_CENSUS="${MGS2_D3D8_VB_CENSUS:-0}"
+export MGS2_D3D8_VISIBILITY_CULL="${MGS2_D3D8_VISIBILITY_CULL:-1}"
+export MGS2_D3D8_VISIBILITY_CULL_LIVE="${MGS2_D3D8_VISIBILITY_CULL_LIVE:-0}"
+export MGS2_D3D8_VISIBILITY_CULL_STATS="${MGS2_D3D8_VISIBILITY_CULL_STATS:-0}"
 export MGS2_CSMT_PROFILE="${MGS2_CSMT_PROFILE:-0}"
 export MGS2_D3D8_PROFILE="${MGS2_D3D8_PROFILE:-0}"
 export MGS2_D3D8_STATS="${MGS2_D3D8_STATS:-0}"

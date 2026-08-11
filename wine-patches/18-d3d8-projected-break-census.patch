@@ -1,0 +1,1059 @@
+--- a/dlls/d3d8/d3d8_private.h
++++ b/dlls/d3d8/d3d8_private.h
+@@ -321,6 +321,7 @@
+ extern void d3d8_mgs2_vb_census_present(void);
+ extern void d3d8_mgs2_vbo_census_present(void);
+ extern void d3d8_mgs2_barrier_census_present(void);
++extern void d3d8_mgs2_projected_barrier(struct d3d8_device *device, BOOL resource_mutation);
+ extern void d3d8_vertexbuffer_flush_snapshot(struct d3d8_vertexbuffer *buffer);
+ extern void d3d8_mgs2_flush_pending(struct d3d8_device *device);
+ 
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -23,7 +23,50 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d8);
+ 
++enum d3d8_mgs2_fingerprint_group
++{
++    D3D8_MGS2_FP_WORLD,
++    D3D8_MGS2_FP_MATERIAL,
++    D3D8_MGS2_FP_TEXTURE,
++    D3D8_MGS2_FP_RS_TSS_SAMPLER,
++    D3D8_MGS2_FP_SHADER_CONSTANTS,
++    D3D8_MGS2_FP_STREAM_VB,
++    D3D8_MGS2_FP_GROUP_COUNT,
++};
++
++#define D3D8_MGS2_FP_SLOT_TRANSFORM_BASE 0x00000000ull
++#define D3D8_MGS2_FP_SLOT_VS_CONST_BASE  0x00010000ull
++#define D3D8_MGS2_FP_SLOT_PS_CONST_BASE  0x00020000ull
++#define D3D8_MGS2_FP_SLOT_CLIP_BASE      0x00030000ull
++#define D3D8_MGS2_FP_SLOT_RS_BASE        0x00040000ull
++#define D3D8_MGS2_FP_SLOT_TSS_BASE       0x00050000ull
++#define D3D8_MGS2_FP_SLOT_SAMPLER_BASE   0x00060000ull
++#define D3D8_MGS2_FP_SLOT_TEXTURE_BASE   0x00070000ull
++#define D3D8_MGS2_FP_SLOT_STREAM_BASE    0x00080000ull
++#define D3D8_MGS2_FP_SLOT_LIGHT_BASE     0x00090000ull
++#define D3D8_MGS2_FP_SLOT_MATERIAL       0x000a0000ull
++#define D3D8_MGS2_FP_SLOT_VIEWPORT       0x000a0001ull
++#define D3D8_MGS2_FP_SLOT_SCISSOR        0x000a0002ull
++#define D3D8_MGS2_FP_SLOT_ALPHA_COVERAGE 0x000a0003ull
++#define D3D8_MGS2_FP_SLOT_VERTEX_DECL    0x000a0004ull
++#define D3D8_MGS2_FP_SLOT_VS             0x000a0005ull
++#define D3D8_MGS2_FP_SLOT_PS             0x000a0006ull
++#define D3D8_MGS2_FP_SLOT_INDEX          0x000a0007ull
++
+ static void d3d8_mgs2_mark_state_dirty(void);
++static void d3d8_mgs2_fingerprint_replace(struct d3d8_device *device,
++        enum d3d8_mgs2_fingerprint_group group, ULONGLONG slot,
++        const void *old_value, const void *new_value, size_t size);
++static void d3d8_mgs2_fingerprint_ensure(struct d3d8_device *device);
++static void d3d8_mgs2_fingerprint_resync(struct d3d8_device *device);
++static void d3d8_mgs2_fingerprint_track_light(struct d3d8_device *device, DWORD index);
++static void d3d8_mgs2_fingerprint_light_changed(struct d3d8_device *device, DWORD index,
++        const struct wined3d_light *old_light, BOOL old_enabled, BOOL old_present,
++        const struct wined3d_light *new_light, BOOL new_enabled, BOOL new_present);
++static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable);
++static void d3d8_mgs2_projected_batch_flushed(unsigned int source_draws);
++static void d3d8_mgs2_projected_census_present(struct d3d8_device *device);
+ void d3d8_mgs2_flush_pending(struct d3d8_device *device);
+ static void d3d8_mgs2_vbo_cleanup(struct d3d8_device *device);
+ static void d3d8_mgs2_vbo_present(struct d3d8_device *device);
+@@ -1045,6 +1088,7 @@
+     d3d8_mgs2_vb_census_present();
+     d3d8_mgs2_vbo_census_present();
+     d3d8_mgs2_barrier_census_present();
++    d3d8_mgs2_projected_census_present(device);
+ 
+     /* Fraps does not hook IDirect3DDevice8::Present regardless of the hotpatch
+      * attribute. It only hooks IDirect3DSwapChain8::Present. Yet it properly
+@@ -1418,6 +1462,7 @@
+     TRACE("iface %p, src_surface %p, src_rects %p, rect_count %u, dst_surface %p, dst_points %p.\n",
+             iface, src_surface, src_rects, rect_count, dst_surface, dst_points);
+ 
++    d3d8_mgs2_projected_barrier(device, TRUE);
+     wined3d_mutex_lock();
+     wined3d_texture_get_sub_resource_desc(src->wined3d_texture, src->sub_resource_idx, &wined3d_desc);
+     if (wined3d_desc.bind_flags & WINED3D_BIND_DEPTH_STENCIL)
+@@ -1514,6 +1559,7 @@
+         return D3DERR_INVALIDCALL;
+     }
+ 
++    d3d8_mgs2_projected_barrier(device, TRUE);
+     d3d8_mgs2_flush_pending(device);
+     wined3d_mutex_lock();
+     hr = wined3d_device_update_texture(device->wined3d_device,
+@@ -1541,6 +1587,7 @@
+         return D3DERR_INVALIDCALL;
+     }
+ 
++    d3d8_mgs2_projected_barrier(device, TRUE);
+     wined3d_mutex_lock();
+     hr = wined3d_swapchain_get_front_buffer_data(device->implicit_swapchain,
+             dst_impl->wined3d_texture, dst_impl->sub_resource_idx);
+@@ -1566,6 +1613,7 @@
+         return D3DERR_INVALIDCALL;
+     }
+ 
++    d3d8_mgs2_projected_barrier(device, FALSE);
+     d3d8_mgs2_flush_pending(device);
+     wined3d_mutex_lock();
+ 
+@@ -1703,6 +1751,7 @@
+ 
+     TRACE("iface %p.\n", iface);
+ 
++    d3d8_mgs2_projected_barrier(device, FALSE);
+     d3d8_mgs2_flush_pending(device);
+     wined3d_mutex_lock();
+     hr = wined3d_device_begin_scene(device->wined3d_device);
+@@ -1718,6 +1767,7 @@
+ 
+     TRACE("iface %p.\n", iface);
+ 
++    d3d8_mgs2_projected_barrier(device, FALSE);
+     d3d8_mgs2_flush_pending(device);
+     wined3d_mutex_lock();
+     hr = wined3d_device_end_scene(device->wined3d_device);
+@@ -1748,6 +1798,7 @@
+         rect_count = 0;
+     }
+ 
++    d3d8_mgs2_projected_barrier(device, FALSE);
+     d3d8_mgs2_flush_pending(device);
+     wined3d_mutex_lock();
+     wined3d_stateblock_apply_clear_state(device->state, device->wined3d_device);
+@@ -1761,14 +1812,19 @@
+         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    enum wined3d_transform_state mapped = wined3d_transform_state_from_d3d(state);
+     d3d8_mgs2_mark_state_dirty();
+ 
+     TRACE("iface %p, state %#x, matrix %p.\n", iface, state, matrix);
+ 
+     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
+     wined3d_mutex_lock();
+-    wined3d_stateblock_set_transform(device->update_state,
+-            wined3d_transform_state_from_d3d(state), (const struct wined3d_matrix *)matrix);
++    d3d8_mgs2_fingerprint_replace(device, mapped >= WINED3D_TS_WORLD
++            ? D3D8_MGS2_FP_WORLD : D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_TRANSFORM_BASE + mapped,
++            &device->stateblock_state->transforms[mapped], matrix, sizeof(*matrix));
++    wined3d_stateblock_set_transform(device->update_state, mapped,
++            (const struct wined3d_matrix *)matrix);
+     wined3d_mutex_unlock();
+ 
+     return D3D_OK;
+@@ -1793,13 +1849,21 @@
+         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    enum wined3d_transform_state mapped = wined3d_transform_state_from_d3d(state);
++    struct wined3d_matrix old_matrix;
+ 
+     TRACE("iface %p, state %#x, matrix %p.\n", iface, state, matrix);
+ 
+     /* Note: D3DMATRIX is compatible with struct wined3d_matrix. */
+     wined3d_mutex_lock();
+-    wined3d_stateblock_multiply_transform(device->state,
+-            wined3d_transform_state_from_d3d(state), (const struct wined3d_matrix *)matrix);
++    d3d8_mgs2_fingerprint_ensure(device);
++    old_matrix = device->stateblock_state->transforms[mapped];
++    wined3d_stateblock_multiply_transform(device->state, mapped,
++            (const struct wined3d_matrix *)matrix);
++    d3d8_mgs2_fingerprint_replace(device, mapped >= WINED3D_TS_WORLD
++            ? D3D8_MGS2_FP_WORLD : D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_TRANSFORM_BASE + mapped, &old_matrix,
++            &device->stateblock_state->transforms[mapped], sizeof(old_matrix));
+     wined3d_mutex_unlock();
+ 
+     return D3D_OK;
+@@ -1840,6 +1904,9 @@
+     vp.min_z = viewport->MinZ;
+     vp.max_z = viewport->MaxZ;
+ 
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_RS_TSS_SAMPLER,
++            D3D8_MGS2_FP_SLOT_VIEWPORT, &device->stateblock_state->viewport,
++            &vp, sizeof(vp));
+     wined3d_stateblock_set_viewport(device->update_state, &vp);
+     wined3d_mutex_unlock();
+ 
+@@ -1876,6 +1943,9 @@
+ 
+     /* Note: D3DMATERIAL8 is compatible with struct wined3d_material. */
+     wined3d_mutex_lock();
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_MATERIAL,
++            D3D8_MGS2_FP_SLOT_MATERIAL, &device->stateblock_state->material,
++            material, sizeof(*material));
+     wined3d_stateblock_set_material(device->update_state, (const struct wined3d_material *)material);
+     wined3d_mutex_unlock();
+ 
+@@ -1899,6 +1969,9 @@
+ static HRESULT WINAPI d3d8_device_SetLight(IDirect3DDevice8 *iface, DWORD index, const D3DLIGHT8 *light)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    struct wined3d_light old_light, new_light;
++    BOOL old_enabled = FALSE, new_enabled = FALSE;
++    BOOL old_present, new_present;
+     d3d8_mgs2_mark_state_dirty();
+     HRESULT hr;
+ 
+@@ -1906,7 +1979,16 @@
+ 
+     /* Note: D3DLIGHT8 is compatible with struct wined3d_light. */
+     wined3d_mutex_lock();
++    d3d8_mgs2_fingerprint_track_light(device, index);
++    d3d8_mgs2_fingerprint_ensure(device);
++    old_present = SUCCEEDED(wined3d_stateblock_get_light(device->state,
++            index, &old_light, &old_enabled));
+     hr = wined3d_stateblock_set_light(device->update_state, index, (const struct wined3d_light *)light);
++    new_present = SUCCEEDED(wined3d_stateblock_get_light(device->state,
++            index, &new_light, &new_enabled));
++    if (SUCCEEDED(hr))
++        d3d8_mgs2_fingerprint_light_changed(device, index,
++                &old_light, old_enabled, old_present, &new_light, new_enabled, new_present);
+     wined3d_mutex_unlock();
+ 
+     return hr;
+@@ -1931,12 +2013,24 @@
+ static HRESULT WINAPI d3d8_device_LightEnable(IDirect3DDevice8 *iface, DWORD index, BOOL enable)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    struct wined3d_light old_light, new_light;
++    BOOL old_enabled = FALSE, new_enabled = FALSE;
++    BOOL old_present, new_present;
+     HRESULT hr;
+ 
+     TRACE("iface %p, index %lu, enable %#x.\n", iface, index, enable);
+ 
+     wined3d_mutex_lock();
++    d3d8_mgs2_fingerprint_track_light(device, index);
++    d3d8_mgs2_fingerprint_ensure(device);
++    old_present = SUCCEEDED(wined3d_stateblock_get_light(device->state,
++            index, &old_light, &old_enabled));
+     hr = wined3d_stateblock_set_light_enable(device->update_state, index, enable);
++    new_present = SUCCEEDED(wined3d_stateblock_get_light(device->state,
++            index, &new_light, &new_enabled));
++    if (SUCCEEDED(hr))
++        d3d8_mgs2_fingerprint_light_changed(device, index,
++                &old_light, old_enabled, old_present, &new_light, new_enabled, new_present);
+     wined3d_mutex_unlock();
+ 
+     return hr;
+@@ -1966,6 +2060,11 @@
+     TRACE("iface %p, index %lu, plane %p.\n", iface, index, plane);
+ 
+     wined3d_mutex_lock();
++    if (index < ARRAY_SIZE(device->stateblock_state->clip_planes))
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_CLIP_BASE + index,
++                &device->stateblock_state->clip_planes[index], plane,
++                sizeof(device->stateblock_state->clip_planes[index]));
+     hr = wined3d_stateblock_set_clip_plane(device->update_state, index, (const struct wined3d_vec4 *)plane);
+     wined3d_mutex_unlock();
+ 
+@@ -2139,6 +2238,479 @@
+     d3d8_mgs2_barrier_census.last_report = now;
+ }
+ 
++/* Projected batch-break census.
++ *
++ * The older barrier census above observes individual redundant setters. It
++ * cannot see a sequence such as A -> B -> A between two draws, although the
++ * effective state at both draw boundaries is identical. Keep a reversible
++ * 128-bit fingerprint instead: each setter XORs out the old slot hash and
++ * XORs in the new one. Six independent groups let the draw boundary classify
++ * both exact net equality and a single liftable state family.
++ *
++ * This is diagnostic-only, off by default, integer-only on the draw path, and
++ * emits two aggregate lines after exactly 300 Presents. It never changes the
++ * existing dirty/apply/flush decisions. */
++#define D3D8_MGS2_PROJECTED_REPORT_FRAMES 300
++#define D3D8_MGS2_PROJECTED_LIGHTS 64
++struct d3d8_mgs2_fingerprint
++{
++    ULONGLONG lo, hi;
++};
++
++enum d3d8_mgs2_projected_break
++{
++    D3D8_MGS2_BREAK_NET_STATE_SAME,
++    D3D8_MGS2_BREAK_WORLD_ONLY,
++    D3D8_MGS2_BREAK_MATERIAL_ONLY,
++    D3D8_MGS2_BREAK_TEXTURE_ONLY,
++    D3D8_MGS2_BREAK_RS_TSS_SAMPLER,
++    D3D8_MGS2_BREAK_SHADER_CONSTANTS,
++    D3D8_MGS2_BREAK_STREAM_VB,
++    D3D8_MGS2_BREAK_RESOURCE_MUTATION,
++    D3D8_MGS2_BREAK_HARD_ORDER_BARRIER,
++    D3D8_MGS2_BREAK_MIXED_STATE,
++    D3D8_MGS2_BREAK_COUNT,
++};
++
++enum d3d8_mgs2_pending_barrier
++{
++    D3D8_MGS2_PENDING_BARRIER_NONE,
++    D3D8_MGS2_PENDING_BARRIER_RESOURCE,
++    D3D8_MGS2_PENDING_BARRIER_HARD,
++};
++
++static struct
++{
++    struct d3d8_device *device;
++    struct d3d8_mgs2_fingerprint current[D3D8_MGS2_FP_GROUP_COUNT];
++    struct d3d8_mgs2_fingerprint last_draw[D3D8_MGS2_FP_GROUP_COUNT];
++    DWORD light_indices[D3D8_MGS2_PROJECTED_LIGHTS];
++    unsigned int light_count;
++    BOOL light_overflow;
++    BOOL fingerprint_valid;
++    BOOL have_last_draw;
++    BOOL last_batchable;
++    D3DPRIMITIVETYPE last_primitive;
++    enum d3d8_mgs2_pending_barrier pending_barrier;
++    unsigned int projected_run[D3D8_MGS2_BREAK_STREAM_VB + 1];
++    ULONGLONG boundaries[D3D8_MGS2_BREAK_COUNT];
++    ULONGLONG projected_draws[D3D8_MGS2_BREAK_STREAM_VB + 1];
++    ULONGLONG source_draws, actual_batches;
++    ULONGLONG net_same_dirty, changed_without_dirty;
++    unsigned int frames;
++} d3d8_mgs2_projected;
++
++static BOOL d3d8_mgs2_projected_census_on(void)
++{
++    static int on = -1;
++
++    if (on == -1)
++        on = d3d8_mgs2_env_on("MGS2_D3D8_PROJECTED_BREAK_CENSUS", FALSE);
++    return on;
++}
++
++static ULONGLONG d3d8_mgs2_fingerprint_hash(ULONGLONG seed, ULONGLONG slot,
++        const void *value, size_t size)
++{
++    const BYTE *bytes = value;
++    size_t i;
++
++    seed ^= slot + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
++    for (i = 0; i < size; ++i)
++    {
++        seed ^= bytes[i];
++        seed *= 0x100000001b3ull;
++    }
++    seed ^= seed >> 33;
++    seed *= 0xff51afd7ed558ccdull;
++    seed ^= seed >> 33;
++    return seed;
++}
++
++static struct d3d8_mgs2_fingerprint d3d8_mgs2_fingerprint_slot(
++        enum d3d8_mgs2_fingerprint_group group, ULONGLONG slot,
++        const void *value, size_t size)
++{
++    struct d3d8_mgs2_fingerprint fp;
++
++    slot ^= (ULONGLONG)group << 56;
++    fp.lo = d3d8_mgs2_fingerprint_hash(0xcbf29ce484222325ull, slot, value, size);
++    fp.hi = d3d8_mgs2_fingerprint_hash(0x84222325cbf29ce4ull,
++            slot ^ 0xd6e8feb86659fd93ull, value, size);
++    return fp;
++}
++
++static void d3d8_mgs2_fingerprint_add(enum d3d8_mgs2_fingerprint_group group,
++        ULONGLONG slot, const void *value, size_t size)
++{
++    struct d3d8_mgs2_fingerprint fp = d3d8_mgs2_fingerprint_slot(group, slot, value, size);
++
++    d3d8_mgs2_projected.current[group].lo ^= fp.lo;
++    d3d8_mgs2_projected.current[group].hi ^= fp.hi;
++}
++
++static BOOL d3d8_mgs2_fingerprint_equal(const struct d3d8_mgs2_fingerprint *a,
++        const struct d3d8_mgs2_fingerprint *b)
++{
++    return a->lo == b->lo && a->hi == b->hi;
++}
++
++static void d3d8_mgs2_projected_set_device(struct d3d8_device *device)
++{
++    if (d3d8_mgs2_projected.device == device)
++        return;
++
++    memset(&d3d8_mgs2_projected, 0, sizeof(d3d8_mgs2_projected));
++    d3d8_mgs2_projected.device = device;
++}
++
++static void d3d8_mgs2_fingerprint_track_light(struct d3d8_device *device, DWORD index)
++{
++    unsigned int i;
++
++    if (!d3d8_mgs2_projected_census_on())
++        return;
++    d3d8_mgs2_projected_set_device(device);
++    for (i = 0; i < d3d8_mgs2_projected.light_count; ++i)
++        if (d3d8_mgs2_projected.light_indices[i] == index)
++            return;
++    if (d3d8_mgs2_projected.light_count == ARRAY_SIZE(d3d8_mgs2_projected.light_indices))
++    {
++        d3d8_mgs2_projected.light_overflow = TRUE;
++        return;
++    }
++    d3d8_mgs2_projected.light_indices[d3d8_mgs2_projected.light_count++] = index;
++}
++
++static void d3d8_mgs2_fingerprint_resync(struct d3d8_device *device)
++{
++    const struct wined3d_stateblock_state *state;
++    unsigned int i, j;
++
++    if (!d3d8_mgs2_projected_census_on())
++        return;
++    d3d8_mgs2_projected_set_device(device);
++    state = device->stateblock_state;
++    memset(d3d8_mgs2_projected.current, 0, sizeof(d3d8_mgs2_projected.current));
++
++    for (i = 0; i <= WINED3D_HIGHEST_TRANSFORM_STATE; ++i)
++        d3d8_mgs2_fingerprint_add(i >= WINED3D_TS_WORLD
++                ? D3D8_MGS2_FP_WORLD : D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_TRANSFORM_BASE + i,
++                &state->transforms[i], sizeof(state->transforms[i]));
++
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_VERTEX_DECL,
++            &state->vertex_declaration, sizeof(state->vertex_declaration));
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_VS, &state->vs, sizeof(state->vs));
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_PS, &state->ps, sizeof(state->ps));
++    for (i = 0; i < ARRAY_SIZE(state->vs_consts_f); ++i)
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_VS_CONST_BASE + i,
++                &state->vs_consts_f[i], sizeof(state->vs_consts_f[i]));
++    for (i = 0; i < ARRAY_SIZE(state->ps_consts_f); ++i)
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_PS_CONST_BASE + i,
++                &state->ps_consts_f[i], sizeof(state->ps_consts_f[i]));
++    for (i = 0; i < ARRAY_SIZE(state->clip_planes); ++i)
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_CLIP_BASE + i,
++                &state->clip_planes[i], sizeof(state->clip_planes[i]));
++
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_MATERIAL,
++            D3D8_MGS2_FP_SLOT_MATERIAL, &state->material, sizeof(state->material));
++    for (i = 0; i < d3d8_mgs2_projected.light_count; ++i)
++    {
++        struct
++        {
++            struct wined3d_light light;
++            BOOL enabled;
++        } value;
++        HRESULT hr;
++
++        memset(&value, 0, sizeof(value));
++        hr = wined3d_stateblock_get_light(device->state,
++                d3d8_mgs2_projected.light_indices[i], &value.light, &value.enabled);
++        if (SUCCEEDED(hr))
++            d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_MATERIAL,
++                    D3D8_MGS2_FP_SLOT_LIGHT_BASE + d3d8_mgs2_projected.light_indices[i],
++                    &value, sizeof(value));
++    }
++
++    for (i = 0; i < ARRAY_SIZE(state->textures); ++i)
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_TEXTURE,
++                D3D8_MGS2_FP_SLOT_TEXTURE_BASE + i,
++                &state->textures[i], sizeof(state->textures[i]));
++
++    for (i = 0; i < ARRAY_SIZE(state->rs); ++i)
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_RS_TSS_SAMPLER,
++                D3D8_MGS2_FP_SLOT_RS_BASE + i, &state->rs[i], sizeof(state->rs[i]));
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_RS_TSS_SAMPLER,
++            D3D8_MGS2_FP_SLOT_ALPHA_COVERAGE,
++            &state->alpha_to_coverage, sizeof(state->alpha_to_coverage));
++    for (i = 0; i < ARRAY_SIZE(state->texture_states); ++i)
++        for (j = 0; j < ARRAY_SIZE(state->texture_states[i]); ++j)
++            d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_RS_TSS_SAMPLER,
++                    D3D8_MGS2_FP_SLOT_TSS_BASE + i * 256 + j,
++                    &state->texture_states[i][j], sizeof(state->texture_states[i][j]));
++    for (i = 0; i < ARRAY_SIZE(state->sampler_states); ++i)
++        for (j = 0; j < ARRAY_SIZE(state->sampler_states[i]); ++j)
++            d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_RS_TSS_SAMPLER,
++                    D3D8_MGS2_FP_SLOT_SAMPLER_BASE + i * 256 + j,
++                    &state->sampler_states[i][j], sizeof(state->sampler_states[i][j]));
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_RS_TSS_SAMPLER,
++            D3D8_MGS2_FP_SLOT_VIEWPORT, &state->viewport, sizeof(state->viewport));
++    d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_RS_TSS_SAMPLER,
++            D3D8_MGS2_FP_SLOT_SCISSOR, &state->scissor_rect, sizeof(state->scissor_rect));
++
++    for (i = 0; i < ARRAY_SIZE(state->streams); ++i)
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_STREAM_VB,
++                D3D8_MGS2_FP_SLOT_STREAM_BASE + i,
++                &state->streams[i], sizeof(state->streams[i]));
++    {
++        struct
++        {
++            struct wined3d_buffer *buffer;
++            enum wined3d_format_id format;
++            int base_vertex_index;
++        } value;
++
++        memset(&value, 0, sizeof(value));
++        value.buffer = state->index_buffer;
++        value.format = state->index_format;
++        value.base_vertex_index = state->base_vertex_index;
++        d3d8_mgs2_fingerprint_add(D3D8_MGS2_FP_STREAM_VB,
++                D3D8_MGS2_FP_SLOT_INDEX, &value, sizeof(value));
++    }
++    d3d8_mgs2_projected.fingerprint_valid = TRUE;
++}
++
++static void d3d8_mgs2_fingerprint_replace(struct d3d8_device *device,
++        enum d3d8_mgs2_fingerprint_group group, ULONGLONG slot,
++        const void *old_value, const void *new_value, size_t size)
++{
++    struct d3d8_mgs2_fingerprint old_fp, new_fp;
++
++    if (!d3d8_mgs2_projected_census_on() || device->recording)
++        return;
++    d3d8_mgs2_fingerprint_ensure(device);
++    old_fp = d3d8_mgs2_fingerprint_slot(group, slot, old_value, size);
++    new_fp = d3d8_mgs2_fingerprint_slot(group, slot, new_value, size);
++    d3d8_mgs2_projected.current[group].lo ^= old_fp.lo ^ new_fp.lo;
++    d3d8_mgs2_projected.current[group].hi ^= old_fp.hi ^ new_fp.hi;
++}
++
++static void d3d8_mgs2_fingerprint_ensure(struct d3d8_device *device)
++{
++    if (d3d8_mgs2_projected_census_on()
++            && (!d3d8_mgs2_projected.fingerprint_valid
++            || d3d8_mgs2_projected.device != device))
++        d3d8_mgs2_fingerprint_resync(device);
++}
++
++static void d3d8_mgs2_fingerprint_light_changed(struct d3d8_device *device, DWORD index,
++        const struct wined3d_light *old_light, BOOL old_enabled, BOOL old_present,
++        const struct wined3d_light *new_light, BOOL new_enabled, BOOL new_present)
++{
++    struct
++    {
++        struct wined3d_light light;
++        BOOL enabled;
++    } old_value, new_value;
++    struct d3d8_mgs2_fingerprint fp;
++
++    if (!d3d8_mgs2_projected_census_on() || device->recording)
++        return;
++    d3d8_mgs2_fingerprint_ensure(device);
++    memset(&old_value, 0, sizeof(old_value));
++    memset(&new_value, 0, sizeof(new_value));
++    if (old_present)
++    {
++        old_value.light = *old_light;
++        old_value.enabled = old_enabled;
++        fp = d3d8_mgs2_fingerprint_slot(D3D8_MGS2_FP_MATERIAL,
++                D3D8_MGS2_FP_SLOT_LIGHT_BASE + index, &old_value, sizeof(old_value));
++        d3d8_mgs2_projected.current[D3D8_MGS2_FP_MATERIAL].lo ^= fp.lo;
++        d3d8_mgs2_projected.current[D3D8_MGS2_FP_MATERIAL].hi ^= fp.hi;
++    }
++    if (new_present)
++    {
++        new_value.light = *new_light;
++        new_value.enabled = new_enabled;
++        fp = d3d8_mgs2_fingerprint_slot(D3D8_MGS2_FP_MATERIAL,
++                D3D8_MGS2_FP_SLOT_LIGHT_BASE + index, &new_value, sizeof(new_value));
++        d3d8_mgs2_projected.current[D3D8_MGS2_FP_MATERIAL].lo ^= fp.lo;
++        d3d8_mgs2_projected.current[D3D8_MGS2_FP_MATERIAL].hi ^= fp.hi;
++    }
++}
++
++void d3d8_mgs2_projected_barrier(struct d3d8_device *device, BOOL resource_mutation)
++{
++    if (!d3d8_mgs2_projected_census_on())
++        return;
++    d3d8_mgs2_projected_set_device(device);
++    if (!d3d8_mgs2_projected.have_last_draw)
++        return;
++    if (!resource_mutation || d3d8_mgs2_projected.pending_barrier == D3D8_MGS2_PENDING_BARRIER_HARD)
++        d3d8_mgs2_projected.pending_barrier = D3D8_MGS2_PENDING_BARRIER_HARD;
++    else
++        d3d8_mgs2_projected.pending_barrier = D3D8_MGS2_PENDING_BARRIER_RESOURCE;
++}
++
++static unsigned int d3d8_mgs2_projected_diff_mask(void)
++{
++    unsigned int i, mask = 0;
++
++    for (i = 0; i < D3D8_MGS2_FP_GROUP_COUNT; ++i)
++        if (!d3d8_mgs2_fingerprint_equal(&d3d8_mgs2_projected.current[i],
++                &d3d8_mgs2_projected.last_draw[i]))
++            mask |= 1u << i;
++    return mask;
++}
++
++static enum d3d8_mgs2_projected_break d3d8_mgs2_projected_classify(unsigned int diff_mask)
++{
++    unsigned int group;
++
++    if (!diff_mask)
++        return D3D8_MGS2_BREAK_NET_STATE_SAME;
++    if (diff_mask & (diff_mask - 1))
++        return D3D8_MGS2_BREAK_MIXED_STATE;
++    group = wined3d_bit_scan(&diff_mask);
++    return D3D8_MGS2_BREAK_WORLD_ONLY + group;
++}
++
++static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
++        D3DPRIMITIVETYPE primitive_type, BOOL batchable)
++{
++    enum d3d8_mgs2_projected_break kind = D3D8_MGS2_BREAK_HARD_ORDER_BARRIER;
++    unsigned int i, diff_mask = 0;
++    BOOL compatible = FALSE;
++
++    if (!d3d8_mgs2_projected_census_on())
++        return;
++    d3d8_mgs2_fingerprint_ensure(device);
++    ++d3d8_mgs2_projected.source_draws;
++
++    if (d3d8_mgs2_projected.have_last_draw)
++    {
++        if (d3d8_mgs2_projected.pending_barrier == D3D8_MGS2_PENDING_BARRIER_RESOURCE)
++            kind = D3D8_MGS2_BREAK_RESOURCE_MUTATION;
++        else if (d3d8_mgs2_projected.pending_barrier == D3D8_MGS2_PENDING_BARRIER_HARD
++                || !batchable || !d3d8_mgs2_projected.last_batchable
++                || primitive_type != d3d8_mgs2_projected.last_primitive)
++            kind = D3D8_MGS2_BREAK_HARD_ORDER_BARRIER;
++        else
++        {
++            diff_mask = d3d8_mgs2_projected_diff_mask();
++            kind = d3d8_mgs2_projected_classify(diff_mask);
++            compatible = TRUE;
++            if (!diff_mask && d3d8_mgs2_state_dirty)
++                ++d3d8_mgs2_projected.net_same_dirty;
++            else if (diff_mask && !d3d8_mgs2_state_dirty)
++                ++d3d8_mgs2_projected.changed_without_dirty;
++        }
++        ++d3d8_mgs2_projected.boundaries[kind];
++    }
++
++    for (i = 0; i <= D3D8_MGS2_BREAK_STREAM_VB; ++i)
++    {
++        unsigned int allowed = i ? 1u << (i - 1) : 0;
++        BOOL merge = d3d8_mgs2_projected.have_last_draw && compatible
++                && (!diff_mask || diff_mask == allowed)
++                && d3d8_mgs2_projected.projected_run[i] < D3D8_MGS2_DRAW_BATCH_MAX;
++
++        if (merge)
++            ++d3d8_mgs2_projected.projected_run[i];
++        else
++        {
++            ++d3d8_mgs2_projected.projected_draws[i];
++            d3d8_mgs2_projected.projected_run[i] = 1;
++        }
++    }
++
++    if (!batchable)
++        ++d3d8_mgs2_projected.actual_batches;
++    memcpy(d3d8_mgs2_projected.last_draw, d3d8_mgs2_projected.current,
++            sizeof(d3d8_mgs2_projected.last_draw));
++    d3d8_mgs2_projected.have_last_draw = TRUE;
++    d3d8_mgs2_projected.last_batchable = batchable;
++    d3d8_mgs2_projected.last_primitive = primitive_type;
++    d3d8_mgs2_projected.pending_barrier = D3D8_MGS2_PENDING_BARRIER_NONE;
++}
++
++static void d3d8_mgs2_projected_batch_flushed(unsigned int source_draws)
++{
++    if (source_draws && d3d8_mgs2_projected_census_on())
++        ++d3d8_mgs2_projected.actual_batches;
++}
++
++static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
++{
++    unsigned int i;
++    double frames;
++
++    if (!d3d8_mgs2_projected_census_on())
++        return;
++    d3d8_mgs2_projected_set_device(device);
++    ++d3d8_mgs2_projected.frames;
++    d3d8_mgs2_projected.have_last_draw = FALSE;
++    d3d8_mgs2_projected.pending_barrier = D3D8_MGS2_PENDING_BARRIER_NONE;
++    memset(d3d8_mgs2_projected.projected_run, 0, sizeof(d3d8_mgs2_projected.projected_run));
++    if (d3d8_mgs2_projected.frames < D3D8_MGS2_PROJECTED_REPORT_FRAMES)
++        return;
++
++    frames = d3d8_mgs2_projected.frames;
++    fprintf(stderr, "MGS2PROJECTED: frames=%u source=%I64u %.2f/f actual_batches=%I64u %.2f/f "
++            "projected_same=%I64u %.2f/f world=%I64u %.2f/f material=%I64u %.2f/f "
++            "texture=%I64u %.2f/f rstss=%I64u %.2f/f shader=%I64u %.2f/f stream=%I64u %.2f/f\n",
++            d3d8_mgs2_projected.frames,
++            d3d8_mgs2_projected.source_draws, d3d8_mgs2_projected.source_draws / frames,
++            d3d8_mgs2_projected.actual_batches, d3d8_mgs2_projected.actual_batches / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_NET_STATE_SAME],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_NET_STATE_SAME] / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_WORLD_ONLY],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_WORLD_ONLY] / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_MATERIAL_ONLY],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_MATERIAL_ONLY] / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_TEXTURE_ONLY],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_TEXTURE_ONLY] / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_RS_TSS_SAMPLER],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_RS_TSS_SAMPLER] / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_SHADER_CONSTANTS],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_SHADER_CONSTANTS] / frames,
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_STREAM_VB],
++            d3d8_mgs2_projected.projected_draws[D3D8_MGS2_BREAK_STREAM_VB] / frames);
++    fprintf(stderr, "MGS2PROJECTED_BREAKS: same=%I64u world=%I64u material=%I64u texture=%I64u "
++            "rstss=%I64u shader=%I64u stream=%I64u resource=%I64u hard=%I64u mixed=%I64u "
++            "same_dirty=%I64u changed_clean=%I64u light_overflow=%u\n",
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_NET_STATE_SAME],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_WORLD_ONLY],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_MATERIAL_ONLY],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_TEXTURE_ONLY],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_RS_TSS_SAMPLER],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_SHADER_CONSTANTS],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_STREAM_VB],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_RESOURCE_MUTATION],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_HARD_ORDER_BARRIER],
++            d3d8_mgs2_projected.boundaries[D3D8_MGS2_BREAK_MIXED_STATE],
++            d3d8_mgs2_projected.net_same_dirty,
++            d3d8_mgs2_projected.changed_without_dirty,
++            d3d8_mgs2_projected.light_overflow);
++    fflush(stderr);
++
++    d3d8_mgs2_projected.frames = 0;
++    d3d8_mgs2_projected.source_draws = 0;
++    d3d8_mgs2_projected.actual_batches = 0;
++    d3d8_mgs2_projected.net_same_dirty = 0;
++    d3d8_mgs2_projected.changed_without_dirty = 0;
++    memset(d3d8_mgs2_projected.boundaries, 0, sizeof(d3d8_mgs2_projected.boundaries));
++    for (i = 0; i <= D3D8_MGS2_BREAK_STREAM_VB; ++i)
++        d3d8_mgs2_projected.projected_draws[i] = 0;
++}
++
+ #define D3D8_MGS2_VB_CENSUS_MAX_BUFFERS 64
+ static struct
+ {
+@@ -2688,6 +3260,7 @@
+     if (!d3d8_mgs2_producer() || !d3d8_mgs2_pending.count)
+         return;
+ 
++    d3d8_mgs2_projected_batch_flushed(d3d8_mgs2_pending.count);
+     if (!d3d8_mgs2_vbo_flush(device))
+         wined3d_device_context_draw_batch(device->immediate_context,
+                 wined3d_primitive_type_from_d3d(d3d8_mgs2_pending.primitive_type), 0,
+@@ -2876,6 +3449,10 @@
+     }
+ 
+     wined3d_mutex_lock();
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_RS_TSS_SAMPLER,
++            D3D8_MGS2_FP_SLOT_RS_BASE + wined3d_render_state_from_d3d(state),
++            &device->stateblock_state->rs[wined3d_render_state_from_d3d(state)],
++            &value, sizeof(value));
+     wined3d_stateblock_set_render_state(device->update_state, wined3d_render_state_from_d3d(state), value);
+     if (state == D3DRS_POINTSIZE && value == D3D8_RESZ_CODE)
+         resolve_depth_buffer(device);
+@@ -3001,6 +3578,7 @@
+         return D3DERR_INVALIDCALL;
+     }
+     wined3d_stateblock_apply(stateblock, device->state);
++    d3d8_mgs2_fingerprint_resync(device);
+     device->sysmem_vb = 0;
+     state = device->stateblock_state;
+     for (i = 0; i < D3D8_MAX_STREAMS; ++i)
+@@ -3189,14 +3767,19 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     d3d8_mgs2_mark_state_dirty();
+     struct d3d8_texture *texture_impl;
++    struct wined3d_texture *new_texture;
+ 
+     TRACE("iface %p, stage %lu, texture %p.\n", iface, stage, texture);
+ 
+     texture_impl = unsafe_impl_from_IDirect3DBaseTexture8(texture);
++    new_texture = texture_impl ? d3d8_texture_get_draw_texture(texture_impl) : NULL;
+ 
+     wined3d_mutex_lock();
+-    wined3d_stateblock_set_texture(device->update_state, stage,
+-            texture_impl ? d3d8_texture_get_draw_texture(texture_impl) : NULL);
++    if (stage < ARRAY_SIZE(device->stateblock_state->textures))
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_TEXTURE,
++                D3D8_MGS2_FP_SLOT_TEXTURE_BASE + stage,
++                &device->stateblock_state->textures[stage], &new_texture, sizeof(new_texture));
++    wined3d_stateblock_set_texture(device->update_state, stage, new_texture);
+     wined3d_mutex_unlock();
+ 
+     return D3D_OK;
+@@ -3317,9 +3900,23 @@
+ 
+     wined3d_mutex_lock();
+     if (l->sampler_state)
++    {
++        if (stage < ARRAY_SIZE(device->stateblock_state->sampler_states))
++            d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_RS_TSS_SAMPLER,
++                    D3D8_MGS2_FP_SLOT_SAMPLER_BASE + stage * 256 + l->u.sampler_state,
++                    &device->stateblock_state->sampler_states[stage][l->u.sampler_state],
++                    &value, sizeof(value));
+         wined3d_stateblock_set_sampler_state(device->update_state, stage, l->u.sampler_state, value);
++    }
+     else
++    {
++        if (stage < ARRAY_SIZE(device->stateblock_state->texture_states))
++            d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_RS_TSS_SAMPLER,
++                    D3D8_MGS2_FP_SLOT_TSS_BASE + stage * 256 + l->u.texture_state,
++                    &device->stateblock_state->texture_states[stage][l->u.texture_state],
++                    &value, sizeof(value));
+         wined3d_stateblock_set_texture_stage_state(device->update_state, stage, l->u.texture_state, value);
++    }
+     wined3d_mutex_unlock();
+ 
+     return D3D_OK;
+@@ -3557,6 +4154,7 @@
+ 
+     vertex_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
++    d3d8_mgs2_projected_draw(device, primitive_type, TRUE);
+     d3d8_mgs2_vbo_census_draw(device, primitive_type, start_vertex, vertex_count);
+     if (d3d8_mgs2_producer() && d3d8_mgs2_pending.count
+             && (d3d8_mgs2_state_dirty
+@@ -3638,6 +4236,7 @@
+ 
+     index_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
++    d3d8_mgs2_projected_draw(device, primitive_type, FALSE);
+     d3d8_mgs2_flush_pending(device);
+     d3d8_device_flush_snapshot_vertex_buffers(device);
+     if (!device->stateblock_state->index_buffer)
+@@ -3706,6 +4305,7 @@
+ 
+     wined3d_mutex_lock();
+ 
++    d3d8_mgs2_projected_draw(device, primitive_type, FALSE);
+     d3d8_mgs2_flush_pending(device);
+ 
+     if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device,
+@@ -3760,6 +4360,7 @@
+ 
+     wined3d_mutex_lock();
+ 
++    d3d8_mgs2_projected_draw(device, primitive_type, FALSE);
+     if (FAILED(hr = wined3d_streaming_buffer_upload(device->wined3d_device, &device->vertex_buffer,
+             (char *)vertex_data + min_vertex_idx * vertex_stride, vtx_size, vertex_stride, &vb_pos)))
+         goto done;
+@@ -3973,11 +4574,21 @@
+ 
+     if (VS_HIGHESTFIXEDFXF >= shader)
+     {
++        struct wined3d_vertex_declaration *new_declaration;
++        struct wined3d_shader *new_shader = NULL;
++
+         TRACE("Setting FVF, %#lx\n", shader);
+ 
+         wined3d_mutex_lock();
++        new_declaration = d3d8_device_get_fvf_declaration(device, shader)->wined3d_vertex_declaration;
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_VERTEX_DECL, &device->stateblock_state->vertex_declaration,
++                &new_declaration, sizeof(new_declaration));
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_VS, &device->stateblock_state->vs,
++                &new_shader, sizeof(new_shader));
+         wined3d_stateblock_set_vertex_declaration(device->update_state,
+-                d3d8_device_get_fvf_declaration(device, shader)->wined3d_vertex_declaration);
++                new_declaration);
+         wined3d_stateblock_set_vertex_shader(device->update_state, NULL);
+         wined3d_mutex_unlock();
+ 
+@@ -3995,6 +4606,13 @@
+         return D3DERR_INVALIDCALL;
+     }
+ 
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_VERTEX_DECL, &device->stateblock_state->vertex_declaration,
++            &shader_impl->vertex_declaration->wined3d_vertex_declaration,
++            sizeof(shader_impl->vertex_declaration->wined3d_vertex_declaration));
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_VS, &device->stateblock_state->vs,
++            &shader_impl->wined3d_shader, sizeof(shader_impl->wined3d_shader));
+     wined3d_stateblock_set_vertex_declaration(device->update_state,
+             shader_impl->vertex_declaration->wined3d_vertex_declaration);
+     wined3d_stateblock_set_vertex_shader(device->update_state, shader_impl->wined3d_shader);
+@@ -4059,6 +4677,8 @@
+         DWORD start_register, const void *data, DWORD count)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    const struct wined3d_vec4 *values = data;
++    unsigned int i;
+     d3d8_mgs2_mark_state_dirty();
+     HRESULT hr;
+ 
+@@ -4073,6 +4693,11 @@
+     }
+ 
+     wined3d_mutex_lock();
++    for (i = 0; i < count; ++i)
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_VS_CONST_BASE + start_register + i,
++                &device->stateblock_state->vs_consts_f[start_register + i],
++                &values[i], sizeof(values[i]));
+     hr = wined3d_stateblock_set_vs_consts_f(device->update_state, start_register, count, data);
+     wined3d_mutex_unlock();
+ 
+@@ -4166,6 +4791,12 @@
+         IDirect3DIndexBuffer8 *buffer, UINT base_vertex_idx)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    struct
++    {
++        struct wined3d_buffer *buffer;
++        enum wined3d_format_id format;
++        int base_vertex_index;
++    } old_value, new_value;
+     d3d8_mgs2_mark_state_dirty();
+     struct d3d8_indexbuffer *ib = unsafe_impl_from_IDirect3DIndexBuffer8(buffer);
+     struct wined3d_buffer *wined3d_buffer;
+@@ -4184,6 +4815,16 @@
+      * problem)
+      */
+     wined3d_mutex_lock();
++    memset(&old_value, 0, sizeof(old_value));
++    memset(&new_value, 0, sizeof(new_value));
++    old_value.buffer = device->stateblock_state->index_buffer;
++    old_value.format = device->stateblock_state->index_format;
++    old_value.base_vertex_index = device->stateblock_state->base_vertex_index;
++    new_value.buffer = wined3d_buffer;
++    new_value.format = ib ? ib->format : WINED3DFMT_UNKNOWN;
++    new_value.base_vertex_index = base_vertex_idx;
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_STREAM_VB,
++            D3D8_MGS2_FP_SLOT_INDEX, &old_value, &new_value, sizeof(old_value));
+     wined3d_stateblock_set_base_vertex_index(device->update_state, base_vertex_idx);
+     wined3d_stateblock_set_index_buffer(device->update_state, wined3d_buffer, ib ? ib->format : WINED3DFMT_UNKNOWN);
+     if (!device->recording)
+@@ -4284,6 +4925,11 @@
+ 
+     if (!shader)
+     {
++        struct wined3d_shader *new_shader = NULL;
++
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++                D3D8_MGS2_FP_SLOT_PS, &device->stateblock_state->ps,
++                &new_shader, sizeof(new_shader));
+         wined3d_stateblock_set_pixel_shader(device->update_state, NULL);
+         wined3d_mutex_unlock();
+         return D3D_OK;
+@@ -4297,6 +4943,9 @@
+     }
+ 
+     TRACE("Setting shader %p.\n", shader_impl);
++    d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++            D3D8_MGS2_FP_SLOT_PS, &device->stateblock_state->ps,
++            &shader_impl->wined3d_shader, sizeof(shader_impl->wined3d_shader));
+     wined3d_stateblock_set_pixel_shader(device->update_state, shader_impl->wined3d_shader);
+     wined3d_mutex_unlock();
+ 
+@@ -4361,12 +5010,20 @@
+         DWORD start_register, const void *data, DWORD count)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
++    const struct wined3d_vec4 *values = data;
++    unsigned int i;
+     d3d8_mgs2_mark_state_dirty();
+     HRESULT hr;
+ 
+     TRACE("iface %p, start_register %lu, data %p, count %lu.\n", iface, start_register, data, count);
+ 
+     wined3d_mutex_lock();
++    if (start_register + count <= ARRAY_SIZE(device->stateblock_state->ps_consts_f))
++        for (i = 0; i < count; ++i)
++            d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_SHADER_CONSTANTS,
++                    D3D8_MGS2_FP_SLOT_PS_CONST_BASE + start_register + i,
++                    &device->stateblock_state->ps_consts_f[start_register + i],
++                    &values[i], sizeof(values[i]));
+     hr = wined3d_stateblock_set_ps_consts_f(device->update_state, start_register, count, data);
+     wined3d_mutex_unlock();
+ 
+@@ -4444,6 +5101,7 @@
+     d3d8_mgs2_mark_state_dirty();
+     struct d3d8_vertexbuffer *buffer_impl = unsafe_impl_from_IDirect3DVertexBuffer8(buffer);
+     const struct wined3d_stateblock_state *state;
++    struct wined3d_stream_state old_stream;
+     struct wined3d_buffer *wined3d_buffer;
+     HRESULT hr;
+ 
+@@ -4457,6 +5115,8 @@
+     }
+ 
+     wined3d_mutex_lock();
++    d3d8_mgs2_fingerprint_ensure(device);
++    old_stream = device->stateblock_state->streams[stream_idx];
+ 
+     if (!buffer_impl)
+     {
+@@ -4470,6 +5130,10 @@
+         wined3d_buffer = buffer_impl->wined3d_buffer;
+ 
+     hr = wined3d_stateblock_set_stream_source(device->update_state, stream_idx, wined3d_buffer, 0, stride);
++    if (SUCCEEDED(hr))
++        d3d8_mgs2_fingerprint_replace(device, D3D8_MGS2_FP_STREAM_VB,
++                D3D8_MGS2_FP_SLOT_STREAM_BASE + stream_idx, &old_stream,
++                &device->stateblock_state->streams[stream_idx], sizeof(old_stream));
+     if (SUCCEEDED(hr) && !device->recording)
+     {
+         if (buffer_impl && buffer_impl->draw_buffer)
+--- a/dlls/d3d8/buffer.c
++++ b/dlls/d3d8/buffer.c
+@@ -230,6 +230,8 @@
+         buffer->mgs2_snapshot_length = size ? size : buffer->mgs2_snapshot_size - offset;
+         buffer->mgs2_snapshot_flags = flags;
+         *data = buffer->mgs2_snapshot + offset;
++        if (!(flags & D3DLOCK_READONLY))
++            d3d8_mgs2_projected_barrier(impl_from_IDirect3DDevice8(buffer->parent_device), TRUE);
+         d3d8_mgs2_vb_census_lock(buffer);
+         return D3D_OK;
+     }
+@@ -240,6 +242,8 @@
+     hr = wined3d_resource_map(wined3d_resource, 0, &wined3d_map_desc, &wined3d_box,
+             wined3dmapflags_from_d3dmapflags(flags, buffer->usage));
+     *data = wined3d_map_desc.data;
++    if (SUCCEEDED(hr) && !(flags & D3DLOCK_READONLY))
++        d3d8_mgs2_projected_barrier(impl_from_IDirect3DDevice8(buffer->parent_device), TRUE);
+ 
+     return hr;
+ }
+@@ -696,6 +700,8 @@
+     hr = wined3d_resource_map(wined3d_resource, 0, &wined3d_map_desc, &wined3d_box,
+             wined3dmapflags_from_d3dmapflags(flags, buffer->usage));
+     *data = wined3d_map_desc.data;
++    if (SUCCEEDED(hr) && !(flags & D3DLOCK_READONLY))
++        d3d8_mgs2_projected_barrier(impl_from_IDirect3DDevice8(buffer->parent_device), TRUE);
+ 
+     return hr;
+ }
+--- a/dlls/d3d8/surface.c
++++ b/dlls/d3d8/surface.c
+@@ -252,6 +252,14 @@
+     {
+         locked_rect->Pitch = map_desc.row_pitch;
+         locked_rect->pBits = map_desc.data;
++        if (!(flags & D3DLOCK_READONLY))
++        {
++            struct d3d8_device *device = surface->texture
++                    ? surface->texture->parent_device
++                    : impl_from_IDirect3DDevice8(surface->parent_device);
++
++            d3d8_mgs2_projected_barrier(device, TRUE);
++        }
+     }
+     else if (type != D3DRTYPE_TEXTURE)
+     {
+--- a/dlls/d3d8/volume.c
++++ b/dlls/d3d8/volume.c
+@@ -151,6 +151,8 @@
+     locked_box->RowPitch = map_desc.row_pitch;
+     locked_box->SlicePitch = map_desc.slice_pitch;
+     locked_box->pBits = map_desc.data;
++    if (SUCCEEDED(hr) && !(flags & D3DLOCK_READONLY))
++        d3d8_mgs2_projected_barrier(volume->texture->parent_device, TRUE);
+ 
+     if (hr == E_INVALIDARG)
+         return D3DERR_INVALIDCALL;
+

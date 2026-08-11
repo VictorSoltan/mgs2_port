@@ -1,0 +1,406 @@
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4542,7 +4542,7 @@
+     unsigned int first[MGS2_BATCH_SLOTS];
+     unsigned int count[MGS2_BATCH_SLOTS];
+     unsigned int n;
+-    unsigned int max_index;
++    unsigned int min_index, max_index;
+     /* counters, one line per second, never per draw */
+     unsigned int draws_in, batches_out, flush_dirty, flush_incompat, flush_present, flush_full;
+     unsigned int idx_bytes;
+@@ -4551,6 +4551,7 @@
+     unsigned int cache_hits, cache_misses, cache_fallback;
+     unsigned int cache_fast_hits, cache_slow_hits, cache_probes;
+     unsigned int arena_resets;
++    unsigned int relative_batches, relative_u16;
+     /* Opt-in experiment: keep restart enabled across synthetic batches. */
+     struct wined3d_context_gl *restart_context;
+     BOOL restart_enabled;
+@@ -4563,6 +4564,7 @@
+     GLenum mode;
+     GLenum index_type;
+     BOOL degenerate_strips;
++    BOOL relative;
+     GLuint bo;
+     unsigned int offset;
+     unsigned int segment_count;
+@@ -4588,6 +4590,7 @@
+ static struct mgs2_batch_arena mgs2_batch_arenas[MGS2_BATCH_ARENA_CONTEXTS];
+ static int mgs2_batch_hashcache_state = -1;
+ static int mgs2_batch_skip_draw_state = -1;
++static int mgs2_batch_relative_range_state = -1;
+ 
+ /* Read from a file once per second, not cached for the process lifetime, so a
+  * whole A/B runs in ONE process at ONE spot at ONE temperature. Every trustworthy
+@@ -4758,6 +4761,17 @@
+     return mgs2_batch_skip_draw_state;
+ }
+ 
++static BOOL mgs2_batch_relative_range_enabled(const struct wined3d_gl_info *gl_info)
++{
++    if (mgs2_batch_relative_range_state < 0)
++    {
++        const char *e = getenv("MGS2_BATCH_RELATIVE_RANGE");
++        mgs2_batch_relative_range_state = e && *e != '0';
++    }
++    return mgs2_batch_relative_range_state && gl_info->is_gles
++            && GL_EXTCALL(glDrawRangeElementsBaseVertex);
++}
++
+ static void mgs2_batch_poll_switch(const char *path, const char *name, int *state)
+ {
+     FILE *f;
+@@ -4893,6 +4907,8 @@
+             &mgs2_batch_hashcache_state);
+     mgs2_batch_poll_switch("Z:\\tmp\\mgs2-batch-skip-draw", "skip-draw",
+             &mgs2_batch_skip_draw_state);
++    mgs2_batch_poll_switch("Z:\\tmp\\mgs2-batch-relative-range", "relative-range",
++            &mgs2_batch_relative_range_state);
+     fprintf(stderr, "MGS2BATCH: frames=%u fps=%u.%02u draws=%u batches=%u factor=%u.%02u idx=%uKB | "
+             "flush total=%u dirty=%u incompat=%u full=%u\n",
+             mgs2_batch.flush_present,
+@@ -4908,14 +4924,16 @@
+         fprintf(stderr, "MGS2BATCHPROFILE: build=%.2fms upload=%.2fms draw=%.2fms\n",
+                 mgs2_batch.build_ms, mgs2_batch.upload_ms, mgs2_batch.draw_ms);
+     fprintf(stderr, "MGS2CACHE: hits=%u fast=%u slow=%u probes=%u misses=%u evict=%u "
+-            "entries=%u bytes=%uKB fallback=%u arena=%u reset=%u triangles=%u degen=%u hash=%u skip=%u\n",
++            "entries=%u bytes=%uKB fallback=%u arena=%u reset=%u triangles=%u degen=%u "
++            "hash=%u skip=%u relative=%u rel16=%u\n",
+             mgs2_batch.cache_hits, mgs2_batch.cache_fast_hits, mgs2_batch.cache_slow_hits,
+             mgs2_batch.cache_probes, mgs2_batch.cache_misses,
+             mgs2_batch_cache_evictions, mgs2_batch_cache_count,
+             mgs2_batch_cache_bytes / 1024, mgs2_batch.cache_fallback,
+             mgs2_batch_ebo_arena_enabled(), mgs2_batch.arena_resets, mgs2_batch_triangles_enabled(),
+             mgs2_batch_degenerate_strips_enabled(),
+-            mgs2_batch_hashcache_enabled(), mgs2_batch_skip_draw_enabled());
++            mgs2_batch_hashcache_enabled(), mgs2_batch_skip_draw_enabled(),
++            mgs2_batch.relative_batches, mgs2_batch.relative_u16);
+     fflush(stderr);
+     mgs2_batch.draws_in = mgs2_batch.batches_out = 0;
+     mgs2_batch.flush_dirty = mgs2_batch.flush_incompat = 0;
+@@ -4926,6 +4944,7 @@
+     mgs2_batch.cache_hits = mgs2_batch.cache_misses = mgs2_batch.cache_fallback = 0;
+     mgs2_batch.cache_fast_hits = mgs2_batch.cache_slow_hits = mgs2_batch.cache_probes = 0;
+     mgs2_batch.arena_resets = 0;
++    mgs2_batch.relative_batches = mgs2_batch.relative_u16 = 0;
+     mgs2_batch_cache_evictions = 0;
+ }
+ 
+@@ -4936,17 +4955,23 @@
+ }
+ 
+ static unsigned int mgs2_batch_hash(GLenum mode, GLenum index_type, BOOL degenerate_strips,
+-        unsigned int segment_count, const unsigned int *first, const unsigned int *count)
++        BOOL relative, unsigned int base_index, unsigned int segment_count,
++        const unsigned int *first, const unsigned int *count)
+ {
+     unsigned int i, hash = 2166136261u;
+ 
+     hash = mgs2_batch_hash_mix(hash, mode);
+     hash = mgs2_batch_hash_mix(hash, index_type);
+     hash = mgs2_batch_hash_mix(hash, degenerate_strips);
++    /* Preserve batch16's exact set selection while the experiment is off.
++     * Relative entries are also separated by entry->relative during lookup;
++     * tag only the opt-in key so the control arm changes no cache behaviour. */
++    if (relative)
++        hash = mgs2_batch_hash_mix(hash, 0x52454c31u); /* "REL1" */
+     hash = mgs2_batch_hash_mix(hash, segment_count);
+     for (i = 0; i < segment_count; ++i)
+     {
+-        hash = mgs2_batch_hash_mix(hash, first[i]);
++        hash = mgs2_batch_hash_mix(hash, first[i] - base_index);
+         hash = mgs2_batch_hash_mix(hash, count[i]);
+     }
+     return hash;
+@@ -4954,7 +4975,8 @@
+ 
+ static struct mgs2_batch_cache_entry *mgs2_batch_cache_find(
+         struct wined3d_context_gl *context_gl, GLenum mode, GLenum index_type,
+-        BOOL degenerate_strips, unsigned int segment_count, unsigned int hash,
++        BOOL degenerate_strips, BOOL relative, unsigned int base_index,
++        unsigned int segment_count, unsigned int hash,
+         const unsigned int *first, const unsigned int *count)
+ {
+     unsigned int i, j, set = hash & (MGS2_BATCH_CACHE_SETS - 1);
+@@ -4973,10 +4995,11 @@
+ 
+         if (entry->context_gl != context_gl || entry->hash != hash
+                 || entry->mode != mode || entry->index_type != index_type
+-                || entry->degenerate_strips != degenerate_strips || entry->segment_count != segment_count)
++                || entry->degenerate_strips != degenerate_strips || entry->relative != relative
++                || entry->segment_count != segment_count)
+             continue;
+         for (j = 0; j < segment_count; ++j)
+-            if (entry->first[j] != first[j] || entry->count[j] != count[j])
++            if (entry->first[j] != first[j] - base_index || entry->count[j] != count[j])
+                 break;
+         if (j == segment_count)
+         {
+@@ -5142,9 +5165,9 @@
+     struct wined3d_context_gl *context_gl = mgs2_batch.context_gl;
+     struct mgs2_batch_cache_entry *entry;
+     const struct wined3d_gl_info *gl_info;
+-    unsigned int i, j, total, bytes, stride, hash;
++    unsigned int i, j, total, bytes, stride, hash, base_index, span;
+     GLenum draw_mode;
+-    BOOL use16, triangles, degenerate_strips, skip_draw;
++    BOOL use16, triangles, degenerate_strips, skip_draw, relative;
+     double t = 0.0;
+     BOOL profile;
+ 
+@@ -5163,18 +5186,31 @@
+                     mgs2_batch.first[0], mgs2_batch.count[0]);
+         ++mgs2_batch.batches_out;
+         mgs2_batch.n = 0;
++        mgs2_batch.min_index = ~0u;
+         mgs2_batch.max_index = 0;
+         return;
+     }
+ 
+-    /* restart index must not be a legal vertex index in this batch */
+-    use16 = mgs2_batch.max_index < 0xffff;
+-    stride = use16 ? 2 : 4;
+     triangles = mgs2_batch_triangles_enabled();
+     degenerate_strips = !triangles && mgs2_batch_degenerate_strips_enabled();
++    relative = mgs2_batch_relative_range_enabled(gl_info) && mgs2_batch.min_index <= INT_MAX;
++    base_index = relative ? mgs2_batch.min_index : 0;
++    span = mgs2_batch.max_index - base_index;
++    /* Primitive restart compares the stored relative index before basevertex
++     * is added. Keep 0xffff unavailable to real vertices on that path. */
++    use16 = relative ? (span <= 0xffff
++            && (triangles || degenerate_strips || span < 0xffff))
++            : mgs2_batch.max_index < 0xffff;
++    stride = use16 ? 2 : 4;
+     draw_mode = triangles ? GL_TRIANGLES : mgs2_batch.mode;
+-    hash = mgs2_batch_hash(draw_mode, use16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, degenerate_strips,
+-            mgs2_batch.n, mgs2_batch.first, mgs2_batch.count);
++    hash = mgs2_batch_hash(draw_mode, use16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT,
++            degenerate_strips, relative, base_index, mgs2_batch.n,
++            mgs2_batch.first, mgs2_batch.count);
++    if (relative)
++    {
++        ++mgs2_batch.relative_batches;
++        if (use16) ++mgs2_batch.relative_u16;
++    }
+ 
+     /* A preceding restart batch may have hoisted the enable across draws. The
+      * degenerate representation must not inherit that unrelated state. */
+@@ -5207,8 +5243,8 @@
+     bytes = total * stride;
+ 
+     entry = mgs2_batch_cache_find(context_gl, draw_mode,
+-            use16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, degenerate_strips, mgs2_batch.n, hash,
+-            mgs2_batch.first, mgs2_batch.count);
++            use16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT, degenerate_strips,
++            relative, base_index, mgs2_batch.n, hash, mgs2_batch.first, mgs2_batch.count);
+     if (entry)
+     {
+         ++mgs2_batch.cache_hits;
+@@ -5218,8 +5254,13 @@
+         {
+             if (!triangles && !degenerate_strips)
+                 mgs2_batch_restart_begin(context_gl, gl_info);
+-            gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+-                    entry->index_type, (const void *)(ULONG_PTR)entry->offset);
++            if (relative)
++                GL_EXTCALL(glDrawRangeElementsBaseVertex(entry->mode, 0, span,
++                        entry->element_count, entry->index_type,
++                        (const void *)(ULONG_PTR)entry->offset, base_index));
++            else
++                gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
++                        entry->index_type, (const void *)(ULONG_PTR)entry->offset);
+             if (!triangles && !degenerate_strips && !mgs2_batch_restart_hoist_enabled())
+                 mgs2_batch_restart_end(context_gl, gl_info);
+         }
+@@ -5227,6 +5268,7 @@
+         ++mgs2_batch.batches_out;
+         mgs2_batch.idx_bytes += entry->bytes;
+         mgs2_batch.n = 0;
++        mgs2_batch.min_index = ~0u;
+         mgs2_batch.max_index = 0;
+         return;
+     }
+@@ -5244,6 +5286,7 @@
+                 gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                         mgs2_batch.first[i], mgs2_batch.count[i]);
+         mgs2_batch.n = 0;
++        mgs2_batch.min_index = ~0u;
+         mgs2_batch.max_index = 0;
+         return;
+     }
+@@ -5251,7 +5294,13 @@
+     if (bytes > buf_size)
+     {
+         void *p = realloc(buf, bytes);
+-        if (!p) { mgs2_batch.n = 0; return; }
++        if (!p)
++        {
++            mgs2_batch.n = 0;
++            mgs2_batch.min_index = ~0u;
++            mgs2_batch.max_index = 0;
++            return;
++        }
+         buf = p; buf_size = bytes;
+     }
+ 
+@@ -5266,9 +5315,9 @@
+             {
+                 for (k = 0; k + 2 < c; ++k)
+                 {
+-                    out[j++] = f + k + (k & 1);
+-                    out[j++] = f + k + !(k & 1);
+-                    out[j++] = f + k + 2;
++                    out[j++] = f + k + (k & 1) - base_index;
++                    out[j++] = f + k + !(k & 1) - base_index;
++                    out[j++] = f + k + 2 - base_index;
+                 }
+             }
+             else
+@@ -5277,16 +5326,16 @@
+                 {
+                     const BOOL odd = j & 1;
+ 
+-                    out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1;
+-                    if (odd) out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1;
+-                    out[j++] = f;
+-                    out[j++] = f;
+-                    for (k = 1; k < c; ++k) out[j++] = f + k;
++                    out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1 - base_index;
++                    if (odd) out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1 - base_index;
++                    out[j++] = f - base_index;
++                    out[j++] = f - base_index;
++                    for (k = 1; k < c; ++k) out[j++] = f + k - base_index;
+                 }
+                 else
+                 {
+                     if (i) out[j++] = 0xffff;
+-                    for (k = 0; k < c; ++k) out[j++] = f + k;
++                    for (k = 0; k < c; ++k) out[j++] = f + k - base_index;
+                 }
+             }
+         }
+@@ -5301,9 +5350,9 @@
+             {
+                 for (k = 0; k + 2 < c; ++k)
+                 {
+-                    out[j++] = f + k + (k & 1);
+-                    out[j++] = f + k + !(k & 1);
+-                    out[j++] = f + k + 2;
++                    out[j++] = f + k + (k & 1) - base_index;
++                    out[j++] = f + k + !(k & 1) - base_index;
++                    out[j++] = f + k + 2 - base_index;
+                 }
+             }
+             else
+@@ -5312,16 +5361,16 @@
+                 {
+                     const BOOL odd = j & 1;
+ 
+-                    out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1;
+-                    if (odd) out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1;
+-                    out[j++] = f;
+-                    out[j++] = f;
+-                    for (k = 1; k < c; ++k) out[j++] = f + k;
++                    out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1 - base_index;
++                    if (odd) out[j++] = mgs2_batch.first[i - 1] + mgs2_batch.count[i - 1] - 1 - base_index;
++                    out[j++] = f - base_index;
++                    out[j++] = f - base_index;
++                    for (k = 1; k < c; ++k) out[j++] = f + k - base_index;
+                 }
+                 else
+                 {
+                     if (i) out[j++] = 0xffffffff;
+-                    for (k = 0; k < c; ++k) out[j++] = f + k;
++                    for (k = 0; k < c; ++k) out[j++] = f + k - base_index;
+                 }
+             }
+         }
+@@ -5344,10 +5393,12 @@
+                 gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                         mgs2_batch.first[i], mgs2_batch.count[i]);
+         mgs2_batch.n = 0;
++        mgs2_batch.min_index = ~0u;
+         mgs2_batch.max_index = 0;
+         return;
+     }
+-    memcpy(entry->first, mgs2_batch.first, mgs2_batch.n * sizeof(*entry->first));
++    for (i = 0; i < mgs2_batch.n; ++i)
++        entry->first[i] = mgs2_batch.first[i] - base_index;
+     memcpy(entry->count, mgs2_batch.count, mgs2_batch.n * sizeof(*entry->count));
+     if (profile) t = mgs2_batch_now_ms();
+     if (!mgs2_batch_ebo_arena_enabled())
+@@ -5365,6 +5416,7 @@
+                     gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                             mgs2_batch.first[i], mgs2_batch.count[i]);
+             mgs2_batch.n = 0;
++            mgs2_batch.min_index = ~0u;
+             mgs2_batch.max_index = 0;
+             return;
+         }
+@@ -5382,6 +5434,7 @@
+     entry->mode = draw_mode;
+     entry->index_type = use16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+     entry->degenerate_strips = degenerate_strips;
++    entry->relative = relative;
+     entry->segment_count = mgs2_batch.n;
+     entry->element_count = total;
+     entry->bytes = bytes;
+@@ -5393,8 +5446,13 @@
+     {
+         if (!triangles && !degenerate_strips)
+             mgs2_batch_restart_begin(context_gl, gl_info);
+-        gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+-                entry->index_type, (const void *)(ULONG_PTR)entry->offset);
++        if (relative)
++            GL_EXTCALL(glDrawRangeElementsBaseVertex(entry->mode, 0, span,
++                    entry->element_count, entry->index_type,
++                    (const void *)(ULONG_PTR)entry->offset, base_index));
++        else
++            gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
++                    entry->index_type, (const void *)(ULONG_PTR)entry->offset);
+         if (!triangles && !degenerate_strips && !mgs2_batch_restart_hoist_enabled())
+             mgs2_batch_restart_end(context_gl, gl_info);
+     }
+@@ -5403,6 +5461,7 @@
+     ++mgs2_batch.batches_out;
+     mgs2_batch.idx_bytes += bytes;
+     mgs2_batch.n = 0;
++    mgs2_batch.min_index = ~0u;
+     mgs2_batch.max_index = 0;
+ }
+ 
+@@ -5438,6 +5497,8 @@
+ 
+     mgs2_batch.context_gl = context_gl;
+     mgs2_batch.mode = mode;
++    if (!mgs2_batch.n || first < mgs2_batch.min_index)
++        mgs2_batch.min_index = first;
+     mgs2_batch.first[mgs2_batch.n] = first;
+     mgs2_batch.count[mgs2_batch.n] = count;
+     ++mgs2_batch.n;
+--- a/dlls/wined3d/adapter_gl.c
++++ b/dlls/wined3d/adapter_gl.c
+@@ -2122,7 +2122,7 @@
+     static HMODULE opengl32;
+     void *pointer;
+ 
+-    if ((pointer = (void *)wglGetProcAddress(name)))
++    if ((pointer = (void *)wglGetProcAddress(name)) && pointer != (void *)-1)
+         return pointer;
+ 
+     if (!opengl32)
+--- a/dlls/opengl32/unix_wgl.c
++++ b/dlls/opengl32/unix_wgl.c
+@@ -1018,6 +1018,11 @@
+                  * rather than ever passing a native ARM function pointer to
+                  * PE / x86 code. The feature remains gated in wined3d. */
+                 { "glBufferStorage",    "glBufferStorageEXT" },
++                /* GL_OES_draw_elements_base_vertex exposes the ABI-identical
++                 * GLES spelling. Resolve it inside the existing Unix thunk;
++                 * the deployed binary-only win32u_glfuncs3.so must not be
++                 * rebuilt because it carries the GLES context/config fixes. */
++                { "glDrawRangeElementsBaseVertex", "glDrawRangeElementsBaseVertexOES" },
+             };
+ 
+             for (i = 0; i < ARRAY_SIZE(gles_spellings); i++)

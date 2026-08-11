@@ -1,0 +1,174 @@
+diff --git a/dlls/d3d8/device.c b/dlls/d3d8/device.c
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -2254,6 +2254,13 @@ static void d3d8_mgs2_barrier_census_present(void)
+ #define D3D8_MGS2_PROJECTED_LIGHTS 64
+ #define D3D8_MGS2_PROJECTED_MASK_COUNT (1u << D3D8_MGS2_FP_GROUP_COUNT)
+ #define D3D8_MGS2_PROJECTED_TOP_MIXED 8
++#define D3D8_MGS2_STREAM_DIFF_BUFFER    0x01u
++#define D3D8_MGS2_STREAM_DIFF_OFFSET    0x02u
++#define D3D8_MGS2_STREAM_DIFF_STRIDE    0x04u
++#define D3D8_MGS2_STREAM_DIFF_FREQUENCY 0x08u
++#define D3D8_MGS2_STREAM_DIFF_INDEX     0x10u
++#define D3D8_MGS2_STREAM_DIFF_BASE      0x20u
++#define D3D8_MGS2_STREAM_DIFF_COUNT     0x40u
+ struct d3d8_mgs2_fingerprint
+ {
+     ULONGLONG lo, hi;
+@@ -2286,6 +2293,10 @@ static struct
+     struct d3d8_device *device;
+     struct d3d8_mgs2_fingerprint current[D3D8_MGS2_FP_GROUP_COUNT];
+     struct d3d8_mgs2_fingerprint last_draw[D3D8_MGS2_FP_GROUP_COUNT];
++    struct wined3d_stream_state last_streams[WINED3D_MAX_STREAMS];
++    struct wined3d_buffer *last_index_buffer;
++    enum wined3d_format_id last_index_format;
++    int last_base_vertex_index;
+     DWORD light_indices[D3D8_MGS2_PROJECTED_LIGHTS];
+     unsigned int light_count;
+     BOOL light_overflow;
+@@ -2298,6 +2309,8 @@ static struct
+     unsigned int mask_projected_run[D3D8_MGS2_PROJECTED_MASK_COUNT];
+     ULONGLONG boundaries[D3D8_MGS2_BREAK_COUNT];
+     ULONGLONG mask_boundaries[D3D8_MGS2_PROJECTED_MASK_COUNT];
++    ULONGLONG stream_boundaries[D3D8_MGS2_STREAM_DIFF_COUNT];
++    ULONGLONG wv_stream_boundaries[D3D8_MGS2_STREAM_DIFF_COUNT];
+     ULONGLONG projected_draws[D3D8_MGS2_BREAK_STREAM_VB + 1];
+     ULONGLONG mask_projected_draws[D3D8_MGS2_PROJECTED_MASK_COUNT];
+     ULONGLONG source_draws, actual_batches;
+@@ -2599,6 +2612,56 @@ static void d3d8_mgs2_projected_mask_name(unsigned int mask,
+     name[length] = '\0';
+ }
+ 
++static unsigned int d3d8_mgs2_projected_stream_diff(
++        const struct wined3d_stateblock_state *state)
++{
++    unsigned int i, mask = 0;
++
++    for (i = 0; i < ARRAY_SIZE(state->streams); ++i)
++    {
++        const struct wined3d_stream_state *current = &state->streams[i];
++        const struct wined3d_stream_state *last = &d3d8_mgs2_projected.last_streams[i];
++
++        if (current->buffer != last->buffer)
++            mask |= D3D8_MGS2_STREAM_DIFF_BUFFER;
++        if (current->offset != last->offset)
++            mask |= D3D8_MGS2_STREAM_DIFF_OFFSET;
++        if (current->stride != last->stride)
++            mask |= D3D8_MGS2_STREAM_DIFF_STRIDE;
++        if (current->frequency != last->frequency || current->flags != last->flags)
++            mask |= D3D8_MGS2_STREAM_DIFF_FREQUENCY;
++    }
++    if (state->index_buffer != d3d8_mgs2_projected.last_index_buffer
++            || state->index_format != d3d8_mgs2_projected.last_index_format)
++        mask |= D3D8_MGS2_STREAM_DIFF_INDEX;
++    if (state->base_vertex_index != d3d8_mgs2_projected.last_base_vertex_index)
++        mask |= D3D8_MGS2_STREAM_DIFF_BASE;
++    return mask;
++}
++
++static void d3d8_mgs2_projected_stream_snapshot(
++        const struct wined3d_stateblock_state *state)
++{
++    memcpy(d3d8_mgs2_projected.last_streams, state->streams,
++            sizeof(d3d8_mgs2_projected.last_streams));
++    d3d8_mgs2_projected.last_index_buffer = state->index_buffer;
++    d3d8_mgs2_projected.last_index_format = state->index_format;
++    d3d8_mgs2_projected.last_base_vertex_index = state->base_vertex_index;
++}
++
++static void d3d8_mgs2_projected_stream_mask_name(unsigned int mask, char name[7])
++{
++    static const char component_names[6] = {'B', 'O', 'S', 'F', 'I', 'X'};
++    unsigned int i, length = 0;
++
++    for (i = 0; i < ARRAY_SIZE(component_names); ++i)
++        if (mask & (1u << i))
++            name[length++] = component_names[i];
++    if (!length)
++        name[length++] = '-';
++    name[length] = '\0';
++}
++
+ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+         D3DPRIMITIVETYPE primitive_type, BOOL batchable)
+ {
+@@ -2631,7 +2694,18 @@ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+         }
+         ++d3d8_mgs2_projected.boundaries[kind];
+         if (compatible)
++        {
+             ++d3d8_mgs2_projected.mask_boundaries[diff_mask];
++            if (diff_mask & (1u << D3D8_MGS2_FP_STREAM_VB))
++            {
++                unsigned int stream_diff = d3d8_mgs2_projected_stream_diff(device->stateblock_state);
++
++                ++d3d8_mgs2_projected.stream_boundaries[stream_diff];
++                if (diff_mask == ((1u << D3D8_MGS2_FP_WORLD)
++                        | (1u << D3D8_MGS2_FP_STREAM_VB)))
++                    ++d3d8_mgs2_projected.wv_stream_boundaries[stream_diff];
++            }
++        }
+     }
+ 
+     for (i = 0; i <= D3D8_MGS2_BREAK_STREAM_VB; ++i)
+@@ -2669,6 +2743,7 @@ static void d3d8_mgs2_projected_draw(struct d3d8_device *device,
+         ++d3d8_mgs2_projected.actual_batches;
+     memcpy(d3d8_mgs2_projected.last_draw, d3d8_mgs2_projected.current,
+             sizeof(d3d8_mgs2_projected.last_draw));
++    d3d8_mgs2_projected_stream_snapshot(device->stateblock_state);
+     d3d8_mgs2_projected.have_last_draw = TRUE;
+     d3d8_mgs2_projected.last_batchable = batchable;
+     d3d8_mgs2_projected.last_primitive = primitive_type;
+@@ -2684,6 +2759,7 @@ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+ {
+     BOOL emitted[D3D8_MGS2_PROJECTED_MASK_COUNT] = {0};
++    BOOL stream_emitted[D3D8_MGS2_STREAM_DIFF_COUNT] = {0};
+     unsigned int i, mask, rank;
+     double frames;
+ 
+@@ -2765,6 +2841,33 @@ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+                 rank + 1, best_mask, groups, best_count, best_count / frames,
+                 projected, projected / frames, removed, removed / frames);
+     }
++    for (rank = 0; rank < 4; ++rank)
++    {
++        ULONGLONG best_count = 0;
++        unsigned int best_mask = 0;
++        char components[7];
++
++        for (mask = 0; mask < D3D8_MGS2_STREAM_DIFF_COUNT; ++mask)
++        {
++            if (stream_emitted[mask])
++                continue;
++            if (d3d8_mgs2_projected.wv_stream_boundaries[mask] > best_count)
++            {
++                best_count = d3d8_mgs2_projected.wv_stream_boundaries[mask];
++                best_mask = mask;
++            }
++        }
++        if (!best_count)
++            break;
++
++        stream_emitted[best_mask] = TRUE;
++        d3d8_mgs2_projected_stream_mask_name(best_mask, components);
++        fprintf(stderr, "MGS2PROJECTED_STREAM: rank=%u mask=0x%02x components=%s "
++                "all=%I64u %.2f/f wv=%I64u %.2f/f\n", rank + 1, best_mask, components,
++                d3d8_mgs2_projected.stream_boundaries[best_mask],
++                d3d8_mgs2_projected.stream_boundaries[best_mask] / frames,
++                best_count, best_count / frames);
++    }
+     fflush(stderr);
+ 
+     d3d8_mgs2_projected.frames = 0;
+@@ -2775,6 +2878,10 @@ static void d3d8_mgs2_projected_census_present(struct d3d8_device *device)
+     memset(d3d8_mgs2_projected.boundaries, 0, sizeof(d3d8_mgs2_projected.boundaries));
+     memset(d3d8_mgs2_projected.mask_boundaries, 0,
+             sizeof(d3d8_mgs2_projected.mask_boundaries));
++    memset(d3d8_mgs2_projected.stream_boundaries, 0,
++            sizeof(d3d8_mgs2_projected.stream_boundaries));
++    memset(d3d8_mgs2_projected.wv_stream_boundaries, 0,
++            sizeof(d3d8_mgs2_projected.wv_stream_boundaries));
+     for (i = 0; i <= D3D8_MGS2_BREAK_STREAM_VB; ++i)
+         d3d8_mgs2_projected.projected_draws[i] = 0;
+     memset(d3d8_mgs2_projected.mask_projected_draws, 0,

@@ -5,9 +5,9 @@ RG353VS: Rockchip RK3566, four Cortex-A55, Mali-G52, 1 GB RAM, ROCKNIX, sway on
 Wayland, 32-bit Wine under Box86.
 
 The value here is not the game. It is the set of Wine patches, the launcher, the
-measurement harness, and 26 briefs that record **which hypotheses were wrong** —
-that record is what makes the next port of a similar game to a similar handheld
-cheap instead of another month of guessing.
+measurement harness, and a chronological brief archive recording **which
+hypotheses were wrong** — that record is what makes the next port of a similar
+game to a similar handheld cheap instead of another month of guessing.
 
 ## State: what works
 
@@ -93,7 +93,7 @@ harness/dsound_sfx_state.py  one-shot reader for the bounded gameplay-SFX
                               DirectSound-control ring
 harness/dmime_state.py    one-shot reader for the bounded DirectMusic transition ring
 wine-patches/*.patch      the Wine 11.0 changes, one file per module
-docs/briefs/              30 research briefs, in order
+docs/briefs/              chronological research and performance briefs
 docs/MGS2_PROJECT_STATE.md, docs/MGS2_RG353VS_HANDOFF.md
 mgs2_collect_context.sh   read-only system dump from the console
 ```
@@ -109,14 +109,27 @@ implements the DirectMusic transition semantics needed by MGS2: the selected
 AudioPath, controller-curve end/reset messages, flushing, and targeted stop/
 invalidation handling. Patch 16 is a diagnostic-only, bounded transition ring
 for deciding whether the next loss occurs before `dmime`, at PChannel routing,
-or after MIDI is handed to the port.
+or after MIDI is handed to the port. Patch 17 adds the bounded DirectSound SFX
+control ring. Patch 18 is the non-mutating projected batch-break census with a
+rolling effective-state fingerprint. Patch 19 adds the opt-in relative EBO,
+normalized cache key and GLES OES base-vertex bridge. Patch 20 projects all 64
+effective-state masks, patch 21 decomposes STREAM/VB changes into exact
+components, and patch 22 samples exact producer-shadow geometry bytes to project
+the remaining byte-identical WORLD+VB instancing opportunity. Patch 23 performs
+a conservative sampled clip-space visibility census and counts only wholly
+removable current producer batches. Patch 24 adds the opt-in AABB-cached culling
+prototype and a one-second-polled live A/B switch. Its first matched device
+A/B/A/B reduced WineD3D batches from 166.58 to 136.81 per frame and frame time
+from 49.43 to 47.89 ms. Visual validation passed. The user explicitly declined
+the remaining two-scene qualification, so patch 24 is the production default
+with an immediate `MGS2_D3D8_VISIBILITY_CULL=0` rollback.
 
 ```sh
 tar xf wine-11.0.tar.xz && cd wine-11.0
 for p in ../wine-patches/*.patch; do patch -p1 -F0 < "$p"; done
 ```
 
-All seventeen apply with zero fuzz and reproduce the working tree byte for byte;
+All twenty-four apply with zero fuzz and reproduce the working tree byte for byte;
 `-F0` is deliberate, so a silent mismatch fails instead of being patched
 approximately. Building needs the cross compiler that ships in the repo but is
 not on PATH, and the release wined3d needs its define passed explicitly:
@@ -202,6 +215,11 @@ zero-copy via wl_egl_window + eglSwapBuffers
     MESA export extension and no gbm_* wrappers.
 async PBO readback        10.7-12.5 fps; Mali maps the pack buffer uncached
 MGS2_GL_SHM_BUFFERS=3     inside noise against 2
+packed source-VBO         per-batch BO pool hits 256 slots/frame and falls to
+                          13-15 fps; one 4 MB frame ring makes Mali allocation
+                          grow 477 -> 531 MB in ~13 s and kernel OOM-kills MGS2
+byte-identical instancing exact WORLD+VB census finds only 1.43-1.93 removable
+                          batches/frame against the required 40
 rebuilding the presenter  identical to the shipped build
 GPU governor pinned to 800 MHz   GPU wait halves, CPU cap falls to 816 MHz
                                  because both share one thermal budget: net loss
@@ -239,12 +257,19 @@ backported in the dmsynth patch. Everything else here — launcher, harness, bri
 
 ## binaries/
 
-The exact set the game was verified playable on, so a device can be restored
-without a toolchain. Checksums in `binaries/SHA256SUMS`.
+The production set the game was verified playable on, plus explicitly named
+diagnostic/candidate variants, so a device can be restored or measured without
+a toolchain. Checksums in `binaries/SHA256SUMS`.
 
 ```text
 box86-clean1                               exact Box86 runtime the port bind-mounts
 d3d8_producer_batch14_dirtyranges.dll      bounded dirty-range aggregation for game VBs
+d3d8_producer_batch15_projectedcensus.dll  300-frame projected break census; diagnostic only
+d3d8_producer_batch16_mixedcensus.dll      top mixed-state masks plus 64-mask projections
+d3d8_producer_batch17_streamdetail.dll     buffer/offset/stride/index detail for WORLD+STREAM
+d3d8_producer_batch18_geometryrepeatcensus.dll  sampled byte-identical WORLD+VB projection
+d3d8_producer_batch19_visibilitycensus.dll conservative whole-batch visibility projection
+d3d8_producer_batch20_visibilitycull.dll   production cached conservative frustum culling
 dmime_se1.dll                              DirectMusic graph and shared-port support
 dmime_transition1.dll                      se1 plus AudioPath/curve transition recovery
 dmime_state1.dll                           transition1 plus bounded diagnostic recorder
@@ -257,11 +282,13 @@ dsound_se1.dll                             makes dmsynth sink output audible at 
 dsound_state1.dll                           se1 plus bounded gameplay-SFX recorder
 ntdll_fastyield.so                         measured Wine yield fast path
 opengl32_glesver1.so                       GLES entry-point/version bridge
+opengl32_glesver2_basevertex.so            OES base-vertex alias; batch17 candidate
 user32_peek1.dll                           caller-specific PeekMessage wait
 winewayland_pbo1.so                        earlier measured presenter variant
 winewayland_stall1.so                      currently selected presentation driver
 win32u_glfuncs3.so                         GLES function bridge required by the driver
 wined3d_batch16_setcache.dll               bounded 4-way batch cache, no hot telemetry
+wined3d_batch17_relative_range.dll          relative-index/range-draw candidate; off by default
 ```
 
 The renderer DLL is intentionally included even though it is 25 MB, as are the
