@@ -495,3 +495,19 @@ The self-contained handoff and independent review are:
 docs/briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md
 docs/briefs/MGS2_INDEPENDENT_AUDIO_REVIEW_2026-08-10.md
 ```
+
+## Separate complete freeze captured on 2026-08-11
+
+A later production freeze was not the stock-`user32` `PeekMessage` spin
+documented above. Main, `wined3d_cs`, and `wine_dinput_worker` all waited on one
+native mutex whose owner was the waiting input worker itself. Releasing that
+exact mutex once resumed the live game. Source inspection and a direct old/new
+A/B then identified Box86's non-atomic first-use publication of an x86 mutex's
+native ARM backing object.
+
+The evidence, fix, deterministic stress test and rollback are documented
+separately so the two stall mechanisms are not conflated:
+
+```text
+docs/briefs/MGS2_RUNTIME_MUTEX_FREEZE_2026-08-11.md
+```
