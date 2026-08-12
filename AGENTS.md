@@ -3,9 +3,10 @@
 This repo is a working port of Metal Gear Solid 2: Substance (2003, Direct3D 8)
 to an Anbernic RG353VS handheld: RK3566, four Cortex-A55, Mali-G52, 1 GB RAM,
 ROCKNIX, sway on Wayland, 32-bit Wine under Box86. Picture, sound and saves work.
-The open work is frame rate plus two intermittent runtime defects: gameplay SFX
-can disappear across encounter/map transitions, and the game can enter a
-no-render/input stall in its empty-message loop.
+The open work is frame rate plus intermittent gameplay SFX loss across
+encounter/map transitions. Two no-render/input stalls have been captured: the
+earlier empty-message spin and a distinct Box86 aligned-mutex first-use race;
+the latter has a direct reproducer and is fixed in FINALPLAY3.
 
 The point of the repo is not the game. It is the Wine patches, the measurement
 harness, and the briefs recording **which hypotheses turned out wrong**.
@@ -31,7 +32,15 @@ docs/briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md
 docs/briefs/MGS2_RUNTIME_BUG_CAPTURE_2026-08-09.md
                            full chronological record of SFX work and the captured
                            PeekMessage no-render/input stall
-docs/briefs/MGS2_PERF_BRIEF_40.md   latest performance state and next measured work
+docs/briefs/MGS2_RUNTIME_MUTEX_FREEZE_2026-08-11.md
+                           START HERE for the later complete freeze: live mutex
+                           owner proof, Box86 root cause, direct A/B and fix
+docs/briefs/MGS2_PERF_BRIEF_43.md   START HERE for performance: native Wine
+                                    memmove, exact copy census, cached DISCARD
+                                    shadow and measured 30 fps at the heavy spot
+docs/briefs/MGS2_FINALPLAY_BRIEF_42.md
+                                    clean FINALPLAY renderer baseline before #43
+docs/briefs/MGS2_PERF_BRIEF_40.md   earlier performance state and next measured work
 docs/briefs/MGS2_PERF_BRIEF_38.md   START HERE: real batchability is 8.49x, the merge
                                     mechanism works on this Mali, and the batcher is
                                     written and built but NOT yet measured
@@ -109,6 +118,13 @@ source and configured i386 build deliberately live one level above it:
     runtime bug capture; inspect the caller-specific PeekMessage wait before
     changing controller or gptokeyb code.
 
+box86-patches/03-aligned-mutex-publication.patch
+    Apply the production Box86 patch chain to the exact upstream commit named
+    in the runtime-mutex brief.
+    Patch 03 serialises aligned-mutex first allocation and publication; preserve
+    its acquire/release signature ordering and test it with
+    `harness/box86_mutex_first_use_stress.c` before changing the bridge.
+
 ../recovered-session/wine-11.0/dlls/wined3d/context_gl.c
 ../recovered-session/wine-11.0/dlls/d3d8/device.c
 ../recovered-session/wine-11.0/dlls/d3d8/buffer.c
@@ -164,14 +180,15 @@ often superseded or retracted **in writing** by later measurements.
 7. **Say what is measured and what is assumed.** Every number here is either
    from the device or labelled as an estimate. Keep it that way.
 
-## The current picture, in four lines
+## The current picture
 
 ```text
-the frame is CPU-bound: ~1000 draw calls and ~103 ms of CPU against 1.5 ms of GPU
-everything removable from the GPU and presentation path has been removed already
-the draws come in runs of 8.5 that can be merged; the batcher for that is unmeasured
-the largest untapped lever is thermal: the guard drops the clock 1992 -> 1104 MHz
-freezes are a wait inside Wine, not the SD card, not shaders, not throttling
+the old frame was CPU-bound; FINALPLAY already reduces ~1299 source draws to ~151 GL calls
+Box86 now bridges exact Wine _sse2_memmove to native ARM without changing semantics
+D3D8 keeps DISCARD writes in cached shadow instead of reading mapped upload memory back
+the former 20-fps fixed spot is measured at 30.0/30.0/30.1 fps at fixed 1992 MHz
+the 2026-08-11 complete freeze was Box86's racy native backing-mutex publication
+the direct old/fixed race test is FAIL versus 10/10 x 1,000 PASS; FINALPLAY3 is deployed
 ```
 
 ## Before proposing anything

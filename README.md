@@ -12,20 +12,32 @@ game to a similar handheld cheap instead of another month of guessing.
 ## State: what works
 
 ```text
-picture     640x480, 22-38 fps standing in gameplay, 13-18 in heavy movement
+picture     640x480; FINALPLAY2 reaches the 30-fps gameplay limit at the former
+            20-fps fixed spot: three qualification windows were 30.0/30.0/30.1
+            fps. Historical windows elsewhere still range 22-60 by scene
 sound       music/menu clicks work; gameplay SFX are audible but can vanish
             after encounter/map state transitions and return after another map
-input       works normally, but a rare no-render/input stall remains under
-            investigation; stock user32 reproduced it in the PeekMessage loop
+input       works normally. Two distinct stalls were captured: a stock-user32
+            PeekMessage spin and a Box86 first-use mutex race. FINALPLAY3 keeps
+            the bounded wait and fixes the deterministic Box86 race
 saves       work
 ```
 
-Two performance wins, both measured, both persisted in `device/launch.sh`:
+The final playable configuration is now `device/launch-play.sh`; the old
+`device/launch.sh` remains an archival measurement harness. Measured wins kept
+from FINALPLAY2, plus the reliability fix in FINALPLAY3, are:
 
 | change | effect |
 |---|---|
 | CPU ladder top step 1608000 → 1992000 (the unit is overclocked) | +29% fps |
 | `d3d8=builtin` instead of the port's own d3d8→d3d9 wrapper | readback 7.0-7.7 → 3.8-4.2 ms/frame |
+| conservative visibility culling on the matched heavy spot | 49.43 → 47.89 ms/frame; 166.58 → 136.81 batches/frame |
+| exact Wine `_sse2_memmove` → native ARM libc bridge | removes the former 744-sample top guest block without changing overlap semantics |
+| cached `DISCARD` shadow instead of reading mapped upload memory back | fixed spot: three consecutive windows at 30.0, 30.0 and 30.1 fps |
+| atomic Box86 aligned-mutex first-use publication | old bridge fails the direct race test; fixed bridge passes 10/10 × 1,000 mappings |
+
+FINALPLAY uses a fixed 1992000 Hz target after the cooling upgrade. The culling
+A/B above remains a historical 1800 MHz measurement; it is not relabelled.
 
 ## The three things that took the longest to find
 
@@ -77,11 +89,17 @@ plus the shared SoC thermal budget, not memory bandwidth.
 ```text
 AGENTS.md                 entry point for anyone, human or model, picking this up
 docs/DEVICE.md            how to run, measure and stop the console safely
-device/launch.sh          the launcher: DLL bind-mounts, audio backend, thermal
-                          guard, presenter tuning. Every knob is documented with
-                          the measurement that set its default.
-device/MGS2-Substance.sh  the menu entry: working audio config plus the
-                          measured-best presentation settings.
+device/launch-play.sh     fixed FINALPLAY launcher: final DLL bind-mounts,
+                          1992 MHz, audio, presentation and emergency guard
+device/launch.sh          archival laboratory launcher and A/B harness
+device/MGS2-Substance.sh  minimal menu entry for launch-play.sh
+harness/box86_guest_profile.py  resolve Box86 JIT perf samples through a bounded
+                          memory-only guest/native map
+harness/box86_memmove_stats.py  external reader/diff for the bounded memmove census
+harness/box86_mutex_first_use_stress.c  direct A/B for Box86's aligned-mutex
+                          first-use publication race
+harness/box86_pthread_link_stub.c  link-only symbols for the freestanding i386
+                          mutex stress executable; never deployed
 harness/perf_sample.py    per-thread CPU, temperatures, GPU clock, CPU cap
 harness/sink_audible_test.sh  tone injection plus speaker-monitor capture with a
                           Goertzel bin, i.e. "is this audible" without ears
@@ -93,6 +111,8 @@ harness/dsound_sfx_state.py  one-shot reader for the bounded gameplay-SFX
                               DirectSound-control ring
 harness/dmime_state.py    one-shot reader for the bounded DirectMusic transition ring
 wine-patches/*.patch      the Wine 11.0 changes, one file per module
+box86-patches/*.patch     exact Box86 EGL facade, native memmove/profilers and
+                          aligned-mutex publication fix
 docs/briefs/              chronological research and performance briefs
 docs/MGS2_PROJECT_STATE.md, docs/MGS2_RG353VS_HANDOFF.md
 mgs2_collect_context.sh   read-only system dump from the console
@@ -121,22 +141,39 @@ removable current producer batches. Patch 24 adds the opt-in AABB-cached culling
 prototype and a one-second-polled live A/B switch. Its first matched device
 A/B/A/B reduced WineD3D batches from 166.58 to 136.81 per frame and frame time
 from 49.43 to 47.89 ms. Visual validation passed. The user explicitly declined
-the remaining two-scene qualification, so patch 24 is the production default
-with an immediate `MGS2_D3D8_VISIBILITY_CULL=0` rollback.
+the remaining two-scene qualification. Patch 25 is not another renderer
+experiment: it physically removes patches 18–24's laboratory paths from the
+production sources, restores batch16 as the WineD3D base, hard-enables the
+proven producer and culler, and caches one composed WVP for the eight AABB
+corners. The historical implementations remain reproducible by stopping the
+patch chain at patch 24. Patch 26 keeps `D3DLOCK_DISCARD` writes in the cached
+producer shadow, removes the resulting whole-upload-mapping readback needed by
+the culler, and skips four provably zero-length range moves. On the former
+20-fps spot it reaches the game's 30-fps limit without changing vertex bytes.
 
 ```sh
 tar xf wine-11.0.tar.xz && cd wine-11.0
 for p in ../wine-patches/*.patch; do patch -p1 -F0 < "$p"; done
 ```
 
-All twenty-four apply with zero fuzz and reproduce the working tree byte for byte;
-`-F0` is deliberate, so a silent mismatch fails instead of being patched
+All twenty-six apply with zero fuzz and reproduce the FINALPLAY2 source byte for
+byte; `-F0` is deliberate, so a silent mismatch fails instead of being patched
 approximately. Building needs the cross compiler that ships in the repo but is
-not on PATH, and the release wined3d needs its define passed explicitly:
+not on PATH. The exact deployed objects use `MGS2_RELEASE` and
+`MGS2_FINALPLAY`; these select the compile-time production policy and remove
+the env-gated laboratory branches from the linked binaries.
 
 ```sh
 export PATH="$PWD/../recovered-session/mingw/bin:$PATH"
-make -j4 i386_CFLAGS="-g -O2 -DMGS2_RELEASE" dlls/wined3d/i386-windows/wined3d.dll
+make -j4 \
+  i386_CC="i686-w64-mingw32-gcc -DMGS2_RELEASE" \
+  i386_CFLAGS="-g -O2 -DMGS2_RELEASE -DMGS2_FINALPLAY -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS" \
+  i386_LDFLAGS="-Wl,--disable-stdcall-fixup -Wl,--no-insert-timestamp" \
+  dlls/wined3d/i386-windows/wined3d.dll dlls/d3d8/i386-windows/d3d8.dll
+
+SOURCE_DATE_EPOCH=0 i686-w64-mingw32-strip --strip-unneeded \
+  dlls/wined3d/i386-windows/wined3d.dll \
+  dlls/d3d8/i386-windows/d3d8.dll
 ```
 
 Beware: the object files in the build tree are release builds and are *newer*
@@ -144,8 +181,10 @@ than the sources, so `make` will not rebuild them. A mixed release/diagnostic
 build links silently and lies in measurements — `touch` every source that must
 go into a variant.
 
-Highlights, all env-gated so they can be A/B tested on the device without a
-rebuild:
+Research binaries remain env-gated for archived A/B work. The two FINALPLAY2
+renderer binaries deliberately are not: batching, restart hoist, set cache,
+producer dirty ranges, cached DISCARD shadow and visibility culling are
+unconditional production code.
 
 - **dmsynth / dmusic** — upstream `685c5b6` write-latency backport with the
   reserve made tunable (`MGS2_DMSYNTH_JITTER_MS`, underruns 222 → 15); cost
@@ -218,6 +257,11 @@ MGS2_GL_SHM_BUFFERS=3     inside noise against 2
 packed source-VBO         per-batch BO pool hits 256 slots/frame and falls to
                           13-15 fps; one 4 MB frame ring makes Mali allocation
                           grow 477 -> 531 MB in ~13 s and kernel OOM-kills MGS2
+persistent shared VBO + WORLD lift
+                          bounded 8 MiB coherent arena maps and fences safely,
+                          but produces zero lifted batches both with and without
+                          visibility culling; an exact effective-state projection
+                          also finds zero safely mergeable whole producer batches
 byte-identical instancing exact WORLD+VB census finds only 1.43-1.93 removable
                           batches/frame against the required 40
 rebuilding the presenter  identical to the shipped build
@@ -235,18 +279,18 @@ lowering resolution       works, obviously, and the owner refused it
 
 ## Still open
 
-1. **Re-measure off the charger.** Every thermal number here was taken while
-   charging, and the guard was seen walking the CPU cap from 1992 down to 816 MHz.
-   That is worth more than any remaining software change.
-2. **A `wined3d` build with `-DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS` and
-   SSE2 codegen.** Feasible — the working `wined3d` does come from this tree.
-   Estimated 2-8%.
-3. **An aggregated D3D8/wined3d census** — draw calls, redundant state changes,
-   managed-texture scans — to find whether `wined3d_cs`'s half core is work or
-   churn. Counters only, one line per 300 frames.
-4. **An asynchronous presenter**: shared EGL contexts, two or three final
-   textures, a fence, and the same `glReadPixels` performed on another thread, so
-   the game thread stops waiting for the GPU. 5-15%.
+1. **Frequent ~20 fps scenes.** The owner reports these are not rare. The
+   no-image-loss renderer branches are now exhausted on device: the next
+   meaningful performance experiment requires explicit acceptance of lower
+   render resolution or more aggressive geometry/effect culling.
+2. **Intermittent gameplay-SFX loss.** Use the bounded DirectSound/DirectMusic
+   state captures documented in the current audio handoff; do not add hot-thread
+   logging.
+3. **Soak the runtime fixes.** The earlier caller-specific empty-message spin
+   and the later Box86 mutex-mapping deadlock are separate captures. FINALPLAY3
+   keeps the measured bounded PeekMessage wait and removes the exact Box86
+   first-use race; a future stall needs a new owner/wait capture, not an assumed
+   attribution to either old incident.
 
 ## Credits and licence
 
@@ -262,7 +306,9 @@ diagnostic/candidate variants, so a device can be restored or measured without
 a toolchain. Checksums in `binaries/SHA256SUMS`.
 
 ```text
-box86-clean1                               exact Box86 runtime the port bind-mounts
+box86-clean1                               archived Box86 baseline
+box86-native-memmove2                      previous production Box86 rollback
+box86-native-memmove3                      production memmove + mutex-race fix
 d3d8_producer_batch14_dirtyranges.dll      bounded dirty-range aggregation for game VBs
 d3d8_producer_batch15_projectedcensus.dll  300-frame projected break census; diagnostic only
 d3d8_producer_batch16_mixedcensus.dll      top mixed-state masks plus 64-mask projections
@@ -270,6 +316,7 @@ d3d8_producer_batch17_streamdetail.dll     buffer/offset/stride/index detail for
 d3d8_producer_batch18_geometryrepeatcensus.dll  sampled byte-identical WORLD+VB projection
 d3d8_producer_batch19_visibilitycensus.dll conservative whole-batch visibility projection
 d3d8_producer_batch20_visibilitycull.dll   production cached conservative frustum culling
+d3d8_finalplay.dll                         clean production producer + cached visibility culling
 dmime_se1.dll                              DirectMusic graph and shared-port support
 dmime_transition1.dll                      se1 plus AudioPath/curve transition recovery
 dmime_state1.dll                           transition1 plus bounded diagnostic recorder
@@ -289,10 +336,13 @@ winewayland_stall1.so                      currently selected presentation drive
 win32u_glfuncs3.so                         GLES function bridge required by the driver
 wined3d_batch16_setcache.dll               bounded 4-way batch cache, no hot telemetry
 wined3d_batch17_relative_range.dll          relative-index/range-draw candidate; off by default
+wined3d_finalplay.dll                       clean production batch16/set-cache policy
 ```
 
-The renderer DLL is intentionally included even though it is 25 MB, as are the
-current Box86 and Unix-side Wine modules. Together this is the complete custom
+The archived research renderer DLLs are intentionally included even though each
+is about 25 MB; the stripped production `wined3d_finalplay.dll` is only 2.73
+MiB after the source cleanup. Current Box86 and Unix-side Wine modules are also
+included. Together this is the complete custom
 runtime selected by the production launcher; a clone no longer depends on a
 sibling build-artifact directory to restore it. The temporary `sevoice7`
 diagnostic EXE is not versioned here: it is derived from the user's game binary
