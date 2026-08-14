@@ -14,18 +14,20 @@ game to a similar handheld cheap instead of another month of guessing.
 ```text
 picture     640x480; FINALPLAY2 reaches the 30-fps gameplay limit at the former
             20-fps fixed spot: three qualification windows were 30.0/30.0/30.1
-            fps. Historical windows elsewhere still range 22-60 by scene
+            fps. A valid reinforcements capture is still 18.3-19.5 fps and
+            later 11.9-14.8 fps: 30 is not a whole-game claim
 sound       music/menu clicks work; gameplay SFX are audible but can vanish
             after encounter/map state transitions and return after another map
 input       works normally. Two distinct stalls were captured: a stock-user32
-            PeekMessage spin and a Box86 first-use mutex race. FINALPLAY3 keeps
-            the bounded wait and fixes the deterministic Box86 race
+            PeekMessage spin and a Box86 first-use mutex race. FINALPLAY4 keeps
+            both fixes and moves the hot DirectSound FIR loop to native ARM
 saves       work
 ```
 
 The final playable configuration is now `device/launch-play.sh`; the old
 `device/launch.sh` remains an archival measurement harness. Measured wins kept
-from FINALPLAY2, plus the reliability fix in FINALPLAY3, are:
+from FINALPLAY2, plus the FINALPLAY3 reliability fix and FINALPLAY4 audio-CPU
+bridge, are:
 
 | change | effect |
 |---|---|
@@ -35,6 +37,8 @@ from FINALPLAY2, plus the reliability fix in FINALPLAY3, are:
 | exact Wine `_sse2_memmove` → native ARM libc bridge | removes the former 744-sample top guest block without changing overlap semantics |
 | cached `DISCARD` shadow instead of reading mapped upload memory back | fixed spot: three consecutive windows at 30.0, 30.0 and 30.1 fps |
 | atomic Box86 aligned-mutex first-use publication | old bridge fails the direct race test; fixed bridge passes 10/10 × 1,000 mappings |
+| exact-source FFP shader/stage cache | corrected save/enemy control: 36 stages from 19 sources; removes 17 duplicate links that cost 2.04 s |
+| exact Wine DirectSound FIR → native ARM bridge | fixed 1416 MHz: mixer thread 12.97% → 7.57% of one core (-41.6%); guest `dsound` samples 717 → 40 |
 
 FINALPLAY uses a fixed 1992000 Hz target after the cooling upgrade. The culling
 A/B above remains a historical 1800 MHz measurement; it is not relabelled.
@@ -95,6 +99,8 @@ device/launch.sh          archival laboratory launcher and A/B harness
 device/MGS2-Substance.sh  minimal menu entry for launch-play.sh
 harness/box86_guest_profile.py  resolve Box86 JIT perf samples through a bounded
                           memory-only guest/native map
+harness/box86_guest_snapshot.py take the external snapshot of that map after a
+                          bounded profile; neither tool logs from a hot thread
 harness/box86_memmove_stats.py  external reader/diff for the bounded memmove census
 harness/box86_mutex_first_use_stress.c  direct A/B for Box86's aligned-mutex
                           first-use publication race
@@ -105,6 +111,8 @@ harness/sink_audible_test.sh  tone injection plus speaker-monitor capture with a
                           Goertzel bin, i.e. "is this audible" without ears
 harness/jitter_ladder.sh  ladder over MGS2_DMSYNTH_JITTER_MS with detection
 harness/send_key.py       synthetic input, for harnesses only
+harness/autoload_save.sh  real-frame-gated save loader; corrected gameplay walk
+                          defaults to down and can be changed with MGS2_WALK_KEY
 harness/dmsynth_state.py  one-shot reader/diff for the bounded synth-state ring
 harness/dsound_live_state.py  read-only DirectSound/FluidSynth memory snapshot
 harness/dsound_sfx_state.py  one-shot reader for the bounded gameplay-SFX
@@ -150,16 +158,42 @@ patch chain at patch 24. Patch 26 keeps `D3DLOCK_DISCARD` writes in the cached
 producer shadow, removes the resulting whole-upload-mapping readback needed by
 the culler, and skips four provably zero-length range moves. On the former
 20-fps spot it reaches the game's 30-fps limit without changing vertex bytes.
+Patch 27 attacks first-use transition hitches instead of throughput: it links FFP
+vertex and pixel stages as separable stage programs joined by a pipeline object,
+so repeated shaders are relinked once per stage rather than once per pair, and it
+adds the nine `gles_spellings[]` entries without which the GLES driver never hands
+Wine the separate-shader-objects functions. Measured: a pair costs 116 ms instead
+of 201 ms, 17 stage links instead of 56. It reduces hitches and does not remove
+them -- a genuinely new stage still costs ~191 ms.
+Patch 28 deletes the visibility culler's AABB cache. Its own telemetry measured
+`cache_hit=0` against `cache_miss=112800` over 300 frames, and it could not be
+otherwise: the key includes `mgs2_geometry_generation`, which is bumped on every
+writable `Unlock`, while MGS2 re-uploads its dynamic vertex buffers every frame.
+The cache paid a hash plus up to four comparisons per tested draw (376 per frame)
+and 73,760 bytes of BSS to return nothing. Removal cannot change a culling
+decision, because every lookup already fell through to the same AABB loop.
+Patch 29 stops issuing three GLES-invalid or meaningless state toggles; rejected
+GL calls fell from roughly 436 to 48 per second without an fps change. Patch 30
+is a retained, default-off programmable-VS separable-stage experiment; the real
+gameplay route measured no eligible pairs. Patch 31's cull-box prototype remains
+off after its corridor-only fps win failed the player's broader playability test.
+Patch 32 canonicalises fixed-function GL shaders and separable stages by exact
+generated GLSL. The corrected save/enemy control contained 17 duplicate links
+costing 2.04 s; cache-on emitted no duplicate. Hash, length and full `memcmp`
+guard equality, and `MGS2_GL_SOURCE_DEDUP=0` is the rollback switch. See
+`docs/briefs/MGS2_SHADER_FIRST_USE_RESEARCH_2026-08-13.md`.
 
 ```sh
 tar xf wine-11.0.tar.xz && cd wine-11.0
 for p in ../wine-patches/*.patch; do patch -p1 -F0 < "$p"; done
 ```
 
-All twenty-six apply with zero fuzz and reproduce the FINALPLAY2 source byte for
-byte; `-F0` is deliberate, so a silent mismatch fails instead of being patched
-approximately. Building needs the cross compiler that ships in the repo but is
-not on PATH. The exact deployed objects use `MGS2_RELEASE` and
+Patches 1-26 apply with zero fuzz and reproduce the FINALPLAY2 source byte for
+byte; patches 27-30 and 32 reproduce the deployed WineD3D source (patch 30 is
+compiled in but remains off by default), while patch 31 is the separate reverted
+D3D8 experiment. `-F0` is deliberate, so a silent mismatch fails instead of
+being patched approximately. Building needs the cross compiler that ships in
+the repo but is not on PATH. The exact deployed objects use `MGS2_RELEASE` and
 `MGS2_FINALPLAY`; these select the compile-time production policy and remove
 the env-gated laboratory branches from the linked binaries.
 
@@ -268,6 +302,13 @@ rebuilding the presenter  identical to the shipped build
 GPU governor pinned to 800 MHz   GPU wait halves, CPU cap falls to 816 MHz
                                  because both share one thermal budget: net loss
 GPU capped to 400 MHz     no gain
+Mali shader LTO / pilot-shader disable
+                          driver confirmed both config files; neither changed
+                          per-stage link cost enough to keep
+whole `wined3d_cs` / WineD3D ARM port
+                          valid reinforcement profile splits its cost about half
+                          Box86/Wine, half already-native Mali driver; it would
+                          retain GL side effects and cannot remove driver work
 WINE_D3D_CONFIG=csmt=0    the game does not start (page fault at 0x3C), twice
 suspending EmulationStation      ~1 fps, and it can leave the menu frozen
 PChannel disjoint allocation, group→channel remapping, DLS gain boost,
@@ -279,18 +320,30 @@ lowering resolution       works, obviously, and the owner refused it
 
 ## Still open
 
-1. **Frequent ~20 fps scenes.** The owner reports these are not rare. The
-   no-image-loss renderer branches are now exhausted on device: the next
-   meaningful performance experiment requires explicit acceptance of lower
-   render resolution or more aggressive geometry/effect culling.
+1. **Frequent 12--20 fps combat scenes.** A valid 14 August reinforcement
+   capture at fixed 1992 MHz and one process confirms this is real scene cost,
+   not thermal throttling. `wined3d_cs` splits almost evenly between translated
+   Wine and already-native `libmali`; replacing the whole WineD3D thread cannot
+   reach 25 fps. Before an image-quality trade-off, the one remaining bounded
+   renderer experiment is a memory-only census of draw paths that still escape
+   the existing batcher, then a candidate that demonstrably reduces driver
+   submissions. See `MGS2_REINFORCEMENT_ARM_TARGET_2026-08-14.md`.
 2. **Intermittent gameplay-SFX loss.** Use the bounded DirectSound/DirectMusic
    state captures documented in the current audio handoff; do not add hot-thread
-   logging.
+   logging. The 13 August manual combat report captured successful DirectSound,
+   DirectMusic and synth activity but arrived after death without an exact attack
+   timestamp, so it did not justify a new Wine audio patch. Also note the corrected
+   control mapping: player attack is `x`; earlier `z` automation performed
+   rolls/throws, so its bank 0 / program 8 event is not a punch signature.
 3. **Soak the runtime fixes.** The earlier caller-specific empty-message spin
    and the later Box86 mutex-mapping deadlock are separate captures. FINALPLAY3
    keeps the measured bounded PeekMessage wait and removes the exact Box86
    first-use race; a future stall needs a new owner/wait capture, not an assumed
    attribution to either old incident.
+4. **Unique first-use shader stages.** Patch 32 removes exact duplicates, not the
+   first 200-320 ms link of a genuinely new source. Any next candidate must move
+   measured stages earlier in the same GL context; the cross-process program
+   binary cache is already disproved.
 
 ## Credits and licence
 
@@ -308,7 +361,8 @@ a toolchain. Checksums in `binaries/SHA256SUMS`.
 ```text
 box86-clean1                               archived Box86 baseline
 box86-native-memmove2                      previous production Box86 rollback
-box86-native-memmove3                      production memmove + mutex-race fix
+box86-native-memmove3                      previous FINALPLAY3 rollback
+box86-native-dsound-fir1                   production memmove/mutex fixes + native dsound FIR
 d3d8_producer_batch14_dirtyranges.dll      bounded dirty-range aggregation for game VBs
 d3d8_producer_batch15_projectedcensus.dll  300-frame projected break census; diagnostic only
 d3d8_producer_batch16_mixedcensus.dll      top mixed-state masks plus 64-mask projections
@@ -325,7 +379,9 @@ dmsynth_se1.dll                            earlier jitter/cost-policy fallback
 dmsynth_se2_lifetime.dll                   current voice-refresh and 48-voice build
 dmsynth_se3_state1.dll                     se2 plus bounded reset/note/voice recorder
 dmsynth_se4_unmute1.dll                    se3 plus note-triggered stuck-mute recovery
-dsound_se1.dll                             makes dmsynth sink output audible at all
+dmsynth_p34_interp_reset.dll                production interpolation-reset CPU fix
+dsound_se1.dll                             previous production audio fallback
+dsound_p36_native_fir_target.dll            production bridgeable FIR target
 dsound_state1.dll                           se1 plus bounded gameplay-SFX recorder
 ntdll_fastyield.so                         measured Wine yield fast path
 opengl32_glesver1.so                       GLES entry-point/version bridge
@@ -337,6 +393,7 @@ win32u_glfuncs3.so                         GLES function bridge required by the 
 wined3d_batch16_setcache.dll               bounded 4-way batch cache, no hot telemetry
 wined3d_batch17_relative_range.dll          relative-index/range-draw candidate; off by default
 wined3d_finalplay.dll                       clean production batch16/set-cache policy
+wined3d_p32_ffp_source_dedup.dll            production exact-source shader/stage cache
 ```
 
 The archived research renderer DLLs are intentionally included even though each

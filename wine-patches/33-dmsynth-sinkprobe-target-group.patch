@@ -1,0 +1,122 @@
+--- a/dlls/dmsynth/dmsynth_private.h
++++ b/dlls/dmsynth/dmsynth_private.h
+@@ -172,8 +172,9 @@
+ };
+
+ extern __declspec(dllexport) volatile struct dmsynth_sinkprobe_state dmsynth_sinkprobe_state;
++extern BOOL synth_sink_probe_program_filter_enabled(void);
+ extern void synth_sink_probe_mark(void *sink, void *synth, DWORD group, BYTE status,
+-        BYTE note, BYTE velocity);
++        BYTE note, BYTE velocity, int program);
+
+ /*****************************************************************************
+  * Misc.
+--- a/dlls/dmsynth/synth.c
++++ b/dlls/dmsynth/synth.c
+@@ -1415,7 +1415,7 @@
+                             head->dwFlags, event->midi[0], event->midi[1], event->midi[2]);
+             }
+             synth_sink_probe_mark(This->sink, This, event->channel_group,
+-                    event->midi[0] & 0xf0, event->midi[1], event->midi[2]);
++                    event->midi[0] & 0xf0, event->midi[1], event->midi[2], -1);
+
+             if (shotprobe_enabled() && event->midi[0] == MIDI_NOTE_ON &&
+                     event->midi[1] == 0x3c && event->midi[2] == 0x7f)
+@@ -1601,6 +1601,17 @@
+                 fluid_synth_get_program(This->fluid_synth, chan, &sfont_id, &bank, &program);
+             }
+
++            if (synth_sink_probe_program_filter_enabled())
++            {
++                /* A program-filtered sink probe must be armed at render time,
++                 * after the queued bank/program changes preceding this note
++                 * have actually been applied. */
++                if (!state_record)
++                    fluid_synth_get_program(This->fluid_synth, chan, &sfont_id, &bank, &program);
++                synth_sink_probe_mark(This->sink, This, event->channel_group,
++                        status, event->midi[1], event->midi[2], program);
++            }
++
+             if (shot)
+             {
+                 shot_rendered = TRUE;
+--- a/dlls/dmsynth/synthsink.c
++++ b/dlls/dmsynth/synthsink.c
+@@ -90,6 +90,50 @@
+     return enabled;
+ }
+
++/* The historical probe targeted group 2, which was the weapon-shot route used
++ * to build it.  MGS2's current autoloaded punch candidate is group 1.  Keep the
++ * old default, but allow a deliberate diagnostic run to select the group
++ * without rebuilding another one-off DLL.  This is only evaluated after one of
++ * the probe switches is enabled. */
++static DWORD sinkprobe_target_group(void)
++{
++    static int group = -1;
++
++    if (group == -1)
++        group = mgs2_env_int("MGS2_SINKPROBE_GROUP", 2, 1, 32);
++    return group;
++}
++
++/* No program filter preserves the historical queue-time capture.  When the
++ * variable is present, the queue-side call passes -1 and is ignored; the
++ * render-side call supplies FluidSynth's actual selected program. */
++static int sinkprobe_target_program(void)
++{
++    static int target = -2;
++    char value[16];
++    DWORD len;
++
++    if (target == -2)
++    {
++        len = GetEnvironmentVariableA("MGS2_SINKPROBE_PROGRAM", value, sizeof(value));
++        target = len && len < sizeof(value) ?
++                mgs2_env_int("MGS2_SINKPROBE_PROGRAM", 0, 0, 127) : -1;
++    }
++    return target;
++}
++
++BOOL synth_sink_probe_program_filter_enabled(void)
++{
++    return sinkprobe_target_program() >= 0;
++}
++
++static BOOL sinkprobe_target_program_matches(int program)
++{
++    int target = sinkprobe_target_program();
++
++    return target < 0 || (program >= 0 && program == target);
++}
++
+ /* Armed by the target note-on; consumed only by the render thread. */
+ static volatile LONG shot_tone_frames;
+ static volatile LONG shot_tone_armed;
+@@ -180,11 +224,12 @@
+ }
+
+ void synth_sink_probe_mark(void *sink, void *synth, DWORD group, BYTE status,
+-        BYTE note, BYTE velocity)
++        BYTE note, BYTE velocity, int program)
+ {
+     if ((!sinkprobe_enabled() && !sinkaudible_enabled())
+             || status != 0x90 || note != 0x3c || velocity != 0x7f
+-            || group != 2)
++            || group != sinkprobe_target_group()
++            || !sinkprobe_target_program_matches(program))
+         return;
+     if (sinkaudible_enabled())
+     {
+@@ -363,7 +408,10 @@
+     if (index < 0 || index >= DMSYNTH_SINKPROBE_EVENTS) return NULL;
+     record = (struct dmsynth_sinkprobe_record *)&dmsynth_sinkprobe_state.records[index];
+     memset(record, 0, sizeof(*record));
+-    record->sequence = index + 1;
++    /* A diagnostic sink-monitor recording uses the same monotonic millisecond
++     * clock.  Store the block tick instead of a redundant 1-based slot number
++     * so a rendered/copied block can be aligned with actual speaker output. */
++    record->sequence = GetTickCount();
+     record->sink = (DWORD)(ULONG_PTR)sink;
+     sink->probe_record = index;
+     return record;

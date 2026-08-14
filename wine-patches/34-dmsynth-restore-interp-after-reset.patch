@@ -1,0 +1,39 @@
+Patch 34 -- restore the selected FluidSynth interpolation after every reset.
+
+fluid_synth_system_reset() resets every channel to FLUID_INTERP_DEFAULT (4th
+order).  The existing port policy selected linear interpolation once in Open,
+immediately before synth_reset_default_values() called system_reset and undid
+it.  MIDI system-reset events repeated the same mistake at runtime.
+
+Move the setting to the only reset helper.  The on-device guest/native profile
+then changed from fluid_rvoice_dsp_interpolate_4th_order to
+fluid_rvoice_dsp_interpolate_linear and reduced dmsynth thread samples from 781
+to 514 (-34.2%) despite the candidate run being globally heavier.  This is
+audio CPU headroom; no renderer FPS gain is claimed, and intermittent SFX loss
+still needs a user reproduction/soak before production deployment.
+
+--- a/dlls/dmsynth/synth.c
++++ b/dlls/dmsynth/synth.c
+@@ -801,6 +801,13 @@ static void synth_reset_default_values(struct synth *This, DWORD reason)
+     }
+
+     fluid_synth_system_reset(This->fluid_synth);
++    /* fluid_synth_system_reset() resets every channel's interpolation method
++     * to FluidSynth's default (4th order).  Reapply the port's selected method
++     * after every reset; doing it once in synth_Open() before this call was
++     * ineffective, and MIDI system-reset events undid it again at runtime. */
++    if (fluid_synth_set_interp_method(This->fluid_synth, -1,
++            mgs2_env_int("MGS2_DMSYNTH_INTERP", FLUID_INTERP_LINEAR, 0, 7)) == FLUID_FAILED)
++        WARN("Failed to restore interpolation method after reset\n");
+
+     for (chan = 0; chan < synth_channel_count(This); chan++)
+     {
+@@ -975,9 +982,6 @@ static HRESULT WINAPI synth_Open(IDirectMusicSynth8 *iface, DMUS_PORTPARAMS *par
+     }
+     if ((id = fluid_synth_add_sfont(This->fluid_synth, This->fluid_sfont)) == FLUID_FAILED)
+         WARN("Failed to add fluid_sfont to fluid_synth\n");
+-    if (fluid_synth_set_interp_method(This->fluid_synth, -1,
+-            mgs2_env_int("MGS2_DMSYNTH_INTERP", FLUID_INTERP_LINEAR, 0, 7)) == FLUID_FAILED)
+-        WARN("Failed to set interpolation method\n");
+     This->volumes_applied = FALSE;
+     synth_reset_default_values(This, DMSYNTH_STATE_OPEN_RESET);

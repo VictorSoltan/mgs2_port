@@ -1,0 +1,219 @@
+Patch 06 -- run the reviewed Wine DirectSound FIR target as native ARM code.
+
+This builds on patches 01-05.  The bridge is disabled by default and enabled
+only with MGS2_BOX86_NATIVE_DSOUND_FIR=1.  At startup it runs a bounded FIR
+self-test, then publishes a bridge whose wrapper receives Wine's regparm job
+pointer from guest EAX.  The 32-bit job layout is copied field-by-field into
+native addresses and the convolution is performed in the Box86 process, so it
+does not cross a process or audio API boundary.
+
+The companion Wine patch 36 provides a unique noinline/noclone target.  As with
+the existing native memmove and AABB experiments, Box86 accepts it only after
+an exact readable-byte signature match and caches exactly one guest address.
+
+On-device at a fixed 1416 MHz, the DirectSound mixer thread fell from 12.97% to
+7.57% of one core.  Guest-profile dsound samples fell from 717 to 40, the old
+FIR block's 647 samples disappeared, and 260 samples resolved directly to the
+native kernel.  This proves the layer removal and mixer saving; it does not by
+itself establish an FPS gain because the two gameplay windows had different
+music/render states.  Manual combat/SFX validation is still required before
+production.  Candidate SHA256:
+89ca26c512489ed18b3605ca195fa7dd45d3a9f8cc3fefafac8b1ebd9b86a252.
+
+diff --git a/src/include/bridge.h b/src/include/bridge.h
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -19,6 +19,7 @@
+ void* GetNativeFncOrFnc(uintptr_t fnc);
+ void SetMGS2NativeMemmove(uintptr_t alt);
+ void SetMGS2NativeAabb(uintptr_t alt);
++void SetMGS2NativeDsoundFir(uintptr_t alt);
+
+ int hasAlternate(void* addr);
+ void* getAlternate(void* addr);
+diff --git a/src/box86context.c b/src/box86context.c
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -269,6 +269,103 @@ static void mgs2_native_aabb_wrapper(x86emu_t *emu, uintptr_t fnc)
+     SetEAX(emu, result);
+ }
+
++/* 32-bit layout shared with the companion Wine dsound candidate.  Every field
++ * is exactly one guest DWORD, including pointers and the float bit pattern, so
++ * the layout is independent of AArch64 alignment rules. */
++typedef struct mgs2_dsound_fir_job32_s
++{
++    uint32_t output;
++    uint32_t intermediate;
++    uint32_t fir_copy;
++    uint32_t fir_table;
++    uint32_t count;
++    uint32_t required_input;
++    uint32_t channels;
++    uint32_t output_channels;
++    uint32_t firstep;
++    uint32_t firgain_bits;
++    uint32_t fir_length;
++    uint32_t freq_start_low, freq_start_high;
++    uint32_t freq_num_low, freq_num_high;
++    uint32_t freq_den_low, freq_den_high;
++} mgs2_dsound_fir_job32_t;
++
++static void mgs2_native_dsound_fir_kernel(float *output,
++        const float *intermediate, float *fir_copy, const float *fir_table,
++        uint32_t count, uint32_t required_input, uint32_t channels,
++        uint32_t output_channels, uint32_t firstep, float firgain,
++        uint32_t fir_length, uint64_t freq_start, uint64_t freq_num,
++        uint64_t freq_den)
++{
++    uint32_t i;
++
++    for (i = 0; i < count; ++i)
++    {
++        uint64_t phase = freq_start + (uint64_t)i * freq_num;
++        uint32_t int_fir_steps = phase * firstep / freq_den;
++        float total_fir_steps = phase * firstep / (float)freq_den;
++        uint32_t ipos = int_fir_steps / firstep;
++        uint32_t idx = (ipos + 1) * firstep - int_fir_steps - 1;
++        float rem = int_fir_steps + 1.0 - total_fir_steps;
++        uint32_t fir_used = 0, channel;
++
++        while (idx < fir_length - 1)
++        {
++            fir_copy[fir_used++] = fir_table[idx] * (1.0 - rem)
++                    + fir_table[idx + 1] * rem;
++            idx += firstep;
++        }
++
++        for (channel = 0; channel < channels; ++channel)
++        {
++            const float *cache = intermediate + channel * required_input + ipos;
++            float sum = 0.0f;
++            uint32_t j;
++
++            for (j = 0; j < fir_used; ++j)
++                sum += fir_copy[j] * cache[j];
++            output[i * output_channels + channel] = sum * firgain;
++        }
++    }
++}
++
++__attribute__((noinline, visibility("default")))
++void mgs2_native_dsound_fir_impl(uint32_t job_address)
++{
++    mgs2_dsound_fir_job32_t job;
++    float firgain;
++
++    memcpy(&job, (const void *)(uintptr_t)job_address, sizeof(job));
++    memcpy(&firgain, &job.firgain_bits, sizeof(firgain));
++    mgs2_native_dsound_fir_kernel(
++            (float *)(uintptr_t)job.output,
++            (const float *)(uintptr_t)job.intermediate,
++            (float *)(uintptr_t)job.fir_copy,
++            (const float *)(uintptr_t)job.fir_table,
++            job.count, job.required_input, job.channels, job.output_channels,
++            job.firstep, firgain, job.fir_length,
++            ((uint64_t)job.freq_start_high << 32) | job.freq_start_low,
++            ((uint64_t)job.freq_num_high << 32) | job.freq_num_low,
++            ((uint64_t)job.freq_den_high << 32) | job.freq_den_low);
++}
++
++static int mgs2_native_dsound_fir_selftest(void)
++{
++    static const float table[] = {0.25f, 0.5f, 0.25f, 0.0f};
++    static const float input[] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
++    float coefficients[4] = {0};
++    float output[2] = {0};
++
++    mgs2_native_dsound_fir_kernel(output, input, coefficients, table,
++            2, 5, 1, 1, 1, 1.0f, 4, 0, 1, 1);
++    return output[0] == 1.0f && output[1] == 1.75f;
++}
++
++static void mgs2_native_dsound_fir_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    ((void (*)(uint32_t))fnc)(GetEAX(emu));
++}
++
+ /// maxval not inclusive
+ int getrand(int maxval)
+ {
+@@ -481,6 +578,20 @@ box86context_t *NewBox86Context(int argc)
+             SetMGS2NativeAabb(bridge);
+         }
+     }
++    const char *mgs2_native_dsound_fir_env = getenv("MGS2_BOX86_NATIVE_DSOUND_FIR");
++    if (mgs2_native_dsound_fir_env && atoi(mgs2_native_dsound_fir_env))
++    {
++        if (!mgs2_native_dsound_fir_selftest())
++            printf_log(LOG_INFO, "MGS2 native dsound FIR: self-test FAILED, bridge disabled\n");
++        else
++        {
++            uintptr_t bridge = AddBridge(context->system,
++                    mgs2_native_dsound_fir_wrapper,
++                    mgs2_native_dsound_fir_impl, 0,
++                    "MGS2 native dsound FIR resampler");
++            SetMGS2NativeDsoundFir(bridge);
++        }
++    }
+     // create exit bridge
+     context->exit_bridge = AddBridge(context->system, NULL, NULL, 0, NULL);
+ #ifdef BUILD_LIB
+diff --git a/src/tools/bridge.c b/src/tools/bridge.c
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -248,6 +248,8 @@
+ static uintptr_t mgs2_memmove_guest;
+ static uintptr_t mgs2_native_aabb;
+ static uintptr_t mgs2_aabb_guest;
++static uintptr_t mgs2_native_dsound_fir;
++static uintptr_t mgs2_dsound_fir_guest;
+
+ void SetMGS2NativeMemmove(uintptr_t alt)
+ {
+@@ -259,6 +261,11 @@ void SetMGS2NativeAabb(uintptr_t alt)
+     mgs2_native_aabb = alt;
+ }
+
++void SetMGS2NativeDsoundFir(uintptr_t alt)
++{
++    mgs2_native_dsound_fir = alt;
++}
++
+ static int mgs2_signature_readable(uintptr_t addr, size_t size)
+ {
+     uintptr_t end, probe;
+@@ -343,6 +350,33 @@ mgs2_memmove:
+             return (void *)mgs2_native_aabb;
+         }
+     }
++
++    if (mgs2_native_dsound_fir)
++    {
++        /* Exact first 48 bytes of Wine's noinline/noclone FIR target.  The
++         * signature includes its full prologue and the first job-field loads;
++         * a stock Wine function cannot match this MGS2-only helper. */
++        static const unsigned char signature[] = {
++            0x55, 0x89, 0xe5, 0x57, 0x89, 0xc7, 0x56, 0x53,
++            0x83, 0xe4, 0xf8, 0x83, 0xec, 0x48, 0x8b, 0x40,
++            0x2c, 0x8b, 0x57, 0x30, 0x8b, 0x4f, 0x10, 0x89,
++            0x44, 0x24, 0x28, 0x8b, 0x47, 0x34, 0x89, 0x54,
++            0x24, 0x2c, 0x8b, 0x57, 0x38, 0x89, 0x44, 0x24,
++            0x18, 0x8b, 0x47, 0x3c, 0x89, 0x54, 0x24, 0x1c,
++        };
++        uintptr_t guest = __atomic_load_n(&mgs2_dsound_fir_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_dsound_fir;
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, sizeof(signature))
++                && !memcmp(addr, signature, sizeof(signature)))
++        {
++            __atomic_store_n(&mgs2_dsound_fir_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
++            printf_log(LOG_INFO, "MGS2 native dsound FIR: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_dsound_fir);
++            return (void *)mgs2_native_dsound_fir;
++        }
++    }
+     return addr;
+ }
+ void addAlternate(void* addr, void* alt) {

@@ -1,0 +1,85 @@
+Patch 29 -- stop issuing GL state that a GLES driver rejects.
+
+Found by reading the active patches, then measured on the device. With err+d3d
+enabled, a two-minute run of the production build reports 52,365 rejected GL
+calls through wined3d_check_gl_call. Two sources are named exactly here:
+
+  9,938  GL_INVALID_ENUM from depth_clip        (ffp_gl.c)
+  9,938  GL_INVALID_ENUM from glDisable(GL_LINE_SMOOTH)
+
+depth_clip() already guards on gl_info->supported[ARB_DEPTH_CLAMP], so the bug is
+upstream of it: ARB_DEPTH_CLAMP is credited by the desktop version table at GL
+3.2, and this driver reports "OpenGL ES 3.2" -- which patch 6 now parses
+correctly. Desktop 3.2 has GL_DEPTH_CLAMP, GLES 3.2 does not. The CrossOver
+Android capability-clearing list covers twenty such flags but not this one, so
+the fix belongs in that list.
+
+line_antialias() has no capability bit to clear: GLES has no line smoothing at
+all, so the guard has to live at the call. state_msaa() is the same class --
+GL_MULTISAMPLE does not exist in GLES, where multisampling is a property of the
+framebuffer. ARB_MULTISAMPLE is deliberately NOT cleared, because the samples
+themselves are real and other code depends on that bit; only the toggle is
+meaningless.
+
+In production these errors are invisible, since ERR sits behind a channel check
+and WINEDEBUG is -all. The calls happen regardless and the driver discards them:
+roughly 165 rejected round trips per second, one pair per rasterizer state
+application. Removing them cannot change what the driver was going to do.
+
+Note on the third source in that run, 21,537 GL_INVALID_OPERATION attributed to
+"glEnable GL_SAMPLE_ALPHA_TO_COVERAGE": that enum is core in GLES 3.0, so the
+call is legal and the error was almost certainly pending from an earlier
+unchecked call -- checkGLcall prints whatever glGetError returns, not necessarily
+the culprit. Not addressed here; naming its real source needs a run with
+glGetError before the call, not more reading.
+
+--- a/dlls/wined3d/adapter_gl.c
++++ b/dlls/wined3d/adapter_gl.c
+@@ -3589,6 +3589,14 @@
+         gl_info->supported[ARB_VERTEX_PROGRAM] = FALSE;
+         gl_info->supported[ARB_FRAGMENT_PROGRAM] = FALSE;
+         gl_info->supported[ARB_DEBUG_OUTPUT] = FALSE;
++        /* ARB_DEPTH_CLAMP is credited purely by version: the table above lists it
++         * at GL 3.2 and this driver reports "OpenGL ES 3.2", which opengl32 now
++         * parses correctly. Desktop 3.2 has GL_DEPTH_CLAMP, GLES 3.2 does not, so
++         * depth_clip() passed its supported[] guard and then issued an enum the
++         * driver rejects. Measured on the device 2026-08-13: 9,938 rejected calls
++         * from depth_clip in a two-minute run, one per rasterizer state
++         * application, every one of them discarded by the driver. */
++        gl_info->supported[ARB_DEPTH_CLAMP] = FALSE;
+         gl_info->supported[ARB_DRAW_ELEMENTS_BASE_VERTEX] = FALSE;
+         gl_info->supported[ARB_MAP_BUFFER_ALIGNMENT] = FALSE;
+         gl_info->supported[ARB_POINT_SPRITE] = FALSE;
+--- a/dlls/wined3d/ffp_gl.c
++++ b/dlls/wined3d/ffp_gl.c
+@@ -874,6 +874,14 @@
+ {
+     const struct wined3d_gl_info *gl_info = wined3d_context_gl(context)->gl_info;
+
++    /* Same class as line_antialias: GL_MULTISAMPLE does not exist in GLES, where
++     * multisampling is a property of the framebuffer rather than a toggle. The
++     * ARB_MULTISAMPLE capability is deliberately NOT cleared for GLES, because
++     * the samples themselves are real and other code correctly depends on that
++     * bit; only this toggle is meaningless here. */
++    if (gl_info->is_gles)
++        return;
++
+     if (state->render_states[WINED3D_RS_MULTISAMPLEANTIALIAS])
+     {
+         gl_info->gl_ops.gl.p_glEnable(GL_MULTISAMPLE_ARB);
+@@ -888,6 +896,15 @@
+
+ static void line_antialias(const struct wined3d_rasterizer_state *r, const struct wined3d_gl_info *gl_info)
+ {
++    /* GLES has no line smoothing at all: the enum does not exist, so both calls
++     * below are rejected outright. Unlike depth clamp this has no capability bit
++     * to clear, so the guard has to live here. Measured on the device 2026-08-13:
++     * 9,938 rejected calls in a two-minute run. Skipping them changes nothing the
++     * driver was going to do -- MGS2 never asks for line antialiasing, and if it
++     * did, GLES could not provide it. */
++    if (gl_info->is_gles)
++        return;
++
+     if (r && r->desc.line_antialias)
+     {
+         gl_info->gl_ops.gl.p_glEnable(GL_LINE_SMOOTH);

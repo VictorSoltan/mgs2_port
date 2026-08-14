@@ -1,0 +1,86 @@
+Patch 04 -- harden and cache the native memmove redirect.
+
+Patch 02 tested only the first byte's protection before reading a 20-byte
+signature.  A candidate in the last 19 bytes of a mapping could therefore make
+Box86 cross into an unmapped page in native memcmp().  The old signature also
+stopped before the first branch and described only a generic dst/src/length
+preamble.
+
+Check the complete range, extend the match to 48 exact bytes of Wine 11's
+_sse2_memmove, and publish the resolved guest entry once.  Later lookups are
+identity comparisons and do not inspect guest code.  Publication is atomic
+because getAlternate() can be reached by multiple compiling threads.
+
+The 48 bytes were independently reproduced from Wine 11.0 msvcrt/string.c with
+the configured i386 cross compiler.  This remains an optimisation, not a claim
+that arbitrary guest memcpy-like functions can be replaced safely.
+
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -245,12 +245,30 @@
+ KHASH_MAP_INIT_INT(alternate, void*)
+ static kh_alternate_t *my_alternates = NULL;
+ static uintptr_t mgs2_native_memmove;
++static uintptr_t mgs2_memmove_guest;
+
+ void SetMGS2NativeMemmove(uintptr_t alt)
+ {
+     mgs2_native_memmove = alt;
+ }
+
++static int mgs2_signature_readable(uintptr_t addr, size_t size)
++{
++    uintptr_t end, probe;
++
++    if (addr < 0x10000 || !size || addr > UINTPTR_MAX - (size - 1))
++        return 0;
++    end = addr + size - 1;
++    for (probe = addr;; ++probe)
++    {
++        if (!(getProtection(probe) & PROT_READ))
++            return 0;
++        if (probe == end)
++            break;
++    }
++    return 1;
++}
++
+ int hasAlternate(void* addr) {
+     if(!my_alternates)
+         return 0;
+@@ -268,8 +286,7 @@
+         return kh_value(my_alternates, k);
+
+ mgs2_memmove:
+-    if (mgs2_native_memmove && (uintptr_t)addr >= 0x10000 &&
+-            getProtection((uintptr_t)addr))
++    if (mgs2_native_memmove)
+     {
+         /* Wine 11 i386 sse2_memmove through the direction comparison.  Match
+          * code, not its PE load address, so the lossless host bridge remains
+@@ -277,11 +294,24 @@
+         static const unsigned char signature[] = {
+             0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c, 0x8b, 0x74, 0x24, 0x10,
+             0x8b, 0x4c, 0x24, 0x14, 0x89, 0xfa, 0x29, 0xf2, 0x39, 0xca,
++            0x0f, 0x82, 0xc3, 0x00, 0x00, 0x00, 0x83, 0xf9, 0x04, 0x0f,
++            0x82, 0xa8, 0x00, 0x00, 0x00, 0x89, 0xfa, 0xd1, 0xea, 0x73,
++            0x03, 0xa4, 0x49, 0x42, 0xd1, 0xea, 0x73, 0x06,
+         };
++        uintptr_t guest = __atomic_load_n(&mgs2_memmove_guest, __ATOMIC_ACQUIRE);
+
+-        if (!memcmp(addr, signature, sizeof(signature)))
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_memmove;
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, sizeof(signature))
++                && !memcmp(addr, signature, sizeof(signature)))
+         {
+             static int reported;
++            uintptr_t expected = 0;
++
++            if (!__atomic_compare_exchange_n(&mgs2_memmove_guest, &expected,
++                    (uintptr_t)addr, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
++                    && expected != (uintptr_t)addr)
++                return addr;
+             if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED))
+                 printf_log(LOG_INFO, "MGS2 native memmove: matched guest %p -> bridge %p\n",
+                         addr, (void *)mgs2_native_memmove);

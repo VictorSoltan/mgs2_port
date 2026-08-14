@@ -1,5 +1,5 @@
 #!/bin/bash
-# MGS2 Substance RG353VS FINALPLAY3.
+# MGS2 Substance RG353VS FINALPLAY4.
 # Fixed production stack only: no census, profile, stats, live switches or A/B
 # overrides. The renderer fast paths are compile-time policy in the FINAL DLLs.
 
@@ -51,7 +51,16 @@ export BOX64_LOG=0 BOX64_NOBANNER=1
 export BOX86_LD_LIBRARY_PATH="/usr/share/box86/lib:$GAMEDIR/x86libs"
 export BOX86_EMULATED_LIBS='libwayland-client.so.0:libffi.so.8:libwayland-egl.so.1:libxkbcommon.so.0:libxkbregistry.so.0:libxml2.so.2:libicuuc.so.72:libicudata.so.72:liblzma.so.5:libstdc++.so.6'
 export BOX86_LOG=0 BOX86_NOBANNER=1
-export BOX86_DYNAREC_SAFEFLAGS=0
+# SAFEFLAGS is box86's own default, 1. Production used to lower it to 0, which
+# relaxes x86 flag accuracy for speed. Measured 2026-08-12 over two 450 s demo
+# windows with everything else fixed: 58.9 fps at 0 against 58.4 fps at 1, and
+# medians 4993 ms against 5005 ms -- 0.9% and 0.2%, i.e. noise. The stall profile
+# was byte-identical (31/9/11/4 frames over 50/100/200/500 ms). Not worth a
+# correctness relaxation, so it is back at the default.
+export BOX86_DYNAREC_SAFEFLAGS=1
+# Kept, and both measured over the same 450 s window: CALLRET=1 is worth 58.9
+# against 55.5 fps (+6.1%), which is real. BIGBLOCK=2 was only measured bundled
+# with the other two and is left alone.
 export BOX86_DYNAREC_BIGBLOCK=2
 export BOX86_DYNAREC_FORWARD=512
 export BOX86_DYNAREC_CALLRET=1
@@ -61,6 +70,15 @@ export BOX86_DYNAREC_CALLRET=1
 # ARM libc; zero-length copies return directly. No pixels, game state, or copy
 # semantics are removed.
 export MGS2_BOX86_NATIVE_MEMMOVE=1
+# Diagnostic-only exact AABB bridge.  Production remains off unless a caller
+# explicitly selects the matching Box86 + D3D8 pair and enables this switch.
+export MGS2_BOX86_NATIVE_AABB="${MGS2_BOX86_NATIVE_AABB:-0}"
+# Patch 36/Box86 patch 06 moves the exact Wine DirectSound FIR convolution out
+# of translated x86 and into native ARM. At fixed 1416 MHz the mixer thread fell
+# from 12.97% to 7.57% of one core (-41.6%); guest dsound samples fell 717 -> 40.
+# The player validated normal combat sound before production promotion. Override
+# to 0 only when pairing this launcher with an older Box86 for diagnostics.
+export MGS2_BOX86_NATIVE_DSOUND_FIR="${MGS2_BOX86_NATIVE_DSOUND_FIR:-1}"
 
 # Measured presentation and the two retained non-renderer fixes.
 export MGS2_GL_PBO=0
@@ -127,21 +145,58 @@ restore_cpu_state() {
 # captured leaving Wine's shared-session lock owned forever when concurrent
 # first users selected different native mutexes.  This changes no Wine lock
 # semantics and retains the measured native memmove path from FINALPLAY2.
-mount_bind "$GAMEDIR/box86-native-memmove3" /usr/bin/box86 || exit 1
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-native-dsound-fir1}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 mount_bind "$GAMEDIR/winewayland_stall1.so" /usr/lib/wine/i386-unix/winewayland.so || exit 1
-mount_bind "$GAMEDIR/opengl32_glesver1.so" /usr/lib/wine/i386-unix/opengl32.so || exit 1
-mount_bind "$GAMEDIR/ntdll_fastyield.so" /usr/lib/wine/i386-unix/ntdll.so || exit 1
-mount_bind "$GAMEDIR/wined3d_finalplay.dll" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32.so || exit 1
+# ntdll_fastyield.so is deliberately NOT mounted. Patch 05 consists solely of an
+# NtYieldExecution switch gated on MGS2_YIELD, which production never sets, so the
+# module ran stock while still placing a custom rebuild of a core Wine module over
+# the system one: no benefit, real risk surface. Removed 2026-08-12; the module
+# stays in binaries/ and one mount_bind line brings it back if MGS2_YIELD=fast is
+# ever worth measuring. See MGS2_SEPARABLE_FREEZE_CAPTURE_2026-08-12.md section 8.
+# Patch 27: separable stage programs. Measured on the device -- a program pair
+# costs 116 ms instead of 201 ms (-42%), about 2.4 s of pauses removed per
+# session, concentrated where shaders repeat (codec, transitions). Per-frame
+# throughput is untouched: the path only builds programs, it does not draw.
+# Restored to production 2026-08-12 after the day's freeze turned out to predate
+# it; see MGS2_SEPARABLE_FREEZE_CAPTURE_2026-08-12.md section 4.
+# Patch 29 rides along: ARB_DEPTH_CLAMP is no longer credited on a GLES driver and
+# the two GLES-meaningless toggles are guarded. Measured on the device: rejected GL
+# calls fall from 52,365 per two minutes to 10,183 per three and a half, i.e. ~436
+# per second down to ~48, with no fps change. These were invisible in production
+# because ERR sits behind a channel check, but the calls were made every frame.
+# Patch 32 canonicalises FFP shaders by their exact generated GLSL source. On the
+# corrected save-load/enemy route, the control created 36 stages, 17 of them
+# byte-identical duplicates costing 2.04 s; the cache-on run created no duplicate.
+# It changes first-use work only, not drawing. MGS2_GL_SOURCE_DEDUP=0 is the A/B
+# escape hatch. See MGS2_SHADER_FIRST_USE_RESEARCH_2026-08-13.md.
+mount_bind "$GAMEDIR/wined3d_p32_ffp_source_dedup.dll" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the
 # existing dirty flush publishes the identical bytes before drawing. Measured
 # at the fixed heavy spot: three consecutive windows at 30.0/30.0/30.1 fps.
-mount_bind "$GAMEDIR/d3d8_finalplay2.dll" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
-mount_bind "$GAMEDIR/dmsynth_se4_unmute1.dll" /usr/lib/wine/i386-windows/dmsynth.dll || exit 1
-mount_bind "$GAMEDIR/dsound_se1.dll" /usr/lib/wine/i386-windows/dsound.dll || exit 1
-mount_bind "$GAMEDIR/dmime_transition1.dll" /usr/lib/wine/i386-windows/dmime.dll || exit 1
+# Patch 28 removes the visibility culler's AABB cache, measured dead: cache_hit=0
+# against cache_miss=112800 over 300 frames, because the key includes a geometry
+# generation the game bumps every frame. Frees 73,760 bytes of BSS and 848 bytes
+# of code, and cannot change a culling decision. The culler itself stays: measured
+# 44.3 fps with it against 37.7 without, over two 400 s windows.
+mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
+# Patch 31 is OFF. It replaces the culler's per-draw AABB scan -- 349 vertex walks
+# a frame in emulated x86 -- with one conservative box per buffer write. Measured
+# +74% on an autoloaded corridor route (48.68/48.39 against 27.92) with identical
+# screenshots, and then REVERTED on 2026-08-13: the player reported the game barely
+# working. That route had no scene transitions, no enemies and no cutscenes, and an
+# average of fps over windows hid whatever it costs elsewhere. Set to 1 for one run
+# to try it on a specific scene; judge it by frame-time bands, not average fps.
+export MGS2_D3D8_CULL_BOX=0
+# Patch 34 restores the synth interpolation mode after Reset: measured synth
+# worker CPU -34.2% with no FPS regression. Patch 36 is the matching bridgeable
+# DirectSound FIR target selected by the native Box86 default above.
+mount_bind "$GAMEDIR/${MGS2_DMSYNTH_DLL:-dmsynth_p34_interp_reset.dll}" /usr/lib/wine/i386-windows/dmsynth.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_DSOUND_DLL:-dsound_p36_native_fir_target.dll}" /usr/lib/wine/i386-windows/dsound.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_DMIME_DLL:-dmime_transition1.dll}" /usr/lib/wine/i386-windows/dmime.dll || exit 1
 mount_bind "$GAMEDIR/dmusic_shared_lifetime1.dll" /usr/lib/wine/i386-windows/dmusic.dll || exit 1
 
 cleanup() {

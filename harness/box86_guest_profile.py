@@ -23,8 +23,13 @@ import sys
 
 HEADER = struct.Struct("<8s5I")
 RECORD = struct.Struct("<4I")
+# `perf script` on the handheld normally emits just ``comm tid ...``.  Some
+# versions (and the explicit -F form) emit ``comm pid/tid ...`` instead.  Both
+# refer to the same process here, and accepting both forms keeps the external
+# reader independent of perf's presentation format.
 SAMPLE = re.compile(
-    r"^\s*(?P<comm>.*?)\s+(?P<pid>\d+)/(?P<tid>\d+)\s+"
+    r"^\s*(?P<comm>.*?)\s+(?:(?P<pid>\d+)/)?(?P<tid>\d+)\s+"
+    r"(?:[0-9.]+:\s+\d+\s+cycles:u:\s+)?"
     r"(?P<ip>[0-9a-fA-F]+)\s+.*\(/tmp/perf-[0-9]+\.map\)\s*$"
 )
 

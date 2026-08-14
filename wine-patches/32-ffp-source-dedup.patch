@@ -1,0 +1,544 @@
+Patch 32 -- deduplicate fixed-function shaders by exact generated GLSL source.
+
+The normal WineD3D FFP caches use the complete D3D settings structures as
+keys. On the corrected save-load route those keys produced 36 stage programs
+from only 19 byte-distinct GLSL sources. The 17 duplicate links cost 2.04 s on
+the RG353VS. This patch keeps the settings descriptors but makes their GL
+shader and separable-stage owner canonical by source.
+
+The 64-bit FNV-1a hash is only a rejection filter. Equality requires matching
+length and a full memcmp, so a hash collision cannot merge different shaders.
+The shared owner is destroyed after both settings trees, avoiding double
+deletion and keeping all program/pipeline users alive through teardown.
+
+MGS2_GL_SOURCE_DEDUP=0 disables reuse for a device A/B. The bounded GPU probe
+also records source hash and size in compile_shader events; it performs no I/O.
+
+Measured 2026-08-13, fixed 1,992 MHz, one instance, corrected autoload route
+(default walk direction down):
+  cache off: 36 compile/stage events; 17 exact duplicates; duplicate links
+             2,036,500 us (4 vertex / 13 fragment)
+  cache on:  22 compile/stage events; 0 exact duplicates
+Both post-load screenshots were correct and contained the first guard.
+
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -134,7 +134,10 @@
+     BOOL mgs2_separable_enabled;
+     BOOL mgs2_separable_validate;
+     BOOL mgs2_separable_vs_enabled;
++    BOOL mgs2_ffp_source_dedup_enabled;
+     struct mgs2_vs_stage_cache *mgs2_vs_stages;
++    struct list mgs2_ffp_vs_sources;
++    struct list mgs2_ffp_ps_sources;
+
+     struct wined3d_string_buffer shader_buffer;
+     struct wined3d_string_buffer_list string_buffers;
+@@ -345,22 +348,52 @@
+     unsigned int num_gl_shaders, shader_array_size;
+ };
+
++struct mgs2_ffp_vs_source;
++struct mgs2_ffp_ps_source;
++
+ struct glsl_ffp_vertex_shader
+ {
+     struct wined3d_ffp_vs_desc desc;
+     GLuint id;
+-    GLuint stage_program;
+-    struct glsl_vs_program stage;
+     struct list linked_programs;
++    struct mgs2_ffp_vs_source *source;
+ };
+
+ struct glsl_ffp_fragment_shader
+ {
+     struct ffp_frag_desc entry;
+     GLuint id;
++    struct list linked_programs;
++    struct mgs2_ffp_ps_source *source;
++};
++
++/* The normal FFP caches are keyed by the complete D3D settings structures.
++ * MGS2 reaches multiple settings keys that generate byte-identical GLSL.  On
++ * this Mali driver each of those aliases used to compile a new shader and,
++ * more importantly, link a new separable stage program on first use.  Keep the
++ * generated source as the canonical key and let all settings descriptors point
++ * at one GL shader / stage-program owner.  Exact length + memcmp is the
++ * correctness check; the hash is only a cheap rejection filter. */
++struct mgs2_ffp_vs_source
++{
++    struct list entry;
++    uint64_t hash;
++    size_t size;
++    char *text;
++    GLuint shader_id;
++    GLuint stage_program;
++    struct glsl_vs_program stage;
++};
++
++struct mgs2_ffp_ps_source
++{
++    struct list entry;
++    uint64_t hash;
++    size_t size;
++    char *text;
++    GLuint shader_id;
+     GLuint stage_program;
+     struct glsl_ps_program stage;
+-    struct list linked_programs;
+ };
+
+ struct glsl_ffp_destroy_ctx
+@@ -719,6 +752,8 @@
+ static void shader_glsl_compile(const struct wined3d_gl_info *gl_info, GLuint shader, const char *src)
+ {
+     const char *ptr, *end, *line;
++    uint64_t source_hash = 14695981039346656037ull;
++    unsigned int source_size = 0;
+     LONGLONG probe_start;
+
+     TRACE("Compiling shader object %u.\n", shader);
+@@ -738,7 +773,19 @@
+     probe_start = mgs2_probe_now();
+     GL_EXTCALL(glCompileShader(shader));
+     checkGLcall("glCompileShader");
+-    mgs2_probe_record(MGS2_PROBE_OP_COMPILE_SHADER, probe_start, 0, 0, 0, 0, shader);
++    if (mgs2_probe_enabled)
++    {
++        const unsigned char *p = (const unsigned char *)src;
++
++        while (*p)
++        {
++            source_hash ^= *p++;
++            source_hash *= 1099511628211ull;
++            ++source_size;
++        }
++    }
++    mgs2_probe_record(MGS2_PROBE_OP_COMPILE_SHADER, probe_start,
++            (unsigned int)source_hash, (unsigned int)(source_hash >> 32), source_size, 0, shader);
+     print_glsl_info_log(gl_info, shader, FALSE);
+
+ }
+@@ -9421,8 +9468,55 @@
+         shader_addline(buffer, "ffp_varying_specular = ffp_attrib_specular;\n");
+ }
+
++static uint64_t mgs2_glsl_source_hash(const char *text, size_t *size)
++{
++    uint64_t hash = 14695981039346656037ull;
++    const unsigned char *p = (const unsigned char *)text;
++
++    while (*p)
++    {
++        hash ^= *p++;
++        hash *= 1099511628211ull;
++    }
++    *size = p - (const unsigned char *)text;
++    return hash;
++}
++
++static struct mgs2_ffp_vs_source *mgs2_get_ffp_vs_source(struct shader_glsl_priv *priv,
++        const struct wined3d_gl_info *gl_info, const char *text)
++{
++    struct mgs2_ffp_vs_source *source;
++    size_t size;
++    uint64_t hash;
++
++    hash = mgs2_glsl_source_hash(text, &size);
++    if (priv->mgs2_ffp_source_dedup_enabled)
++    {
++        LIST_FOR_EACH_ENTRY(source, &priv->mgs2_ffp_vs_sources, struct mgs2_ffp_vs_source, entry)
++        {
++            if (source->hash == hash && source->size == size && !memcmp(source->text, text, size + 1))
++                return source;
++        }
++    }
++
++    if (!(source = calloc(1, sizeof(*source))))
++        return NULL;
++    if (!(source->text = malloc(size + 1)))
++    {
++        free(source);
++        return NULL;
++    }
++    memcpy(source->text, text, size + 1);
++    source->hash = hash;
++    source->size = size;
++    source->shader_id = GL_EXTCALL(glCreateShader(GL_VERTEX_SHADER));
++    shader_glsl_compile(gl_info, source->shader_id, source->text);
++    list_add_head(&priv->mgs2_ffp_vs_sources, &source->entry);
++    return source;
++}
++
+ /* Context activation is done by the caller. */
+-static GLuint shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *priv,
++static struct mgs2_ffp_vs_source *shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *priv,
+         const struct wined3d_ffp_vs_settings *settings, const struct wined3d_gl_info *gl_info)
+ {
+     static const struct attrib_info
+@@ -9445,7 +9539,6 @@
+     struct wined3d_string_buffer *buffer = &priv->shader_buffer;
+     BOOL output_legacy_fogcoord = legacy_syntax;
+     BOOL legacy_lighting = priv->legacy_lighting;
+-    GLuint shader_obj;
+     unsigned int i;
+
+     string_buffer_clear(buffer);
+@@ -9717,10 +9810,7 @@
+
+     shader_addline(buffer, "}\n");
+
+-    shader_obj = GL_EXTCALL(glCreateShader(GL_VERTEX_SHADER));
+-    shader_glsl_compile(gl_info, shader_obj, buffer->buffer);
+-
+-    return shader_obj;
++    return mgs2_get_ffp_vs_source(priv, gl_info, buffer->buffer);
+ }
+
+ static const char *shader_glsl_get_ffp_fragment_op_arg(struct wined3d_string_buffer *buffer,
+@@ -9963,8 +10053,41 @@
+
+ }
+
++static struct mgs2_ffp_ps_source *mgs2_get_ffp_ps_source(struct shader_glsl_priv *priv,
++        const struct wined3d_gl_info *gl_info, const char *text)
++{
++    struct mgs2_ffp_ps_source *source;
++    size_t size;
++    uint64_t hash;
++
++    hash = mgs2_glsl_source_hash(text, &size);
++    if (priv->mgs2_ffp_source_dedup_enabled)
++    {
++        LIST_FOR_EACH_ENTRY(source, &priv->mgs2_ffp_ps_sources, struct mgs2_ffp_ps_source, entry)
++        {
++            if (source->hash == hash && source->size == size && !memcmp(source->text, text, size + 1))
++                return source;
++        }
++    }
++
++    if (!(source = calloc(1, sizeof(*source))))
++        return NULL;
++    if (!(source->text = malloc(size + 1)))
++    {
++        free(source);
++        return NULL;
++    }
++    memcpy(source->text, text, size + 1);
++    source->hash = hash;
++    source->size = size;
++    source->shader_id = GL_EXTCALL(glCreateShader(GL_FRAGMENT_SHADER));
++    shader_glsl_compile(gl_info, source->shader_id, source->text);
++    list_add_head(&priv->mgs2_ffp_ps_sources, &source->entry);
++    return source;
++}
++
+ /* Context activation is done by the caller. */
+-static GLuint shader_glsl_generate_ffp_fragment_shader(struct shader_glsl_priv *priv,
++static struct mgs2_ffp_ps_source *shader_glsl_generate_ffp_fragment_shader(struct shader_glsl_priv *priv,
+         const struct ffp_frag_settings *settings, const struct wined3d_context_gl *context_gl)
+ {
+     struct wined3d_string_buffer *tex_reg_name = string_buffer_get(&priv->string_buffers);
+@@ -9974,7 +10097,6 @@
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     const BOOL legacy_syntax = needs_legacy_glsl_syntax(gl_info);
+     BOOL tempreg_used = FALSE, tfactor_used = FALSE;
+-    GLuint shader_id;
+     DWORD arg0, arg1, arg2;
+     unsigned int stage;
+
+@@ -10325,11 +10447,8 @@
+
+     shader_addline(buffer, "}\n");
+
+-    shader_id = GL_EXTCALL(glCreateShader(GL_FRAGMENT_SHADER));
+-    shader_glsl_compile(gl_info, shader_id, buffer->buffer);
+-
+     string_buffer_release(&priv->string_buffers, tex_reg_name);
+-    return shader_id;
++    return mgs2_get_ffp_ps_source(priv, gl_info, buffer->buffer);
+ }
+
+ static struct glsl_ffp_vertex_shader *shader_glsl_find_ffp_vertex_shader(struct shader_glsl_priv *priv,
+@@ -10341,16 +10460,17 @@
+     if ((entry = wine_rb_get(&priv->ffp_vertex_shaders, settings)))
+         return WINE_RB_ENTRY_VALUE(entry, struct glsl_ffp_vertex_shader, desc.entry);
+
+-    /* calloc, not malloc: the separable candidate adds stage_program and the
+-     * stage uniform locations to this structure, and every other field is
+-     * assigned below.  With malloc, stage_program started as garbage, so
+-     * mgs2_make_ffp_stage() took a random GL name for an already built stage
+-     * and paired it with uninitialised uniform locations. */
++    /* calloc keeps any future cache-owned fields safely initialised. */
+     if (!(shader = calloc(1, sizeof(*shader))))
+         return NULL;
+
+     shader->desc.settings = *settings;
+-    shader->id = shader_glsl_generate_ffp_vertex_shader(priv, settings, gl_info);
++    if (!(shader->source = shader_glsl_generate_ffp_vertex_shader(priv, settings, gl_info)))
++    {
++        free(shader);
++        return NULL;
++    }
++    shader->id = shader->source->shader_id;
+     list_init(&shader->linked_programs);
+     if (wine_rb_put(&priv->ffp_vertex_shaders, &shader->desc.settings, &shader->desc.entry) == -1)
+         ERR("Failed to insert ffp vertex shader.\n");
+@@ -10372,7 +10492,12 @@
+         return NULL;
+
+     glsl_desc->entry.settings = *args;
+-    glsl_desc->id = shader_glsl_generate_ffp_fragment_shader(priv, args, context_gl);
++    if (!(glsl_desc->source = shader_glsl_generate_ffp_fragment_shader(priv, args, context_gl)))
++    {
++        free(glsl_desc);
++        return NULL;
++    }
++    glsl_desc->id = glsl_desc->source->shader_id;
+     list_init(&glsl_desc->linked_programs);
+     add_ffp_frag_shader(&priv->ffp_fragment_shaders, &glsl_desc->entry);
+
+@@ -10747,24 +10872,26 @@
+         struct shader_glsl_priv *priv, struct glsl_ffp_vertex_shader *vs,
+         struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
+ {
++    struct mgs2_ffp_vs_source *vs_source = vs->source;
++    struct mgs2_ffp_ps_source *ps_source = ps->source;
+     LONGLONG probe_start;
+     GLint valid = GL_FALSE;
+     GLuint pipeline;
+
+     /* The fixed-function pair keeps exactly the arguments it had before patch 30
+      * generalised this: the whole FFP attribute set, and no vs_c[]/ps_c[] array. */
+-    if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs->id, GL_VERTEX_SHADER_BIT,
+-            &vs->stage_program, &vs->stage, (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1, 0)
+-            || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
+-                    &ps->stage_program, &ps->stage, 0, 0))
++    if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs_source->shader_id, GL_VERTEX_SHADER_BIT,
++            &vs_source->stage_program, &vs_source->stage, (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1, 0)
++            || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps_source->shader_id, GL_FRAGMENT_SHADER_BIT,
++                    &ps_source->stage_program, &ps_source->stage, 0, 0))
+         return FALSE;
+
+     probe_start = mgs2_probe_now();
+     mgs2_glGenProgramPipelines(1, &pipeline);
+     if (!pipeline)
+         return FALSE;
+-    mgs2_glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs->stage_program);
+-    mgs2_glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, ps->stage_program);
++    mgs2_glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs_source->stage_program);
++    mgs2_glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, ps_source->stage_program);
+     if (priv->mgs2_separable_validate)
+     {
+         mgs2_glValidateProgramPipeline(pipeline);
+@@ -10776,7 +10903,7 @@
+              * MGS2_GL_SEPARABLE=2 keeps the pipeline anyway, for one run that
+              * can tell the two apart. */
+             ERR("Program pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
+-                    pipeline, vs->stage_program, ps->stage_program);
++                    pipeline, vs_source->stage_program, ps_source->stage_program);
+             if (mgs2_glGetProgramPipelineInfoLog)
+             {
+                 char log[1024];
+@@ -10787,13 +10914,13 @@
+                     ERR("Pipeline info log: %s\n", debugstr_a(log));
+             }
+             mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
+-                    vs->stage_program, ps->stage_program, 0, 0, pipeline);
++                    vs_source->stage_program, ps_source->stage_program, 0, 0, pipeline);
+             mgs2_glDeleteProgramPipelines(1, &pipeline);
+             return FALSE;
+         }
+     }
+     mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
+-            vs->stage_program, ps->stage_program, 1, 0, pipeline);
++            vs_source->stage_program, ps_source->stage_program, 1, 0, pipeline);
+
+     /* A pipeline name is not a program name: the two live in separate object
+      * namespaces, so entry->id must stay a program name.  The first candidate
+@@ -10803,8 +10930,8 @@
+      * transitions are detected on the entry pointer instead. */
+     entry->id = 0;
+     entry->pipeline_id = pipeline;
+-    entry->vs_program_id = vs->stage_program;
+-    entry->ps_program_id = ps->stage_program;
++    entry->vs_program_id = vs_source->stage_program;
++    entry->ps_program_id = ps_source->stage_program;
+     entry->separable = TRUE;
+
+     /* Take the stage uniform locations, but keep the shader object ids this
+@@ -10816,8 +10943,8 @@
+      * shader was skipped -- the entry was freed while still linked into
+      * ffp_vs->linked_programs.  Tearing those shaders down on a savegame load
+      * then walked freed memory.  shader_entry itself is linked by the caller. */
+-    entry->vs = vs->stage;
+-    entry->ps = ps->stage;
++    entry->vs = vs_source->stage;
++    entry->ps = ps_source->stage;
+     entry->vs.id = vs->id;
+     entry->ps.id = ps->id;
+     entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
+@@ -10845,6 +10972,7 @@
+         struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
+ {
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
++    struct mgs2_ffp_ps_source *ps_source = ps->source;
+     struct glsl_vs_program *stage = NULL;
+     GLuint *stage_program = NULL;
+     struct mgs2_vs_stage_cache *cache;
+@@ -10884,8 +11012,8 @@
+
+     if (!mgs2_make_ffp_stage(gl_info, priv, vs_id, GL_VERTEX_SHADER_BIT, stage_program, stage,
+             vshader->reg_maps.input_registers, vshader->limits->constant_float)
+-            || !mgs2_make_ffp_stage(gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
+-                    &ps->stage_program, &ps->stage, 0, 0))
++            || !mgs2_make_ffp_stage(gl_info, priv, ps_source->shader_id, GL_FRAGMENT_SHADER_BIT,
++                    &ps_source->stage_program, &ps_source->stage, 0, 0))
+         return FALSE;
+
+     probe_start = mgs2_probe_now();
+@@ -10893,7 +11021,7 @@
+     if (!pipeline)
+         return FALSE;
+     mgs2_glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, *stage_program);
+-    mgs2_glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, ps->stage_program);
++    mgs2_glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, ps_source->stage_program);
+     if (priv->mgs2_separable_validate)
+     {
+         mgs2_glValidateProgramPipeline(pipeline);
+@@ -10901,7 +11029,7 @@
+         if (!valid)
+         {
+             ERR("Programmable-VS pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
+-                    pipeline, *stage_program, ps->stage_program);
++                    pipeline, *stage_program, ps_source->stage_program);
+             if (mgs2_glGetProgramPipelineInfoLog)
+             {
+                 char log[1024];
+@@ -10914,21 +11042,21 @@
+             /* d = 1 marks the programmable-VS variant in the probe ring, so a
+              * capture can tell the two pairings apart. */
+             mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
+-                    *stage_program, ps->stage_program, 0, 1, pipeline);
++                    *stage_program, ps_source->stage_program, 0, 1, pipeline);
+             mgs2_glDeleteProgramPipelines(1, &pipeline);
+             return FALSE;
+         }
+     }
+     mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
+-            *stage_program, ps->stage_program, 1, 1, pipeline);
++            *stage_program, ps_source->stage_program, 1, 1, pipeline);
+
+     entry->id = 0;
+     entry->pipeline_id = pipeline;
+     entry->vs_program_id = *stage_program;
+-    entry->ps_program_id = ps->stage_program;
++    entry->ps_program_id = ps_source->stage_program;
+     entry->separable = TRUE;
+     entry->vs = *stage;
+-    entry->ps = ps->stage;
++    entry->ps = ps_source->stage;
+     entry->vs.id = vs_id;
+     entry->ps.id = ps->id;
+     entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
+@@ -12053,6 +12181,7 @@
+     void *vertex_priv, *fragment_priv;
+     struct shader_glsl_priv *priv;
+     const char *separable_env;
++    const char *source_dedup_env;
+     const char *probe_env;
+
+     if (!(priv = calloc(1, sizeof(*priv))))
+@@ -12065,6 +12194,8 @@
+     }
+
+     string_buffer_list_init(&priv->string_buffers);
++    list_init(&priv->mgs2_ffp_vs_sources);
++    list_init(&priv->mgs2_ffp_ps_sources);
+
+     if (!(vertex_priv = vertex_pipe->vp_alloc(&glsl_shader_backend, priv)))
+     {
+@@ -12123,6 +12254,13 @@
+      * remaining hitch, so it is worth keeping. */
+     separable_env = getenv("MGS2_GL_SEPARABLE");
+     priv->mgs2_separable_enabled = !(separable_env && !strcmp(separable_env, "0"));
++    /* The complete D3D FFP settings keys over-distinguish shaders for MGS2:
++     * the measured save-load route created 39 stages from only 19 byte-distinct
++     * GLSL sources. Exact source equality is safe to share and avoids both the
++     * duplicate compile and the much larger duplicate stage link. Keep a one-run
++     * escape hatch for the device A/B and for visual regression checks. */
++    source_dedup_env = getenv("MGS2_GL_SOURCE_DEDUP");
++    priv->mgs2_ffp_source_dedup_enabled = !(source_dedup_env && !strcmp(source_dedup_env, "0"));
+     /* "2" keeps a pipeline whose glValidateProgramPipeline() failed.  That
+      * query also reports on current GL state, so a failure is not by itself
+      * evidence of an incompatible stage interface. */
+@@ -12168,10 +12306,37 @@
+     return E_OUTOFMEMORY;
+ }
+
++static void mgs2_free_ffp_source_caches(struct shader_glsl_priv *priv,
++        const struct wined3d_gl_info *gl_info)
++{
++    struct mgs2_ffp_vs_source *vs, *vs2;
++    struct mgs2_ffp_ps_source *ps, *ps2;
++
++    LIST_FOR_EACH_ENTRY_SAFE(vs, vs2, &priv->mgs2_ffp_vs_sources, struct mgs2_ffp_vs_source, entry)
++    {
++        if (vs->stage_program)
++            GL_EXTCALL(glDeleteProgram(vs->stage_program));
++        GL_EXTCALL(glDeleteShader(vs->shader_id));
++        list_remove(&vs->entry);
++        free(vs->text);
++        free(vs);
++    }
++    LIST_FOR_EACH_ENTRY_SAFE(ps, ps2, &priv->mgs2_ffp_ps_sources, struct mgs2_ffp_ps_source, entry)
++    {
++        if (ps->stage_program)
++            GL_EXTCALL(glDeleteProgram(ps->stage_program));
++        GL_EXTCALL(glDeleteShader(ps->shader_id));
++        list_remove(&ps->entry);
++        free(ps->text);
++        free(ps);
++    }
++}
++
+ /* Context activation is done by the caller. */
+ static void shader_glsl_free(struct wined3d_device *device, struct wined3d_context *context)
+ {
+     struct shader_glsl_priv *priv = device->shader_priv;
++    const struct wined3d_gl_info *gl_info = wined3d_context_gl(context)->gl_info;
+
+     wine_rb_destroy(&priv->program_lookup, NULL, NULL);
+     constant_free(&priv->pconst_heap);
+@@ -12186,6 +12351,7 @@
+     string_buffer_free(&priv->shader_buffer);
+     priv->fragment_pipe->free_private(device, context);
+     priv->vertex_pipe->vp_free(device, context);
++    mgs2_free_ffp_source_caches(priv, gl_info);
+
+     free(device->shader_priv);
+     device->shader_priv = NULL;
+@@ -12653,11 +12819,7 @@
+     {
+         delete_glsl_program_entry(ctx->priv, gl_info, program);
+     }
+-    /* The separable stage program owns a reference on this shader object and
+-     * outlives every pipeline that used it. */
+-    if (shader->stage_program)
+-        GL_EXTCALL(glDeleteProgram(shader->stage_program));
+-    GL_EXTCALL(glDeleteShader(shader->id));
++    /* The exact-source cache owns the shared shader and stage program. */
+     free(shader);
+ }
+
+@@ -12885,9 +13047,7 @@
+     {
+         delete_glsl_program_entry(ctx->priv, gl_info, program);
+     }
+-    if (shader->stage_program)
+-        GL_EXTCALL(glDeleteProgram(shader->stage_program));
+-    GL_EXTCALL(glDeleteShader(shader->id));
++    /* The exact-source cache owns the shared shader and stage program. */
+     free(shader);
+ }

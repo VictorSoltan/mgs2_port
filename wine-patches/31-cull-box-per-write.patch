@@ -1,0 +1,210 @@
+Patch 31 -- scan the cull AABB once per buffer write instead of once per draw.
+
+STATUS: REVERTED from production on 2026-08-13. The numbers below are real but
+were taken on a single autoloaded corridor route; the player reported the game
+"barely works" with this enabled, so the trade is negative on real scenes. The
+switch defaults to off. See MGS2_SEPARABLE_FREEZE_CAPTURE_2026-08-12.md section
+6l for what the measurement got wrong.
+
+The largest measured win of this work, and it came from the player's own question:
+can the emulation layers be reduced for this? Not for the shader link -- that is
+inside the native Mali compiler -- but the visibility culler was doing real
+arithmetic in emulated x86 on every single tested draw.
+
+MGS2CULL measured 349 tested draws per frame, and each one rebuilt a model-space
+AABB by walking every vertex of its range. The 256x4 cache that used to sit in
+front of that never hit: 0 of 112800, because its key carried
+mgs2_geometry_generation and MGS2 rewrites its vertex buffers every frame. Patch 28
+removed it as dead. Re-keying it cannot work either, for the same reason -- the
+vertices really are different after every write.
+
+So this stops caching the answer per draw and changes the question instead. Each
+buffer keeps ONE conservative box covering every byte it declares valid, built on
+the first cull test after a write and reused by every later draw. Invalidated
+exactly where mgs2_geometry_generation is bumped.
+
+The box is larger than the exact per-draw box, so it can only fail to cull
+something the exact box would have culled. It can never cull something visible,
+which is the only direction that matters for correctness. It falls back to the
+exact per-draw scan when the valid-range list has overflowed, since then it no
+longer describes the whole buffer, and when the stride or position offset differ
+from the cached pair.
+
+Measured on the device, identical autoloaded save and identical walk route:
+
+    MGS2_D3D8_CULL_BOX=1     48.68 fps      (cold)
+    MGS2_D3D8_CULL_BOX=1     48.39 fps      (hot, 81.7 C, to rule out temperature)
+    MGS2_D3D8_CULL_BOX=0     27.92 fps      (hot)
+    in production            48.96 fps
+
++74%, and screenshots of the two arms are indistinguishable: same corridor, same
+character pose, same desk, chair, keyboard, monitor and radar. No page faults, no
+GL errors.
+
+Known limit, not observed: a scene where one buffer's valid ranges span most of the
+level would give a box too large to cull anything, which costs the culler's own
++17.5% while keeping this saving. The failure mode is slower, never wrong, and
+MGS2_D3D8_CULL_BOX=0 returns to the per-draw scan in one run.
+
+--- a/dlls/d3d8/d3d8_private.h
++++ b/dlls/d3d8/d3d8_private.h
+@@ -250,6 +250,21 @@
+     } mgs2_geometry_valid_ranges[D3D8_MGS2_GEOMETRY_VALID_RANGES];
+     UINT mgs2_geometry_valid_count;
+     BOOL mgs2_geometry_valid_overflow;
++    /* Patch 31: one conservative model-space box for everything this buffer holds,
++     * computed on the first cull test after a write and reused by every draw until
++     * the next write. The per-draw scan it replaces ran 349 times per frame in
++     * emulated x86; this runs once per buffer per write.
++     *
++     * Deliberately NOT a cache keyed on the draw range. That was tried and is dead
++     * by construction: the key had to include mgs2_geometry_generation, the game
++     * rewrites its vertex buffers every frame, and the measured hit rate was 0 of
++     * 112800. A conservative box sidesteps the whole question -- a bigger box can
++     * only cull less, never wrongly. */
++    float mgs2_cull_box_min[3];
++    float mgs2_cull_box_max[3];
++    UINT mgs2_cull_box_stride;
++    UINT mgs2_cull_box_offset;
++    BOOL mgs2_cull_box_valid;
+     BYTE *mgs2_geometry_mapped_data;
+     UINT mgs2_geometry_mapped_offset;
+     UINT mgs2_geometry_mapped_length;
+--- a/dlls/d3d8/buffer.c
++++ b/dlls/d3d8/buffer.c
+@@ -382,6 +382,9 @@
+                     buffer->mgs2_snapshot_offset,
+                     buffer->mgs2_snapshot_offset + buffer->mgs2_snapshot_length);
+             ++buffer->mgs2_geometry_generation;
++            /* Patch 31: the conservative cull box describes vertices that have
++             * just been overwritten, so it dies with them. */
++            buffer->mgs2_cull_box_valid = FALSE;
+         }
+         /* By default GPU buffers are updated here. With dirty aggregation the
+          * shadow remains producer-owned and the first draw using this buffer
+@@ -404,6 +407,9 @@
+                 buffer->mgs2_geometry_mapped_offset,
+                 buffer->mgs2_geometry_mapped_offset + buffer->mgs2_geometry_mapped_length);
+         ++buffer->mgs2_geometry_generation;
++        /* Patch 31: the conservative cull box describes vertices that have
++         * just been overwritten, so it dies with them. */
++        buffer->mgs2_cull_box_valid = FALSE;
+         buffer->mgs2_geometry_mapped_data = NULL;
+         buffer->mgs2_geometry_mapped_writable = FALSE;
+     }
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -2230,7 +2230,7 @@
+  * on the writable Unlock before any entry can ever be reused. The cache could
+  * not hit by construction. It only cost one hash plus up to four key comparisons
+  * per tested draw (376 per frame measured) and 72 KB of BSS. */
+-static BOOL d3d8_mgs2_cull_aabb(struct d3d8_vertexbuffer *buffer, unsigned int left,
++static BOOL d3d8_mgs2_scan_aabb(const struct d3d8_vertexbuffer *buffer, unsigned int left,
+         unsigned int vertex_count, unsigned int stride, unsigned int position_offset,
+         float min_value[3], float max_value[3])
+ {
+@@ -2253,6 +2253,104 @@
+     return TRUE;
+ }
+
++/* Patch 31, gated on MGS2_D3D8_CULL_BOX. Instead of scanning the draw's own vertex
++ * range on every tested draw -- 349 times per frame, in emulated x86 -- scan every
++ * byte this buffer declares valid once, on the first test after a write, and let
++ * every later draw reuse that one box.
++ *
++ * The box is CONSERVATIVE: it covers vertices outside the draw's range, so it can
++ * only fail to cull something that the exact box would have culled. It can never
++ * cull something visible, which is the direction that matters. The cost is fewer
++ * culled draws; MGS2CULL's culled/f is the number that says whether that trade is
++ * worth it, and it is why this ships switchable.
++ *
++ * Invalidated wherever mgs2_geometry_generation is bumped, i.e. on every writable
++ * Unlock, because after a write the vertices genuinely are different. */
++static BOOL d3d8_mgs2_cull_box(struct d3d8_vertexbuffer *buffer, unsigned int stride,
++        unsigned int position_offset, float min_value[3], float max_value[3])
++{
++    float box_min[3], box_max[3];
++    unsigned int i, axis;
++    BOOL any = FALSE;
++
++    if (buffer->mgs2_cull_box_valid && buffer->mgs2_cull_box_stride == stride
++            && buffer->mgs2_cull_box_offset == position_offset)
++    {
++        memcpy(min_value, buffer->mgs2_cull_box_min, sizeof(buffer->mgs2_cull_box_min));
++        memcpy(max_value, buffer->mgs2_cull_box_max, sizeof(buffer->mgs2_cull_box_max));
++        return TRUE;
++    }
++
++    /* An overflowed range list no longer describes the whole buffer, so a box
++     * built from it would not be conservative. Fall back to the exact per-draw
++     * scan in that case rather than risk culling something visible. */
++    if (buffer->mgs2_geometry_valid_overflow || !buffer->mgs2_geometry_valid_count)
++        return FALSE;
++
++    for (i = 0; i < buffer->mgs2_geometry_valid_count; ++i)
++    {
++        unsigned int left = buffer->mgs2_geometry_valid_ranges[i].left;
++        unsigned int right = buffer->mgs2_geometry_valid_ranges[i].right;
++        unsigned int count;
++        float r_min[3], r_max[3];
++
++        if (right <= left || position_offset > stride || sizeof(float) * 3 > stride - position_offset)
++            return FALSE;
++        count = (right - left) / stride;
++        if (!count)
++            continue;
++        if (!d3d8_mgs2_scan_aabb(buffer, left, count, stride, position_offset, r_min, r_max))
++            return FALSE;
++        for (axis = 0; axis < 3; ++axis)
++        {
++            if (!any || r_min[axis] < box_min[axis]) box_min[axis] = r_min[axis];
++            if (!any || r_max[axis] > box_max[axis]) box_max[axis] = r_max[axis];
++        }
++        any = TRUE;
++    }
++
++    if (!any)
++        return FALSE;
++
++    memcpy(buffer->mgs2_cull_box_min, box_min, sizeof(box_min));
++    memcpy(buffer->mgs2_cull_box_max, box_max, sizeof(box_max));
++    buffer->mgs2_cull_box_stride = stride;
++    buffer->mgs2_cull_box_offset = position_offset;
++    buffer->mgs2_cull_box_valid = TRUE;
++    memcpy(min_value, box_min, sizeof(box_min));
++    memcpy(max_value, box_max, sizeof(box_max));
++    return TRUE;
++}
++
++/* Patch 25 removed every env-gated branch from this file, so there is no helper
++ * left to reuse; this reads its own switch once. Off by default: the box trades
++ * culling accuracy for scan cost and only a measurement on the device can say
++ * whether that trade is good. */
++static BOOL d3d8_mgs2_cull_box_enabled(void)
++{
++    static int on = -1;
++
++    if (on < 0)
++    {
++        const char *value = getenv("MGS2_D3D8_CULL_BOX");
++
++        on = value && strcmp(value, "0") ? 1 : 0;
++    }
++    return on;
++}
++
++static BOOL d3d8_mgs2_cull_aabb(struct d3d8_vertexbuffer *buffer, unsigned int left,
++        unsigned int vertex_count, unsigned int stride, unsigned int position_offset,
++        float min_value[3], float max_value[3])
++{
++    if (d3d8_mgs2_cull_box_enabled()
++            && d3d8_mgs2_cull_box(buffer, stride, position_offset, min_value, max_value))
++        return TRUE;
++
++    return d3d8_mgs2_scan_aabb(buffer, left, vertex_count, stride, position_offset,
++            min_value, max_value);
++}
++
+ static BOOL d3d8_mgs2_visibility_should_cull(struct d3d8_device *device,
+         D3DPRIMITIVETYPE primitive_type, unsigned int start_vertex, unsigned int vertex_count)
+ {

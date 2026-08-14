@@ -1,0 +1,860 @@
+diff --git a/dlls/wined3d/glsl_shader.c b/dlls/wined3d/glsl_shader.c
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -126,6 +126,8 @@
+ struct shader_glsl_priv
+ {
+     bool use_vkd3d;
++    BOOL mgs2_separable_enabled;
++    BOOL mgs2_separable_validate;
+
+     struct wined3d_string_buffer shader_buffer;
+     struct wined3d_string_buffer_list string_buffers;
+@@ -247,6 +249,10 @@
+     struct glsl_ps_program ps;
+     struct glsl_cs_program cs;
+     GLuint id;
++    GLuint pipeline_id;
++    GLuint vs_program_id;
++    GLuint ps_program_id;
++    BOOL separable;
+     DWORD constant_update_mask;
+     unsigned int constant_version;
+     DWORD shader_controlled_clip_distances : 1;
+@@ -276,6 +282,10 @@
+ struct glsl_context_data
+ {
+     struct glsl_shader_prog_link *glsl_program;
++    /* The FFP shaders behind glsl_program's vs.id / ps.id, so that a
++     * non-dirty stage can still be identified as fixed-function. */
++    struct glsl_ffp_vertex_shader *ffp_vs;
++    struct glsl_ffp_fragment_shader *ffp_ps;
+     GLenum vertex_color_clamp;
+     BOOL rasterization_disabled;
+ };
+@@ -332,6 +342,8 @@
+ {
+     struct wined3d_ffp_vs_desc desc;
+     GLuint id;
++    GLuint stage_program;
++    struct glsl_vs_program stage;
+     struct list linked_programs;
+ };
+
+@@ -339,6 +351,8 @@
+ {
+     struct ffp_frag_desc entry;
+     GLuint id;
++    GLuint stage_program;
++    struct glsl_ps_program stage;
+     struct list linked_programs;
+ };
+
+@@ -348,6 +362,152 @@
+     const struct wined3d_context_gl *context_gl;
+ };
+
++/* Kept outside Wine's desktop-version capability table deliberately.  The
++ * mounted opengl32 facade exposes GLES 3.2 entry points through wglGetProcAddress;
++ * if one is unavailable we retain the ordinary monolithic program path. */
++static PFN_glProgramParameteri mgs2_glProgramParameteri;
++static PFN_glGenProgramPipelines mgs2_glGenProgramPipelines;
++static PFN_glDeleteProgramPipelines mgs2_glDeleteProgramPipelines;
++static PFN_glUseProgramStages mgs2_glUseProgramStages;
++static PFN_glBindProgramPipeline mgs2_glBindProgramPipeline;
++static PFN_glActiveShaderProgram mgs2_glActiveShaderProgram;
++static PFN_glValidateProgramPipeline mgs2_glValidateProgramPipeline;
++static PFN_glGetProgramPipelineiv mgs2_glGetProgramPipelineiv;
++static PFN_glGetProgramPipelineInfoLog mgs2_glGetProgramPipelineInfoLog;
++
++/* wined3d fills gl_ops.ext from a hand-maintained list in load_gl_funcs(), and
++ * the ARB_separate_shader_objects entry points are not in it -- reading the
++ * table alone returned NULL for all eight, so the candidate disabled itself on
++ * every pair and measured as doing nothing at all.  Resolve the same way
++ * mgs_get_gl_func() does: wglGetProcAddress() serves extension spellings,
++ * while these are GL 4.1 core and therefore reachable as ordinary opengl32
++ * exports. */
++static void *mgs2_get_gl_func(const char *name)
++{
++    static HMODULE opengl32;
++    void *pointer;
++
++    if ((pointer = (void *)wglGetProcAddress(name)))
++        return pointer;
++
++    if (!opengl32)
++        opengl32 = GetModuleHandleA("opengl32.dll");
++    return opengl32 ? (void *)GetProcAddress(opengl32, name) : NULL;
++}
++
++#define MGS2_RESOLVE_GL(f) \
++    do { \
++        if (!mgs2_##f && !(mgs2_##f = gl_info->gl_ops.ext.p_##f)) \
++            mgs2_##f = mgs2_get_gl_func(#f); \
++    } while (0)
++
++static BOOL mgs2_resolve_separable(const struct wined3d_gl_info *gl_info)
++{
++    static BOOL reported;
++
++    MGS2_RESOLVE_GL(glProgramParameteri);
++    MGS2_RESOLVE_GL(glGenProgramPipelines);
++    MGS2_RESOLVE_GL(glDeleteProgramPipelines);
++    MGS2_RESOLVE_GL(glUseProgramStages);
++    MGS2_RESOLVE_GL(glBindProgramPipeline);
++    MGS2_RESOLVE_GL(glActiveShaderProgram);
++    MGS2_RESOLVE_GL(glValidateProgramPipeline);
++    MGS2_RESOLVE_GL(glGetProgramPipelineiv);
++    /* Diagnostic only; not required for the path to work. */
++    MGS2_RESOLVE_GL(glGetProgramPipelineInfoLog);
++
++    if (!reported)
++    {
++        reported = TRUE;
++        ERR("separable entry points: ProgramParameteri=%p GenProgramPipelines=%p "
++                "DeleteProgramPipelines=%p UseProgramStages=%p BindProgramPipeline=%p "
++                "ActiveShaderProgram=%p ValidateProgramPipeline=%p GetProgramPipelineiv=%p\n",
++                mgs2_glProgramParameteri, mgs2_glGenProgramPipelines,
++                mgs2_glDeleteProgramPipelines, mgs2_glUseProgramStages,
++                mgs2_glBindProgramPipeline, mgs2_glActiveShaderProgram,
++                mgs2_glValidateProgramPipeline, mgs2_glGetProgramPipelineiv);
++    }
++
++    return mgs2_glProgramParameteri && mgs2_glGenProgramPipelines && mgs2_glDeleteProgramPipelines
++            && mgs2_glUseProgramStages && mgs2_glBindProgramPipeline && mgs2_glActiveShaderProgram
++            && mgs2_glValidateProgramPipeline && mgs2_glGetProgramPipelineiv;
++}
++
++/* Bounded, memory-only transition probe, read from outside the process through
++ * /proc/<pid>/mem by harness/gpu_transition_probe.py.  The hot thread only
++ * stores into a fixed ring: no file, no debug channel, no allocation.  Rule 2
++ * of this project exists because logging from a hot thread changed the very
++ * timings being judged. */
++#define MGS2_PROBE_MAGIC 0x32555047
++#define MGS2_PROBE_CAPACITY 512
++
++#define MGS2_PROBE_OP_LINK_PROGRAM 5
++#define MGS2_PROBE_OP_COMPILE_SHADER 6
++#define MGS2_PROBE_OP_LINK_SEPARABLE_STAGE 8
++#define MGS2_PROBE_OP_VALIDATE_PIPELINE 9
++#define MGS2_PROBE_OP_SLOW_BIND 10
++
++struct mgs2_probe_event
++{
++    LONG commit;
++    unsigned int op;
++    unsigned int tid;
++    unsigned int duration_us;
++    unsigned int a;
++    unsigned int b;
++    unsigned int c;
++    unsigned int d;
++    unsigned int object;
++};
++
++struct mgs2_probe_ring
++{
++    unsigned int magic;
++    unsigned int version;
++    unsigned int capacity;
++    LONG next_sequence;
++    struct mgs2_probe_event events[MGS2_PROBE_CAPACITY];
++};
++
++struct mgs2_probe_ring mgs2_gpu_probe = {MGS2_PROBE_MAGIC, 1, MGS2_PROBE_CAPACITY, 0};
++static BOOL mgs2_probe_enabled;
++static LONGLONG mgs2_probe_frequency;
++
++static LONGLONG mgs2_probe_now(void)
++{
++    LARGE_INTEGER now;
++
++    if (!mgs2_probe_enabled)
++        return 0;
++    QueryPerformanceCounter(&now);
++    return now.QuadPart;
++}
++
++static void mgs2_probe_record(unsigned int op, LONGLONG start, unsigned int a,
++        unsigned int b, unsigned int c, unsigned int d, unsigned int object)
++{
++    struct mgs2_probe_event *event;
++    LARGE_INTEGER now;
++    LONG sequence;
++
++    if (!mgs2_probe_enabled || !mgs2_probe_frequency)
++        return;
++
++    QueryPerformanceCounter(&now);
++    sequence = InterlockedIncrement(&mgs2_gpu_probe.next_sequence);
++    event = &mgs2_gpu_probe.events[(sequence - 1) % MGS2_PROBE_CAPACITY];
++    event->op = op;
++    event->tid = GetCurrentThreadId();
++    event->duration_us = (unsigned int)((now.QuadPart - start) * 1000000 / mgs2_probe_frequency);
++    event->a = a;
++    event->b = b;
++    event->c = c;
++    event->d = d;
++    event->object = object;
++    /* Published last, so the reader never accepts a half-written slot. */
++    InterlockedExchange(&event->commit, sequence);
++}
++
+ static void shader_glsl_generate_shader_epilogue(const struct wined3d_shader_context *ctx);
+
+ static const char *debug_gl_shader_type(GLenum type)
+@@ -552,6 +712,7 @@
+ static void shader_glsl_compile(const struct wined3d_gl_info *gl_info, GLuint shader, const char *src)
+ {
+     const char *ptr, *end, *line;
++    LONGLONG probe_start;
+
+     TRACE("Compiling shader object %u.\n", shader);
+
+@@ -567,8 +728,10 @@
+
+     GL_EXTCALL(glShaderSource(shader, 1, &src, NULL));
+     checkGLcall("glShaderSource");
++    probe_start = mgs2_probe_now();
+     GL_EXTCALL(glCompileShader(shader));
+     checkGLcall("glCompileShader");
++    mgs2_probe_record(MGS2_PROBE_OP_COMPILE_SHADER, probe_start, 0, 0, 0, 0, shader);
+     print_glsl_info_log(gl_info, shader, FALSE);
+
+ }
+@@ -1751,6 +1914,12 @@
+     if (!prog)
+         return;
+
++    if (prog->separable)
++        mgs2_resolve_separable(gl_info);
++
++    if (prog->separable)
++        mgs2_glActiveShaderProgram(prog->pipeline_id, prog->vs_program_id);
++
+     constant_version = prog->constant_version;
+     update_mask = context->constant_update_mask & prog->constant_update_mask;
+
+@@ -1934,6 +2103,9 @@
+                     WINED3D_LIGHT_PARALLELPOINT, &constants->light.lights[i], prog);
+     }
+
++    if (prog->separable)
++        mgs2_glActiveShaderProgram(prog->pipeline_id, prog->ps_program_id);
++
+     if (pshader && pshader->is_ffp_ps)
+     {
+         static const uint32_t ps_update_mask = WINED3D_SHADER_CONST_PS_F
+@@ -7052,7 +7224,10 @@
+ {
+     wine_rb_remove(&priv->program_lookup, &entry->program_lookup_entry);
+
+-    GL_EXTCALL(glDeleteProgram(entry->id));
++    if (entry->separable)
++        mgs2_glDeleteProgramPipelines(1, &entry->pipeline_id);
++    else
++        GL_EXTCALL(glDeleteProgram(entry->id));
+     if (entry->vs.id)
+         list_remove(&entry->vs.shader_entry);
+     if (entry->hs.id)
+@@ -10159,7 +10334,12 @@
+     if ((entry = wine_rb_get(&priv->ffp_vertex_shaders, settings)))
+         return WINE_RB_ENTRY_VALUE(entry, struct glsl_ffp_vertex_shader, desc.entry);
+
+-    if (!(shader = malloc(sizeof(*shader))))
++    /* calloc, not malloc: the separable candidate adds stage_program and the
++     * stage uniform locations to this structure, and every other field is
++     * assigned below.  With malloc, stage_program started as garbage, so
++     * mgs2_make_ffp_stage() took a random GL name for an already built stage
++     * and paired it with uninitialised uniform locations. */
++    if (!(shader = calloc(1, sizeof(*shader))))
+         return NULL;
+
+     shader->desc.settings = *settings;
+@@ -10180,7 +10360,8 @@
+     if ((desc = find_ffp_frag_shader(&priv->ffp_fragment_shaders, args)))
+         return CONTAINING_RECORD(desc, struct glsl_ffp_fragment_shader, entry);
+
+-    if (!(glsl_desc = malloc(sizeof(*glsl_desc))))
++    /* calloc, for the same reason as the vertex side above. */
++    if (!(glsl_desc = calloc(1, sizeof(*glsl_desc))))
+         return NULL;
+
+     glsl_desc->entry.settings = *args;
+@@ -10340,6 +10521,228 @@
+     string_buffer_release(&priv->string_buffers, name);
+ }
+
++/* Context activation is done by the caller.  FFP stages are self-contained:
++ * no VS3 rasterizer helper, transform feedback, geometry, or custom shader is
++ * admitted here.  That keeps the production fallback exact for every complex
++ * combination while still covering MGS2's fixed-function radio/menu material
++ * permutations. */
++static BOOL mgs2_make_ffp_stage(const struct wined3d_gl_info *gl_info, struct shader_glsl_priv *priv,
++        GLuint shader_id, GLenum stage_bit, GLuint *stage_program, void *stage_uniforms)
++{
++    struct wined3d_string_buffer *tmp_name;
++    GLint linked = GL_FALSE;
++    LONGLONG probe_start;
++    uint32_t attribs_map;
++    unsigned int i;
++    GLuint program;
++
++    if (*stage_program)
++        return TRUE;
++    if (!mgs2_resolve_separable(gl_info))
++        return FALSE;
++
++    program = GL_EXTCALL(glCreateProgram());
++    if (!program)
++        return FALSE;
++    mgs2_glProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
++    GL_EXTCALL(glAttachShader(program, shader_id));
++
++    if (!shader_glsl_use_explicit_attrib_location(gl_info))
++    {
++        /* This context does not get ARB_explicit_attrib_location -- it is
++         * promoted at desktop GL 3.3 and the GLES 3.2 version parses as 3.2 --
++         * so the generated FFP vertex shader carries no layout(location=)
++         * qualifier and the monolithic path binds every attribute by name
++         * before linking.  A stage program is linked on its own and needs
++         * exactly the same bindings; without them the driver assigns its own
++         * locations while wined3d keeps feeding the arrays at the fixed FFP
++         * indices, and every vertex attribute reads from the wrong array.
++         * That, not the pipeline itself, is what corrupted the image. */
++        if (stage_bit == GL_VERTEX_SHADER_BIT)
++        {
++            tmp_name = string_buffer_get(&priv->string_buffers);
++            attribs_map = (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1;
++            while (attribs_map)
++            {
++                i = wined3d_bit_scan(&attribs_map);
++                string_buffer_sprintf(tmp_name, "vs_in%u", i);
++                GL_EXTCALL(glBindAttribLocation(program, i, tmp_name->buffer));
++            }
++            checkGLcall("glBindAttribLocation");
++            string_buffer_release(&priv->string_buffers, tmp_name);
++        }
++        else if (!use_legacy_fragment_output(gl_info) && !gl_info->is_gles)
++        {
++            /* The fragment outputs would need glBindFragDataLocation(), which
++             * is desktop-only and NULL in this stack.  On GLES the single
++             * output defaults to location 0, exactly as the monolithic path
++             * relies on. */
++            GL_EXTCALL(glDeleteProgram(program));
++            return FALSE;
++        }
++    }
++
++    probe_start = mgs2_probe_now();
++    GL_EXTCALL(glLinkProgram(program));
++    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &linked));
++    mgs2_probe_record(MGS2_PROBE_OP_LINK_SEPARABLE_STAGE, probe_start,
++            stage_bit == GL_VERTEX_SHADER_BIT ? 0 : 1, shader_id, linked, 0, program);
++    if (!linked)
++    {
++        ERR("Separable %s stage program %u failed to link.\n",
++                stage_bit == GL_VERTEX_SHADER_BIT ? "vertex" : "fragment", program);
++        print_glsl_info_log(gl_info, program, TRUE);
++        GL_EXTCALL(glDeleteProgram(program));
++        return FALSE;
++    }
++
++    if (stage_bit == GL_VERTEX_SHADER_BIT)
++        shader_glsl_init_vs_uniform_locations(gl_info, priv, program, stage_uniforms, 0);
++    else
++        shader_glsl_init_ps_uniform_locations(gl_info, priv, program, stage_uniforms, 0);
++    *stage_program = program;
++    return TRUE;
++}
++
++/* The FFP half of the monolithic path's constant_update_mask, derived from the
++ * uniform locations that the two stage programs actually exposed.  The first
++ * candidate hard-coded a fixed mask instead; that both requested updates for
++ * absent uniforms and, worse, omitted clip planes and point size. */
++static void mgs2_set_ffp_constant_update_mask(struct glsl_shader_prog_link *entry)
++{
++    unsigned int i;
++
++    entry->constant_update_mask = WINED3D_SHADER_CONST_FFP_MODELVIEW
++            | WINED3D_SHADER_CONST_FFP_PROJ | WINED3D_SHADER_CONST_FFP_LIGHTS
++            | WINED3D_SHADER_CONST_FFP_PS;
++
++    for (i = 1; i < MAX_VERTEX_BLENDS; ++i)
++    {
++        if (entry->vs.modelview_matrix_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_VERTEXBLEND;
++            break;
++        }
++    }
++
++    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
++    {
++        if (entry->vs.texture_matrix_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_TEXMATRIX;
++            break;
++        }
++    }
++
++    if (entry->vs.material_ambient_location != -1 || entry->vs.material_diffuse_location != -1
++            || entry->vs.material_specular_location != -1
++            || entry->vs.material_emissive_location != -1
++            || entry->vs.material_shininess_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_MATERIAL;
++
++    if (entry->vs.clip_planes_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_CLIP_PLANES;
++    if (entry->vs.pointsize_min_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_POINTSIZE;
++
++    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
++    {
++        if (entry->ps.bumpenv_mat_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_BUMP_ENV;
++            break;
++        }
++    }
++
++    if (entry->ps.fog_color_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_FOG;
++    if (entry->ps.alpha_test_ref_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_ALPHA_TEST;
++    if (entry->ps.color_key_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_COLOR_KEY;
++}
++
++static BOOL mgs2_make_ffp_pipeline(const struct wined3d_context_gl *context_gl,
++        struct shader_glsl_priv *priv, struct glsl_ffp_vertex_shader *vs,
++        struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
++{
++    LONGLONG probe_start;
++    GLint valid = GL_FALSE;
++    GLuint pipeline;
++
++    if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs->id, GL_VERTEX_SHADER_BIT,
++            &vs->stage_program, &vs->stage)
++            || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
++                    &ps->stage_program, &ps->stage))
++        return FALSE;
++
++    probe_start = mgs2_probe_now();
++    mgs2_glGenProgramPipelines(1, &pipeline);
++    if (!pipeline)
++        return FALSE;
++    mgs2_glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs->stage_program);
++    mgs2_glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, ps->stage_program);
++    if (priv->mgs2_separable_validate)
++    {
++        mgs2_glValidateProgramPipeline(pipeline);
++        mgs2_glGetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &valid);
++        if (!valid)
++        {
++            /* Validation also reports on the *current* GL state, so a failure
++             * here is not by itself proof of an incompatible stage interface;
++             * MGS2_GL_SEPARABLE=2 keeps the pipeline anyway, for one run that
++             * can tell the two apart. */
++            ERR("Program pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
++                    pipeline, vs->stage_program, ps->stage_program);
++            if (mgs2_glGetProgramPipelineInfoLog)
++            {
++                char log[1024];
++
++                log[0] = '\0';
++                mgs2_glGetProgramPipelineInfoLog(pipeline, sizeof(log), NULL, log);
++                if (log[0])
++                    ERR("Pipeline info log: %s\n", debugstr_a(log));
++            }
++            mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++                    vs->stage_program, ps->stage_program, 0, 0, pipeline);
++            mgs2_glDeleteProgramPipelines(1, &pipeline);
++            return FALSE;
++        }
++    }
++    mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++            vs->stage_program, ps->stage_program, 1, 0, pipeline);
++
++    /* A pipeline name is not a program name: the two live in separate object
++     * namespaces, so entry->id must stay a program name.  The first candidate
++     * stored the pipeline here, which made glUseProgram() and the monolithic
++     * "did the program change" comparison operate on a foreign object.  Zero
++     * is correct -- a separable pair runs with no current program -- and
++     * transitions are detected on the entry pointer instead. */
++    entry->id = 0;
++    entry->pipeline_id = pipeline;
++    entry->vs_program_id = vs->stage_program;
++    entry->ps_program_id = ps->stage_program;
++    entry->separable = TRUE;
++
++    /* Take the stage uniform locations, but keep the shader object ids this
++     * entry was created with.  The whole-struct copy used to overwrite them
++     * with zero, and both the program lookup key and
++     * delete_glsl_program_entry() read entry->vs.id / entry->ps.id: every
++     * separable pair hashed to the same all-zero key, so no pair was ever
++     * found again, and the list_remove() that unlinks the entry from the FFP
++     * shader was skipped -- the entry was freed while still linked into
++     * ffp_vs->linked_programs.  Tearing those shaders down on a savegame load
++     * then walked freed memory.  shader_entry itself is linked by the caller. */
++    entry->vs = vs->stage;
++    entry->ps = ps->stage;
++    entry->vs.id = vs->id;
++    entry->ps.id = ps->id;
++    entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++
++    mgs2_set_ffp_constant_update_mask(entry);
++    return TRUE;
++}
++
+ static HRESULT shader_glsl_compile_compute_shader(struct shader_glsl_priv *priv,
+         const struct wined3d_context_gl *context_gl, struct wined3d_shader *shader)
+ {
+@@ -10351,7 +10754,13 @@
+     struct glsl_shader_prog_link *entry;
+     GLuint shader_id, program_id;
+
+-    if (!(entry = malloc(sizeof(*entry))))
++    /* calloc: the separable candidate added separable/pipeline_id/vs_program_id/
++     * ps_program_id to this structure and this path assigns neither, so with
++     * malloc entry->separable was garbage.  delete_glsl_program_entry() reads
++     * it, and a non-zero value there sent a *monolithic* entry into
++     * glDeleteProgramPipelines() -- a NULL entry point unless the separable
++     * path happened to have resolved it, i.e. a jump to address zero. */
++    if (!(entry = calloc(1, sizeof(*entry))))
+     {
+         ERR("Out of memory.\n");
+         return E_OUTOFMEMORY;
+@@ -10474,6 +10883,8 @@
+     struct glsl_shader_prog_link *entry = NULL;
+     struct wined3d_shader *vshader = NULL;
+     struct wined3d_shader *pshader = NULL;
++    struct glsl_ffp_vertex_shader *ffp_vs = NULL;
++    struct glsl_ffp_fragment_shader *ffp_ps = NULL;
+     GLuint reorder_shader_id = 0;
+     struct glsl_program_key key;
+     uint32_t attribs_map;
+@@ -10484,14 +10895,23 @@
+     GLuint ds_id = 0;
+     GLuint gs_id = 0;
+     GLuint ps_id = 0;
+-    struct list *ps_list, *vs_list;
++    struct list *ps_list = NULL, *vs_list = NULL;
+     struct wined3d_string_buffer *tmp_name;
++    LONGLONG probe_start, probe_link;
+
+     if (!(context_gl->c.shader_update_mask & (1u << WINED3D_SHADER_TYPE_VERTEX)) && ctx_data->glsl_program)
+     {
+         vs_id = ctx_data->glsl_program->vs.id;
+         vs_list = &ctx_data->glsl_program->vs.shader_entry;
+
++        /* The vertex state is not dirty, so the FFP vertex shader selected the
++         * last time it was is still the right one.  Without this the separable
++         * path never engaged in the very case it was built for -- a new pixel
++         * shader paired with the unchanged vertex shader, which is exactly how
++         * a codec call links eight programs. */
++        if (ctx_data->ffp_vs && ctx_data->ffp_vs->id == vs_id)
++            ffp_vs = ctx_data->ffp_vs;
++
+         if (use_vs(state) || d3d_info->ffp_hlsl)
+             vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
+     }
+@@ -10504,16 +10924,17 @@
+         find_vs_compile_args(state, vshader, &vs_compile_args, &context_gl->c);
+         vs_id = find_glsl_vertex_shader(context_gl, priv, vshader, &vs_compile_args);
+         vs_list = &vshader->linked_programs;
++        ctx_data->ffp_vs = NULL;
+     }
+     else if (priv->vertex_pipe == &glsl_vertex_pipe)
+     {
+-        struct glsl_ffp_vertex_shader *ffp_shader;
+         struct wined3d_ffp_vs_settings settings;
+
+         wined3d_ffp_get_vs_settings(state, &context_gl->c.stream_info, d3d_info, &settings);
+-        ffp_shader = shader_glsl_find_ffp_vertex_shader(priv, gl_info, &settings);
+-        vs_id = ffp_shader->id;
+-        vs_list = &ffp_shader->linked_programs;
++        ffp_vs = shader_glsl_find_ffp_vertex_shader(priv, gl_info, &settings);
++        vs_id = ffp_vs->id;
++        vs_list = &ffp_vs->linked_programs;
++        ctx_data->ffp_vs = ffp_vs;
+     }
+
+     hshader = state->shader[WINED3D_SHADER_TYPE_HULL];
+@@ -10559,6 +10980,9 @@
+         ps_id = ctx_data->glsl_program->ps.id;
+         ps_list = &ctx_data->glsl_program->ps.shader_entry;
+
++        if (ctx_data->ffp_ps && ctx_data->ffp_ps->id == ps_id)
++            ffp_ps = ctx_data->ffp_ps;
++
+         if (use_ps(state))
+             pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
+     }
+@@ -10570,17 +10994,18 @@
+                 &ps_compile_args, &context_gl->c);
+         ps_id = find_glsl_fragment_shader(context_gl, priv, pshader, &ps_compile_args);
+         ps_list = &pshader->linked_programs;
++        ctx_data->ffp_ps = NULL;
+     }
+     else if (priv->fragment_pipe == &glsl_fragment_pipe
+             && !(vshader && vshader->reg_maps.shader_version.major >= 4))
+     {
+-        struct glsl_ffp_fragment_shader *ffp_shader;
+         struct ffp_frag_settings settings;
+
+         wined3d_ffp_get_fs_settings(state, d3d_info, &settings);
+-        ffp_shader = shader_glsl_find_ffp_fragment_shader(priv, &settings, context_gl);
+-        ps_id = ffp_shader->id;
+-        ps_list = &ffp_shader->linked_programs;
++        ffp_ps = shader_glsl_find_ffp_fragment_shader(priv, &settings, context_gl);
++        ps_id = ffp_ps->id;
++        ps_list = &ffp_ps->linked_programs;
++        ctx_data->ffp_ps = ffp_ps;
+     }
+
+     key.vs_id = vs_id;
+@@ -10595,12 +11020,42 @@
+         return;
+     }
+
++    if (priv->mgs2_separable_enabled && ffp_vs && ffp_ps && !hshader && !dshader && !gshader)
++    {
++        if ((entry = calloc(1, sizeof(*entry))))
++        {
++            entry->vs.id = vs_id;
++            entry->ps.id = ps_id;
++            entry->constant_version = 0;
++            entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++            if (mgs2_make_ffp_pipeline(context_gl, priv, ffp_vs, ffp_ps, entry))
++            {
++                list_add_head(vs_list, &entry->vs.shader_entry);
++                list_add_head(ps_list, &entry->ps.shader_entry);
++                /* The sampler uniforms belong to the fragment stage program;
++                 * make it current for the plain glUniform1i() calls, then drop
++                 * back to no current program, which is what a bound pipeline
++                 * needs. */
++                GL_EXTCALL(glUseProgram(entry->ps_program_id));
++                shader_glsl_load_samplers(&context_gl->c, priv, entry->ps_program_id, NULL);
++                GL_EXTCALL(glUseProgram(0));
++                checkGLcall("separable sampler setup");
++                add_glsl_program_entry(priv, entry);
++                ctx_data->glsl_program = entry;
++                return;
++            }
++            free(entry);
++        }
++    }
++
+     /* If we get to this point, then no matching program exists, so we create one */
+     program_id = GL_EXTCALL(glCreateProgram());
+     TRACE("Created new GLSL shader program %u.\n", program_id);
+
+     /* Create the entry */
+-    entry = malloc(sizeof(*entry));
++    /* calloc, for the same reason as the compute path: entry->separable and
++     * the pipeline fields are not assigned here. */
++    entry = calloc(1, sizeof(*entry));
+     entry->id = program_id;
+     entry->vs.id = vs_id;
+     entry->hs.id = hs_id;
+@@ -10735,8 +11190,21 @@
+
+     /* Link the program */
+     TRACE("Linking GLSL shader program %u.\n", program_id);
++    probe_start = mgs2_probe_now();
+     GL_EXTCALL(glLinkProgram(program_id));
++    probe_link = mgs2_probe_now();
+     shader_glsl_validate_link(gl_info, program_id);
++    /* c carries how much of the stall the LINK_STATUS query accounts for: on a
++     * driver that links lazily the cost shows up there, not in glLinkProgram. */
++    /* d says why this pair took the monolithic path: bit 0 programmable VS,
++     * 1 programmable PS, 2 FFP VS available, 3 FFP PS available, 4 a hull/
++     * domain/geometry stage is present, 5 the candidate is enabled at all. */
++    mgs2_probe_record(MGS2_PROBE_OP_LINK_PROGRAM, probe_start, vs_id, ps_id,
++            mgs2_probe_frequency ? (unsigned int)((mgs2_probe_now() - probe_link)
++            * 1000000 / mgs2_probe_frequency) : 0,
++            (vshader ? 1 : 0) | (pshader ? 2 : 0) | (ffp_vs ? 4 : 0) | (ffp_ps ? 8 : 0)
++            | ((hshader || dshader || gshader) ? 16 : 0)
++            | (priv->mgs2_separable_enabled ? 32 : 0), program_id);
+
+     shader_glsl_init_vs_uniform_locations(gl_info, priv, program_id, &entry->vs,
+             vshader ? vshader->limits->constant_float : 0);
+@@ -10903,14 +11371,20 @@
+ {
+     struct glsl_context_data *ctx_data = context_gl->c.shader_backend_data;
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+-    struct glsl_shader_prog_link *glsl_program;
++    struct glsl_shader_prog_link *glsl_program, *prev_program;
+     GLenum current_vertex_color_clamp;
+-    GLuint program_id, prev_id;
++    LONGLONG probe_bind, probe_us;
++    GLuint program_id;
+
+     priv->vertex_pipe->vp_apply_draw_state(&context_gl->c, state);
+     priv->fragment_pipe->fp_apply_draw_state(&context_gl->c, state);
++    /* Only when the candidate is enabled, so that a production build never
++     * resolves the pipeline entry points and every guarded call below stays a
++     * NULL test. */
++    if (priv->mgs2_separable_enabled)
++        mgs2_resolve_separable(gl_info);
+
+-    prev_id = ctx_data->glsl_program ? ctx_data->glsl_program->id : 0;
++    prev_program = ctx_data->glsl_program;
+     set_glsl_shader_program(context_gl, state, priv, ctx_data);
+     glsl_program = ctx_data->glsl_program;
+
+@@ -10945,11 +11419,45 @@
+
+     TRACE("Using GLSL program %u.\n", program_id);
+
+-    if (prev_id != program_id)
+-    {
+-        GL_EXTCALL(glUseProgram(program_id));
++    /* Compare the entries themselves.  Comparing entry->id cannot express the
++     * separable case: a pipeline name is not a program name, so the two would
++     * be drawn from unrelated namespaces and could collide. */
++    if (glsl_program != prev_program)
++    {
++        probe_bind = mgs2_probe_now();
++        if (glsl_program && glsl_program->separable)
++        {
++            /* GLES 3.2, 7.4: a program made current with glUseProgram() takes
++             * precedence over the bound pipeline.  Both objects have to be set
++             * on the transition, or the pair silently keeps executing the
++             * previous monolithic program -- and the glActiveShaderProgram()
++             * uniform loads would be written into that program as well. */
++            mgs2_glBindProgramPipeline(glsl_program->pipeline_id);
++            GL_EXTCALL(glUseProgram(0));
++        }
++        else
++        {
++            /* Symmetrically, a leftover pipeline must be cleared before
++             * returning to Wine's monolithic path. */
++            if (mgs2_glBindProgramPipeline)
++                mgs2_glBindProgramPipeline(0);
++            GL_EXTCALL(glUseProgram(program_id));
++        }
+         checkGLcall("glUseProgram");
+
++        /* Only the outliers: a driver that defers the real link to first use
++         * would show it here, and at ~150 program switches per frame nothing
++         * short of a threshold can be recorded in a 512-slot ring. */
++        if (mgs2_probe_enabled && mgs2_probe_frequency)
++        {
++            probe_us = (mgs2_probe_now() - probe_bind) * 1000000 / mgs2_probe_frequency;
++            if (probe_us > 1000)
++                mgs2_probe_record(MGS2_PROBE_OP_SLOW_BIND, probe_bind,
++                        glsl_program && glsl_program->separable, 0, 0, 0,
++                        glsl_program ? (glsl_program->separable
++                        ? glsl_program->pipeline_id : glsl_program->id) : 0);
++        }
++
+         if (glsl_program)
+             context_gl->c.constant_update_mask |= glsl_program->constant_update_mask;
+     }
+@@ -11025,6 +11533,10 @@
+ {
+     struct glsl_context_data *ctx_data = context->shader_backend_data;
+
++    /* No GL call here: "context" is not necessarily the currently active one,
++     * so unbinding a pipeline would have hit whichever context is.  Clearing
++     * the entry is enough -- the next draw on this context sees a changed
++     * entry and rebinds both the pipeline and the current program. */
+     ctx_data->glsl_program = NULL;
+     context->shader_update_mask = (1u << WINED3D_SHADER_TYPE_PIXEL)
+             | (1u << WINED3D_SHADER_TYPE_VERTEX)
+@@ -11043,6 +11555,8 @@
+     struct shader_glsl_priv *priv = shader_priv;
+
+     shader_glsl_invalidate_current_program(context);
++    if (mgs2_glBindProgramPipeline)
++        mgs2_glBindProgramPipeline(0);
+     GL_EXTCALL(glUseProgram(0));
+     checkGLcall("glUseProgram");
+
+@@ -11303,6 +11817,8 @@
+     SIZE_T stack_size = wined3d_log2i(max(WINED3D_MAX_VS_CONSTS_F, WINED3D_MAX_PS_CONSTS_F)) + 1;
+     void *vertex_priv, *fragment_priv;
+     struct shader_glsl_priv *priv;
++    const char *separable_env;
++    const char *probe_env;
+
+     if (!(priv = calloc(1, sizeof(*priv))))
+         return E_OUTOFMEMORY;
+@@ -11355,6 +11871,27 @@
+     }
+
+     wine_rb_init(&priv->program_lookup, glsl_program_key_compare);
++    if ((probe_env = getenv("MGS2_GPU_PROBE")) && strcmp(probe_env, "0"))
++    {
++        LARGE_INTEGER frequency;
++
++        if (QueryPerformanceFrequency(&frequency))
++        {
++            mgs2_probe_frequency = frequency.QuadPart;
++            mgs2_probe_enabled = TRUE;
++        }
++    }
++
++    /* Production policy: on by default, like the rest of the FINALPLAY renderer
++     * work.  MGS2_GL_SEPARABLE=0 is kept as a one-run escape hatch back to the
++     * monolithic path without a redeploy; it is the A/B that attributed the
++     * remaining hitch, so it is worth keeping. */
++    separable_env = getenv("MGS2_GL_SEPARABLE");
++    priv->mgs2_separable_enabled = !(separable_env && !strcmp(separable_env, "0"));
++    /* "2" keeps a pipeline whose glValidateProgramPipeline() failed.  That
++     * query also reports on current GL state, so a failure is not by itself
++     * evidence of an incompatible stage interface. */
++    priv->mgs2_separable_validate = !(separable_env && !strcmp(separable_env, "2"));
+
+     priv->next_constant_version = 1;
+     priv->vertex_pipe = vertex_pipe;
+@@ -11858,6 +12395,10 @@
+     {
+         delete_glsl_program_entry(ctx->priv, gl_info, program);
+     }
++    /* The separable stage program owns a reference on this shader object and
++     * outlives every pipeline that used it. */
++    if (shader->stage_program)
++        GL_EXTCALL(glDeleteProgram(shader->stage_program));
+     GL_EXTCALL(glDeleteShader(shader->id));
+     free(shader);
+ }
+@@ -12086,6 +12627,8 @@
+     {
+         delete_glsl_program_entry(ctx->priv, gl_info, program);
+     }
++    if (shader->stage_program)
++        GL_EXTCALL(glDeleteProgram(shader->stage_program));
+     GL_EXTCALL(glDeleteShader(shader->id));
+     free(shader);
+ }
+diff --git a/dlls/opengl32/unix_wgl.c b/dlls/opengl32/unix_wgl.c
+--- a/dlls/opengl32/unix_wgl.c
++++ b/dlls/opengl32/unix_wgl.c
+@@ -1018,6 +1018,24 @@
+                  * rather than ever passing a native ARM function pointer to
+                  * PE / x86 code. The feature remains gated in wined3d. */
+                 { "glBufferStorage",    "glBufferStorageEXT" },
++                /* Separate shader objects: core in GLES 3.1 and desktop GL 4.1
++                 * with an identical call ABI, but gated here on the desktop
++                 * GL_ARB_separate_shader_objects string, which a GLES driver
++                 * never advertises. Measured: with the gate in place all eight
++                 * entry points came back NULL through every route, so WineD3D's
++                 * separable-stage path disabled itself on every program pair and
++                 * the 200 ms link stayed exactly where it was, silently. Same
++                 * treatment as the program-binary pair above, and for the same
++                 * reason it goes through Wine's own thunk. */
++                { "glProgramParameteri",         "glProgramParameteriEXT" },
++                { "glGenProgramPipelines",       "glGenProgramPipelinesEXT" },
++                { "glDeleteProgramPipelines",    "glDeleteProgramPipelinesEXT" },
++                { "glUseProgramStages",          "glUseProgramStagesEXT" },
++                { "glBindProgramPipeline",       "glBindProgramPipelineEXT" },
++                { "glActiveShaderProgram",       "glActiveShaderProgramEXT" },
++                { "glValidateProgramPipeline",   "glValidateProgramPipelineEXT" },
++                { "glGetProgramPipelineiv",      "glGetProgramPipelineivEXT" },
++                { "glGetProgramPipelineInfoLog", "glGetProgramPipelineInfoLogEXT" },
+             };
+
+             for (i = 0; i < ARRAY_SIZE(gles_spellings); i++)
