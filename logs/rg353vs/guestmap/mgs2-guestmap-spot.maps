@@ -1,0 +1,1058 @@
+00010000-00110000 rw-p 00000000 00:00 0 
+00110000-0011c000 r-xp 00000000 b3:02 838882                             /storage/roms/ports/MGS2-Substance/wineprefix64/drive_c/windows/system32/wow64cpu.dll
+0011c000-00120000 ---p 00000000 00:00 0 
+00120000-00123000 rwxp 00000000 00:00 0 
+00123000-00130000 ---p 00000000 00:00 0 
+00130000-00230000 rwxp 00000000 00:00 0 
+00230000-00232000 ---p 00000000 00:00 0 
+00232000-00330000 rwxp 00000000 00:00 0 
+00330000-00346000 r-xp 00000000 07:00 10245                              /usr/lib/wine/i386-windows/apisetschema.dll
+00346000-00350000 ---p 00000000 00:00 0 
+00350000-00366000 rwxp 00000000 00:00 0 
+00366000-00370000 ---p 00000000 00:00 0 
+00370000-00372000 r-xp 00000000 07:00 58969                              /usr/share/wine/nls/l_intl.nls
+00372000-00380000 ---p 00000000 00:00 0 
+00380000-00391000 r-xp 00000000 07:00 58921                              /usr/share/wine/nls/c_1252.nls
+00391000-003a0000 ---p 00000000 00:00 0 
+003a0000-003b1000 r-xp 00000000 07:00 58945                              /usr/share/wine/nls/c_437.nls
+003b1000-003c0000 ---p 00000000 00:00 0 
+003c0000-003cf000 r-xp 00000000 07:00 58972                              /usr/share/wine/nls/normnfc.nls
+003cf000-003d0000 ---p 00000000 00:00 0 
+003d0000-003e1000 r-xp 00000000 07:00 58929                              /usr/share/wine/nls/c_20127.nls
+003e1000-003f0000 ---p 00000000 00:00 0 
+003f0000-00400000 rwxp 00000000 00:00 0 
+00400000-0099c000 r-xp 00000000 b3:02 801604                             /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+0099c000-00a15000 rwxp 0059c000 b3:02 801604                             /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+00a15000-01800000 rwxp 00000000 00:00 0 
+01800000-01801000 rwxp 00615000 b3:02 801604                             /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+01801000-01858000 r-xp 00616000 b3:02 801604                             /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+01858000-01860000 ---p 00000000 00:00 0 
+01860000-01862000 ---p 00000000 00:00 0 
+01862000-01960000 rwxp 00000000 00:00 0 
+01960000-01a23000 r-xp 00000000 07:00 58970                              /usr/share/wine/nls/locale.nls
+01a23000-01a30000 ---p 00000000 00:00 0 
+01a30000-01ab0000 rwxp 00000000 00:00 0 
+01ab0000-01dea000 r-xp 00000000 07:00 58976                              /usr/share/wine/nls/sortdefault.nls
+01dea000-01df0000 ---p 00000000 00:00 0 
+01df0000-01df6000 rwxp 00000000 00:00 0 
+01df6000-01e00000 ---p 00000000 00:00 0 
+01e00000-01f44000 r-xp 00000000 00:28 309                                /tmp/.wine-0/server-b302-c83d8/tmpmap-87c457be (deleted)
+01f44000-01f50000 ---p 00000000 00:00 0 
+01f50000-020d0000 rwxp 00000000 00:00 0 
+020d0000-021d0000 rw-p 00000000 00:00 0 
+021d0000-021d2000 ---p 00000000 00:00 0 
+021d2000-022d0000 rw-p 00000000 00:00 0 
+022d0000-022d2000 ---p 00000000 00:00 0 
+022d2000-023d0000 rw-p 00000000 00:00 0 
+023d0000-023e1000 rwxp 00000000 00:00 0 
+023e1000-023f0000 ---p 00000000 00:00 0 
+023f0000-023f1000 rwxp 00000000 00:00 0 
+023f1000-02400000 ---p 00000000 00:00 0 
+02400000-02b3c000 r-xp 00000000 b3:02 820229                             /storage/roms/ports/MGS2-Substance/wineprefix64/drive_c/windows/resources/themes/light/light.msstyles
+02b3c000-02b40000 ---p 00000000 00:00 0 
+02b40000-02c40000 rwxp 00000000 00:00 0 
+02c40000-02c41000 rwxp 00000000 00:00 0 
+02c41000-02c50000 ---p 00000000 00:00 0 
+02c50000-02c56000 rwxp 00000000 00:00 0 
+02c56000-02c60000 ---p 00000000 00:00 0 
+02c60000-02c61000 rwxp 00000000 00:00 0 
+02c61000-02c70000 ---p 00000000 00:00 0 
+02c70000-02c80000 rwxp 00000000 00:00 0 
+02c80000-02c90000 ---p 00000000 00:00 0 
+02c90000-02ca6000 rwxp 00000000 00:00 0 
+02ca6000-02cb0000 ---p 00000000 00:00 0 
+02cb0000-02db0000 rw-p 00000000 00:00 0 
+02db0000-02db2000 ---p 00000000 00:00 0 
+02db2000-02eb0000 rw-p 00000000 00:00 0 
+02eb0000-02eb2000 ---p 00000000 00:00 0 
+02eb2000-02fb0000 rw-p 00000000 00:00 0 
+02fb0000-05560000 rwxp 00000000 00:00 0 
+05560000-05660000 rw-p 00000000 00:00 0 
+05660000-05662000 ---p 00000000 00:00 0 
+05662000-05760000 rw-p 00000000 00:00 0 
+05760000-05762000 ---p 00000000 00:00 0 
+05762000-05860000 rw-p 00000000 00:00 0 
+05860000-06070000 rwxp 00000000 00:00 0 
+06070000-06170000 rw-p 00000000 00:00 0 
+06170000-06172000 ---p 00000000 00:00 0 
+06172000-06270000 rw-p 00000000 00:00 0 
+06270000-06272000 ---p 00000000 00:00 0 
+06272000-06370000 rw-p 00000000 00:00 0 
+06370000-064b1000 rwxp 00000000 00:00 0 
+064b1000-064c0000 ---p 00000000 00:00 0 
+064c0000-064c7000 rwxp 00000000 00:00 0 
+064c7000-064d0000 ---p 00000000 00:00 0 
+064d0000-064d1000 rwxp 00000000 00:00 0 
+064d1000-064e0000 ---p 00000000 00:00 0 
+064e0000-06620000 rwxs 00000000 00:28 312                                /tmp/.wine-0/server-b302-c83d8/tmpmap-c3803d91 (deleted)
+06620000-0674c000 rwxs 00000000 00:28 313                                /tmp/.wine-0/server-b302-c83d8/tmpmap-ff4ac08b (deleted)
+0674c000-06750000 ---p 00000000 00:00 0 
+06750000-07850000 rwxp 00000000 00:00 0 
+07850000-078a0000 ---p 00000000 00:00 0 
+078a0000-079a0000 rw-p 00000000 00:00 0 
+079a0000-079a2000 ---p 00000000 00:00 0 
+079a2000-07aa0000 rw-p 00000000 00:00 0 
+07aa0000-07aa2000 ---p 00000000 00:00 0 
+07aa2000-07ca0000 rw-p 00000000 00:00 0 
+07ca0000-07ca2000 ---p 00000000 00:00 0 
+07ca2000-07da0000 rw-p 00000000 00:00 0 
+07da0000-07da2000 ---p 00000000 00:00 0 
+07da2000-07ea0000 rw-p 00000000 00:00 0 
+07ea0000-07ea3000 rwxp 00000000 00:00 0 
+07ea3000-07eb0000 ---p 00000000 00:00 0 
+07eb0000-07fb0000 rw-p 00000000 00:00 0 
+07fb0000-07fb2000 ---p 00000000 00:00 0 
+07fb2000-080b0000 rw-p 00000000 00:00 0 
+080b0000-080b2000 ---p 00000000 00:00 0 
+080b2000-082b0000 rw-p 00000000 00:00 0 
+082b0000-082b2000 ---p 00000000 00:00 0 
+082b2000-083b0000 rw-p 00000000 00:00 0 
+083b0000-083b2000 ---p 00000000 00:00 0 
+083b2000-084b0000 rw-p 00000000 00:00 0 
+084b0000-086b0000 rwxp 00000000 00:00 0 
+086b0000-087b0000 rw-p 00000000 00:00 0 
+087b0000-087b2000 ---p 00000000 00:00 0 
+087b2000-088b0000 rw-p 00000000 00:00 0 
+088b0000-088b2000 ---p 00000000 00:00 0 
+088b2000-08ab0000 rw-p 00000000 00:00 0 
+08ab0000-08ab2000 ---p 00000000 00:00 0 
+08ab2000-08bb0000 rw-p 00000000 00:00 0 
+08bb0000-08bb2000 ---p 00000000 00:00 0 
+08bb2000-08db0000 rw-p 00000000 00:00 0 
+08db0000-08db2000 ---p 00000000 00:00 0 
+08db2000-08eb0000 rw-p 00000000 00:00 0 
+08eb0000-08eb2000 ---p 00000000 00:00 0 
+08eb2000-090b0000 rw-p 00000000 00:00 0 
+090b0000-090b2000 ---p 00000000 00:00 0 
+090b2000-091b0000 rw-p 00000000 00:00 0 
+091b0000-091b2000 ---p 00000000 00:00 0 
+091b2000-093b0000 rw-p 00000000 00:00 0 
+093b0000-093b2000 ---p 00000000 00:00 0 
+093b2000-094b0000 rw-p 00000000 00:00 0 
+094b0000-094b2000 ---p 00000000 00:00 0 
+094b2000-096b0000 rw-p 00000000 00:00 0 
+096b0000-096b2000 ---p 00000000 00:00 0 
+096b2000-097b0000 rw-p 00000000 00:00 0 
+097b0000-097b2000 ---p 00000000 00:00 0 
+097b2000-098b0000 rw-p 00000000 00:00 0 
+098b0000-09973000 r-xp 00000000 07:00 58970                              /usr/share/wine/nls/locale.nls
+09973000-09980000 ---p 00000000 00:00 0 
+09980000-09a10000 rwxp 00000000 00:00 0 
+09a10000-09b10000 rw-p 00000000 00:00 0 
+09b10000-09b12000 ---p 00000000 00:00 0 
+09b12000-09c10000 rw-p 00000000 00:00 0 
+09c10000-09c12000 ---p 00000000 00:00 0 
+09c12000-09d10000 rw-p 00000000 00:00 0 
+09d10000-0a140000 rwxp 00000000 00:00 0 
+0a140000-0a190000 ---p 00000000 00:00 0 
+0a190000-0a590000 rwxp 00000000 00:00 0 
+0a590000-0c570000 rwxp 00000000 00:00 0 
+0c570000-0c6a0000 rwxp 00000000 00:00 0 
+0c6a0000-0c8c0000 rwxp 00000000 00:00 0 
+0c8c0000-0c920000 ---p 00000000 00:00 0 
+0c920000-0d620000 rwxp 00000000 00:00 0 
+0d620000-0dda0000 ---p 00000000 00:00 0 
+0dda0000-0df40000 rwxp 00000000 00:00 0 
+0df40000-0df50000 ---p 00000000 00:00 0 
+0df50000-0edd0000 rwxp 00000000 00:00 0 
+0edd0000-0ee60000 ---p 00000000 00:00 0 
+0ee60000-10790000 rwxp 00000000 00:00 0 
+10790000-122f0000 ---p 00000000 00:00 0 
+122f0000-123f0000 rw-p 00000000 00:00 0 
+123f0000-123f2000 ---p 00000000 00:00 0 
+123f2000-124f0000 rw-p 00000000 00:00 0 
+124f0000-124f2000 ---p 00000000 00:00 0 
+124f2000-125f0000 rw-p 00000000 00:00 0 
+125f0000-1fa30000 ---p 00000000 00:00 0 
+1fa30000-1fa36000 r-xp 00000000 07:00 10424                              /usr/lib/wine/i386-windows/dsdmo.dll
+1fa36000-1fa37000 rwxp 00006000 07:00 10424                              /usr/lib/wine/i386-windows/dsdmo.dll
+1fa37000-1fa4a000 r-xp 00007000 07:00 10424                              /usr/lib/wine/i386-windows/dsdmo.dll
+1fa4a000-1fa4b000 rwxp 00000000 00:00 0 
+1fa4b000-1fa4c000 r-xp 0001a000 07:00 10424                              /usr/lib/wine/i386-windows/dsdmo.dll
+1fa4c000-1fa4d000 rwxp 0001b000 07:00 10424                              /usr/lib/wine/i386-windows/dsdmo.dll
+1fa4d000-1fa50000 r-xp 0001c000 07:00 10424                              /usr/lib/wine/i386-windows/dsdmo.dll
+1fa50000-1fa7d000 r-xp 00000000 07:00 10524                              /usr/lib/wine/i386-windows/l3codeca.acm
+1fa7d000-1fa7e000 rwxp 0002d000 07:00 10524                              /usr/lib/wine/i386-windows/l3codeca.acm
+1fa7e000-1fa9c000 r-xp 0002e000 07:00 10524                              /usr/lib/wine/i386-windows/l3codeca.acm
+1fa9c000-1fa9d000 rwxp 00000000 00:00 0 
+1fa9d000-1fa9e000 r-xp 0004c000 07:00 10524                              /usr/lib/wine/i386-windows/l3codeca.acm
+1fa9e000-1fa9f000 rwxp 0004d000 07:00 10524                              /usr/lib/wine/i386-windows/l3codeca.acm
+1fa9f000-1faaa000 r-xp 0004e000 07:00 10524                              /usr/lib/wine/i386-windows/l3codeca.acm
+1faaa000-1fab0000 ---p 00000000 00:00 0 
+1fab0000-1fab4000 r-xp 00000000 07:00 10572                              /usr/lib/wine/i386-windows/msadp32.acm
+1fab4000-1fab5000 rwxp 00004000 07:00 10572                              /usr/lib/wine/i386-windows/msadp32.acm
+1fab5000-1fab7000 r-xp 00005000 07:00 10572                              /usr/lib/wine/i386-windows/msadp32.acm
+1fab7000-1fab8000 rwxp 00000000 00:00 0 
+1fab8000-1fab9000 r-xp 00007000 07:00 10572                              /usr/lib/wine/i386-windows/msadp32.acm
+1fab9000-1faba000 rwxp 00008000 07:00 10572                              /usr/lib/wine/i386-windows/msadp32.acm
+1faba000-1fabb000 r-xp 00009000 07:00 10572                              /usr/lib/wine/i386-windows/msadp32.acm
+1fabb000-1fac0000 ---p 00000000 00:00 0 
+1fac0000-1fae6000 r-xp 00000000 b3:02 920841                             /usr/lib/wine/i386-windows/dmime.dll
+1fae6000-1fae7000 rwxp 00026000 b3:02 920841                             /usr/lib/wine/i386-windows/dmime.dll
+1fae7000-1fb04000 r-xp 00027000 b3:02 920841                             /usr/lib/wine/i386-windows/dmime.dll
+1fb04000-1fb05000 rwxp 00000000 00:00 0 
+1fb05000-1fb06000 r-xp 00044000 b3:02 920841                             /usr/lib/wine/i386-windows/dmime.dll
+1fb06000-1fb07000 rwxp 00045000 b3:02 920841                             /usr/lib/wine/i386-windows/dmime.dll
+1fb07000-1fc45000 r-xp 00046000 b3:02 920841                             /usr/lib/wine/i386-windows/dmime.dll
+1fc45000-1fc50000 ---p 00000000 00:00 0 
+1fc50000-1fc8a000 r-xp 00000000 b3:02 801634                             /usr/lib/wine/i386-windows/dmsynth.dll
+1fc8a000-1fc91000 rwxp 0003a000 b3:02 801634                             /usr/lib/wine/i386-windows/dmsynth.dll
+1fc91000-1fcc3000 r-xp 00041000 b3:02 801634                             /usr/lib/wine/i386-windows/dmsynth.dll
+1fcc3000-1fd22000 rwxp 00000000 00:00 0 
+1fd22000-1fd23000 r-xp 00073000 b3:02 801634                             /usr/lib/wine/i386-windows/dmsynth.dll
+1fd23000-1fd24000 rwxp 00074000 b3:02 801634                             /usr/lib/wine/i386-windows/dmsynth.dll
+1fd24000-1fe95000 r-xp 00075000 b3:02 801634                             /usr/lib/wine/i386-windows/dmsynth.dll
+1fe95000-1fea0000 ---p 00000000 00:00 0 
+1fea0000-1fea4000 r-xp 00000000 07:00 10554                              /usr/lib/wine/i386-windows/midimap.dll
+1fea4000-1fea5000 rwxp 00004000 07:00 10554                              /usr/lib/wine/i386-windows/midimap.dll
+1fea5000-1fea7000 r-xp 00005000 07:00 10554                              /usr/lib/wine/i386-windows/midimap.dll
+1fea7000-1fea8000 rwxp 00000000 00:00 0 
+1fea8000-1fea9000 r-xp 00007000 07:00 10554                              /usr/lib/wine/i386-windows/midimap.dll
+1fea9000-1feaa000 rwxp 00008000 07:00 10554                              /usr/lib/wine/i386-windows/midimap.dll
+1feaa000-1feab000 r-xp 00009000 07:00 10554                              /usr/lib/wine/i386-windows/midimap.dll
+1feab000-1feb0000 ---p 00000000 00:00 0 
+1feb0000-1feb6000 r-xp 00000000 07:00 10570                              /usr/lib/wine/i386-windows/msacm32.drv
+1feb6000-1feb7000 rwxp 00006000 07:00 10570                              /usr/lib/wine/i386-windows/msacm32.drv
+1feb7000-1feb9000 r-xp 00007000 07:00 10570                              /usr/lib/wine/i386-windows/msacm32.drv
+1feb9000-1feba000 rwxp 00000000 00:00 0 
+1feba000-1febb000 r-xp 00009000 07:00 10570                              /usr/lib/wine/i386-windows/msacm32.drv
+1febb000-1febc000 rwxp 0000a000 07:00 10570                              /usr/lib/wine/i386-windows/msacm32.drv
+1febc000-1febd000 r-xp 0000b000 07:00 10570                              /usr/lib/wine/i386-windows/msacm32.drv
+1febd000-1fec0000 ---p 00000000 00:00 0 
+1fec0000-1fed7000 r-xp 00000000 b3:02 801628                             /usr/lib/wine/i386-windows/dmusic.dll
+1fed7000-1fed8000 rwxp 00017000 b3:02 801628                             /usr/lib/wine/i386-windows/dmusic.dll
+1fed8000-1fef0000 r-xp 00018000 b3:02 801628                             /usr/lib/wine/i386-windows/dmusic.dll
+1fef0000-1fef1000 rwxp 00000000 00:00 0 
+1fef1000-1fef2000 r-xp 00030000 b3:02 801628                             /usr/lib/wine/i386-windows/dmusic.dll
+1fef2000-1fef3000 rwxp 00031000 b3:02 801628                             /usr/lib/wine/i386-windows/dmusic.dll
+1fef3000-1ff95000 r-xp 00032000 b3:02 801628                             /usr/lib/wine/i386-windows/dmusic.dll
+1ff95000-1ffa0000 ---p 00000000 00:00 0 
+1ffa0000-1ffa4000 r-xp 00000000 07:00 10934                              /usr/lib/wine/i386-windows/winealsa.drv
+1ffa4000-1ffa5000 rwxp 00004000 07:00 10934                              /usr/lib/wine/i386-windows/winealsa.drv
+1ffa5000-1ffa6000 r-xp 00005000 07:00 10934                              /usr/lib/wine/i386-windows/winealsa.drv
+1ffa6000-1ffb0000 ---p 00000000 00:00 0 
+1ffb0000-1ffb3000 r-xp 00000000 07:00 10871                              /usr/lib/wine/i386-windows/version.dll
+1ffb3000-1ffb4000 rwxp 00003000 07:00 10871                              /usr/lib/wine/i386-windows/version.dll
+1ffb4000-1ffb6000 r-xp 00004000 07:00 10871                              /usr/lib/wine/i386-windows/version.dll
+1ffb6000-1ffb7000 rwxp 00000000 00:00 0 
+1ffb7000-1ffb8000 r-xp 00006000 07:00 10871                              /usr/lib/wine/i386-windows/version.dll
+1ffb8000-1ffb9000 rwxp 00007000 07:00 10871                              /usr/lib/wine/i386-windows/version.dll
+1ffb9000-1ffbb000 r-xp 00008000 07:00 10871                              /usr/lib/wine/i386-windows/version.dll
+1ffbb000-1ffc0000 ---p 00000000 00:00 0 
+1ffc0000-1ffd8000 r-xp 00000000 07:00 10557                              /usr/lib/wine/i386-windows/mmdevapi.dll
+1ffd8000-1ffd9000 rwxp 00018000 07:00 10557                              /usr/lib/wine/i386-windows/mmdevapi.dll
+1ffd9000-1ffe7000 r-xp 00019000 07:00 10557                              /usr/lib/wine/i386-windows/mmdevapi.dll
+1ffe7000-1ffe8000 rwxp 00000000 00:00 0 
+1ffe8000-1ffe9000 r-xp 00027000 07:00 10557                              /usr/lib/wine/i386-windows/mmdevapi.dll
+1ffe9000-1ffea000 rwxp 00028000 07:00 10557                              /usr/lib/wine/i386-windows/mmdevapi.dll
+1ffea000-1fff4000 r-xp 00029000 07:00 10557                              /usr/lib/wine/i386-windows/mmdevapi.dll
+1fff4000-20000000 ---p 00000000 00:00 0 
+30000000-30001000 r-xp 00000000 07:00 10216                              /usr/lib/wine/i386-unix/wine
+30001000-30002000 ---p 00000000 00:00 0 
+30002000-30004000 rw-p 00000000 00:00 0 
+30004000-30005000 ---p 00000000 00:00 0 
+3fe00000-3fed0000 ---p 00000000 00:00 0 
+3fed0000-40001000 rwxp 00000000 00:00 0 
+40010000-40011000 rwxp 00000000 00:00 0 
+40020000-40022000 rwxp 00000000 00:00 0 
+40030000-40031000 rwxp 00000000 00:00 0 
+40040000-40042000 rwxp 00000000 00:00 0 
+40050000-40051000 rwxp 00000000 00:00 0 
+40060000-40061000 rwxp 00000000 00:00 0 
+40070000-40071000 rwxp 00000000 00:00 0 
+40080000-40081000 rwxp 00000000 00:00 0 
+40090000-40091000 rwxp 00000000 00:00 0 
+400a0000-400a1000 rwxp 00000000 00:00 0 
+400b0000-400b1000 rwxp 00000000 00:00 0 
+400c0000-400c1000 rwxp 00000000 00:00 0 
+400d0000-400d1000 rwxp 00000000 00:00 0 
+400e0000-400e1000 rwxp 00000000 00:00 0 
+400f0000-40100000 rw-p 00000000 00:00 0 
+40100000-40101000 rwxp 00000000 00:00 0 
+40110000-40111000 rwxp 00000000 00:00 0 
+40120000-40121000 rwxp 00000000 00:00 0 
+60000000-60006000 rwxp 00000000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60006000-60008000 r-xp 00006000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60008000-6000b000 rwxp 00008000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+6000b000-60033000 r-xp 0000b000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60033000-60035000 rwxp 00033000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60035000-6003e000 r-xp 00035000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+6003e000-60042000 rwxp 0003e000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60042000-60052000 r-xp 00042000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60052000-60053000 rwxp 00052000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60053000-60067000 r-xp 00053000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60067000-60068000 rwxp 00067000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60068000-60069000 r-xp 00068000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+60069000-6009c000 rwxp 00069000 b3:02 789814                             /usr/lib/wine/i386-unix/ntdll.so
+6009c000-600c5000 rw-p 00000000 00:00 0 
+600c5000-600c6000 ---p 00000000 00:00 0 
+60200000-60214000 rw-p 00000000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60214000-60224000 r-xp 00014000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60224000-60227000 rwxp 00024000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60227000-60230000 r-xp 00027000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60230000-60231000 rwxp 00030000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60231000-60232000 r-xp 00031000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60232000-60233000 rwxp 00032000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60233000-60241000 r-xp 00033000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60241000-60242000 rwxp 00041000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60242000-60244000 r-xp 00042000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60244000-60245000 rwxp 00044000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60245000-60246000 r-xp 00045000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60246000-60248000 rwxp 00046000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60248000-60249000 r-xp 00048000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60249000-6024d000 rwxp 00049000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6024d000-6024e000 r-xp 0004d000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6024e000-60250000 rwxp 0004e000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60250000-60251000 r-xp 00050000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60251000-60252000 rwxp 00051000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60252000-60254000 r-xp 00052000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60254000-60266000 rwxp 00054000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60266000-60268000 r-xp 00066000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60268000-60269000 rwxp 00068000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60269000-6026a000 r-xp 00069000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6026a000-60277000 rwxp 0006a000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60277000-60279000 r-xp 00077000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60279000-6027a000 rwxp 00079000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6027a000-6027b000 r-xp 0007a000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6027b000-6027c000 rwxp 0007b000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6027c000-60283000 r-xp 0007c000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60283000-60285000 rwxp 00083000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60285000-60286000 r-xp 00085000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60286000-6028b000 rwxp 00086000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6028b000-60291000 r-xp 0008b000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60291000-60293000 rwxp 00091000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60293000-6029f000 r-xp 00093000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6029f000-602a0000 rwxp 0009f000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602a0000-602a6000 r-xp 000a0000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602a6000-602a7000 rwxp 000a6000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602a7000-602aa000 r-xp 000a7000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602aa000-602ab000 rwxp 000aa000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602ab000-602bd000 r-xp 000ab000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602bd000-602be000 rwxp 000bd000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602be000-602d0000 r-xp 000be000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602d0000-602d2000 rwxp 000d0000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602d2000-602d4000 r-xp 000d2000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602d4000-602d7000 rwxp 000d4000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602d7000-602d8000 r-xp 000d7000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602d8000-602d9000 rwxp 000d8000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602d9000-602e1000 r-xp 000d9000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602e1000-602e2000 rwxp 000e1000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602e2000-602e3000 r-xp 000e2000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602e3000-602e4000 rwxp 000e3000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602e4000-602e7000 r-xp 000e4000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602e7000-602ee000 rwxp 000e7000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602ee000-602f6000 r-xp 000ee000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602f6000-602f9000 rwxp 000f6000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+602f9000-60308000 r-xp 000f9000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60308000-6030b000 rwxp 00108000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6030b000-6030d000 r-xp 0010b000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6030d000-60329000 rwxp 0010d000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60329000-6033f000 r-xp 00129000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+6033f000-60340000 rwxp 0013f000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60340000-60341000 r-xp 00140000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+60341000-603df000 rw-p 00141000 b3:02 801586                             /usr/lib/wine/i386-unix/win32u.so
+603df000-60427000 rw-p 00000000 00:00 0 
+60427000-60428000 ---p 00000000 00:00 0 
+60600000-60613000 rw-p 00000000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60613000-60614000 r-xp 00013000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60614000-60618000 rwxp 00014000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60618000-60619000 r-xp 00018000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60619000-6061b000 rwxp 00019000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6061b000-6061c000 r-xp 0001b000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6061c000-6061e000 rwxp 0001c000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6061e000-6061f000 r-xp 0001e000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6061f000-60621000 rwxp 0001f000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60621000-60622000 r-xp 00021000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60622000-60624000 rwxp 00022000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60624000-60628000 r-xp 00024000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60628000-6062c000 rwxp 00028000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6062c000-6062d000 r-xp 0002c000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6062d000-6062f000 rwxp 0002d000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6062f000-60630000 r-xp 0002f000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60630000-6063d000 rwxp 00030000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6063d000-6063f000 r-xp 0003d000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6063f000-60640000 rwxp 0003f000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60640000-60641000 r-xp 00040000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60641000-60642000 rwxp 00041000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60642000-60646000 r-xp 00042000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60646000-60647000 rwxp 00046000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60647000-60648000 r-xp 00047000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60648000-60649000 rwxp 00048000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60649000-60653000 r-xp 00049000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60653000-60654000 rwxp 00053000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60654000-60655000 r-xp 00054000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60655000-6065a000 rwxp 00055000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+6065a000-60661000 r-xp 0005a000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+60661000-606bb000 rw-p 00061000 b3:02 789794                             /usr/lib/wine/i386-unix/opengl32.so
+606bb000-606ce000 rw-p 00000000 00:00 0 
+606ce000-606cf000 ---p 00000000 00:00 0 
+60800000-60804000 rw-p 00000000 b3:02 797829                             /usr/lib/wine/i386-unix/winewayland.so
+60804000-60809000 r-xp 00004000 b3:02 797829                             /usr/lib/wine/i386-unix/winewayland.so
+60809000-6080a000 rwxp 00009000 b3:02 797829                             /usr/lib/wine/i386-unix/winewayland.so
+6080a000-60819000 r-xp 0000a000 b3:02 797829                             /usr/lib/wine/i386-unix/winewayland.so
+60819000-6082a000 rw-p 00019000 b3:02 797829                             /usr/lib/wine/i386-unix/winewayland.so
+6082a000-6082c000 rw-p 00000000 00:00 0 
+6082c000-6082d000 ---p 00000000 00:00 0 
+60a00000-60a03000 rw-p 00000000 b3:02 897514                             /storage/roms/ports/MGS2-Substance/x86libs/libwayland-client.so.0
+60a03000-60a09000 r-xp 00003000 b3:02 897514                             /storage/roms/ports/MGS2-Substance/x86libs/libwayland-client.so.0
+60a09000-60a0d000 rw-p 00009000 b3:02 897514                             /storage/roms/ports/MGS2-Substance/x86libs/libwayland-client.so.0
+60a0d000-60a0f000 rw-p 00000000 00:00 0 
+60a0f000-60a10000 ---p 00000000 00:00 0 
+60c00000-60c03000 rw-p 00000000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c03000-60c06000 r-xp 00003000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c06000-60c07000 rwxp 00006000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c07000-60c10000 r-xp 00007000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c10000-60c11000 rwxp 00010000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c11000-60c12000 r-xp 00011000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c12000-60c13000 rwxp 00012000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c13000-60c20000 r-xp 00013000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c20000-60c48000 rw-p 00020000 b3:02 897519                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbcommon.so.0
+60c48000-60c4a000 rw-p 00000000 00:00 0 
+60c4a000-60c4b000 ---p 00000000 00:00 0 
+60e00000-60e02000 rw-p 00000000 b3:02 897520                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbregistry.so.0
+60e02000-60e06000 r-xp 00002000 b3:02 897520                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbregistry.so.0
+60e06000-60e09000 rw-p 00006000 b3:02 897520                             /storage/roms/ports/MGS2-Substance/x86libs/libxkbregistry.so.0
+60e09000-60e0c000 rw-p 00000000 00:00 0 
+60e0c000-60e0d000 ---p 00000000 00:00 0 
+61000000-61001000 rw-p 00000000 b3:02 897516                             /storage/roms/ports/MGS2-Substance/x86libs/libffi.so.8
+61001000-61002000 r-xp 00001000 b3:02 897516                             /storage/roms/ports/MGS2-Substance/x86libs/libffi.so.8
+61002000-61004000 rwxp 00002000 b3:02 897516                             /storage/roms/ports/MGS2-Substance/x86libs/libffi.so.8
+61004000-61006000 r-xp 00004000 b3:02 897516                             /storage/roms/ports/MGS2-Substance/x86libs/libffi.so.8
+61006000-61008000 rw-p 00006000 b3:02 897516                             /storage/roms/ports/MGS2-Substance/x86libs/libffi.so.8
+61008000-6100a000 rw-p 00000000 00:00 0 
+6100a000-6100b000 ---p 00000000 00:00 0 
+61200000-6121d000 rw-p 00000000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6121d000-61220000 r-xp 0001d000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61220000-61221000 rwxp 00020000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61221000-61224000 r-xp 00021000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61224000-61226000 rwxp 00024000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61226000-6122f000 r-xp 00026000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6122f000-61230000 rwxp 0002f000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61230000-6123e000 r-xp 00030000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6123e000-6123f000 rwxp 0003e000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6123f000-61247000 r-xp 0003f000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61247000-6124a000 rwxp 00047000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6124a000-6124b000 r-xp 0004a000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6124b000-6124c000 rwxp 0004b000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6124c000-6124d000 r-xp 0004c000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6124d000-6124e000 rwxp 0004d000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6124e000-61255000 r-xp 0004e000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61255000-61257000 rwxp 00055000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61257000-61259000 r-xp 00057000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61259000-6125c000 rwxp 00059000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6125c000-6125e000 r-xp 0005c000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6125e000-6125f000 rwxp 0005e000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6125f000-61268000 r-xp 0005f000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61268000-61269000 rwxp 00068000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61269000-61274000 r-xp 00069000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61274000-61275000 rwxp 00074000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61275000-61278000 r-xp 00075000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61278000-6127c000 rwxp 00078000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6127c000-6127d000 r-xp 0007c000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6127d000-61290000 rwxp 0007d000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61290000-61291000 r-xp 00090000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61291000-612ba000 rwxp 00091000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+612ba000-612bd000 r-xp 000ba000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+612bd000-612bf000 rwxp 000bd000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+612bf000-612cd000 r-xp 000bf000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+612cd000-61320000 rwxp 000cd000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61320000-61327000 r-xp 00120000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+61327000-6133a000 rwxp 00127000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6133a000-6133d000 r-xp 0013a000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+6133d000-613c8000 rw-p 0013d000 b3:02 897522                             /storage/roms/ports/MGS2-Substance/x86libs/libxml2.so.2
+613c8000-613cf000 rw-p 00000000 00:00 0 
+613cf000-613d0000 ---p 00000000 00:00 0 
+61500000-6154b000 rw-p 00000000 b3:02 897525                             /storage/roms/ports/MGS2-Substance/x86libs/libicuuc.so.72
+6154b000-6154c000 r-xp 0004b000 b3:02 897525                             /storage/roms/ports/MGS2-Substance/x86libs/libicuuc.so.72
+6154c000-61552000 rwxp 0004c000 b3:02 897525                             /storage/roms/ports/MGS2-Substance/x86libs/libicuuc.so.72
+61552000-61553000 r-xp 00052000 b3:02 897525                             /storage/roms/ports/MGS2-Substance/x86libs/libicuuc.so.72
+61553000-61655000 rwxp 00053000 b3:02 897525                             /storage/roms/ports/MGS2-Substance/x86libs/libicuuc.so.72
+61655000-616fb000 rw-p 00155000 b3:02 897525                             /storage/roms/ports/MGS2-Substance/x86libs/libicuuc.so.72
+616fb000-61708000 rw-p 00000000 00:00 0 
+61708000-61709000 ---p 00000000 00:00 0 
+61900000-61903000 rw-p 00000000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61903000-61904000 r-xp 00003000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61904000-6190d000 rwxp 00004000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+6190d000-6190f000 r-xp 0000d000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+6190f000-61910000 rwxp 0000f000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61910000-61911000 r-xp 00010000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61911000-61921000 rwxp 00011000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61921000-61922000 r-xp 00021000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61922000-61924000 rwxp 00022000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61924000-61934000 rw-p 00024000 b3:02 897527                             /storage/roms/ports/MGS2-Substance/x86libs/liblzma.so.5
+61934000-61936000 rw-p 00000000 00:00 0 
+61936000-61937000 ---p 00000000 00:00 0 
+62800000-62e9f000 r-xp 00000000 b3:02 801674                             /usr/bin/box86
+62eab000-62f00000 r--p 006ab000 b3:02 801674                             /usr/bin/box86
+62f00000-62f02000 rw-p 00700000 b3:02 801674                             /usr/bin/box86
+62f02000-636d4000 rw-p 00000000 00:00 0 
+63d00000-63d78000 rw-p 00000000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63d78000-63d7b000 r-xp 00078000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63d7b000-63d85000 rwxp 0007b000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63d85000-63d88000 r-xp 00085000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63d88000-63db4000 rwxp 00088000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63db4000-63db5000 r-xp 000b4000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63db5000-63e8f000 rwxp 000b5000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63e8f000-63f16000 rw-p 0018f000 b3:02 897530                             /storage/roms/ports/MGS2-Substance/x86libs/libstdc++.so.6
+63f16000-63f20000 rw-p 00000000 00:00 0 
+63f20000-63f21000 ---p 00000000 00:00 0 
+6405f000-64286000 rw-p 00000000 00:00 0                                  [heap]
+64286000-64287000 rw-p 00000000 b3:02 897526                             /storage/roms/ports/MGS2-Substance/x86libs/libicudata.so.72
+64287000-64288000 r-xp 00001000 b3:02 897526                             /storage/roms/ports/MGS2-Substance/x86libs/libicudata.so.72
+64288000-66056000 rw-p 00002000 b3:02 897526                             /storage/roms/ports/MGS2-Substance/x86libs/libicudata.so.72
+66056000-66058000 rw-p 00000000 00:00 0 
+66058000-66059000 ---p 00000000 00:00 0 
+66059000-6605b000 rw-p 00000000 07:00 17703                              /usr/share/box86/lib/libgcc_s.so.1
+6605b000-6605c000 r-xp 00002000 07:00 17703                              /usr/share/box86/lib/libgcc_s.so.1
+6605c000-66071000 rwxp 00003000 07:00 17703                              /usr/share/box86/lib/libgcc_s.so.1
+66071000-66076000 rw-p 00018000 07:00 17703                              /usr/share/box86/lib/libgcc_s.so.1
+66076000-66078000 rw-p 00000000 00:00 0 
+66078000-66079000 ---p 00000000 00:00 0 
+66079000-6607a000 rwxp 00000000 07:00 10218                              /usr/lib/wine/i386-unix/winealsa.so
+6607a000-66085000 r-xp 00001000 07:00 10218                              /usr/lib/wine/i386-unix/winealsa.so
+66085000-6608b000 rwxp 0000c000 07:00 10218                              /usr/lib/wine/i386-unix/winealsa.so
+6608b000-6608d000 rw-p 00000000 00:00 0 
+6608d000-6608e000 ---p 00000000 00:00 0 
+6b348000-6b3c8000 rw-s 10f061000 00:07 420                               /dev/mali0
+6b458000-6b4d8000 rw-s 10ef5f000 00:07 420                               /dev/mali0
+6b7b8000-6b7d8000 rw-s 6b7b8000 00:07 420                                /dev/mali0
+6b800000-6b8e6000 rw-p 00000000 00:00 0 
+6b8e6000-6b900000 ---p 00000000 00:00 0 
+6b908000-6b910000 rw-s 6b908000 00:07 420                                /dev/mali0
+6b910000-6b930000 rw-s 6b910000 00:07 420                                /dev/mali0
+6b930000-6b950000 rw-s 6b930000 00:07 420                                /dev/mali0
+6b950000-6b970000 rw-s 6b950000 00:07 420                                /dev/mali0
+6b970000-6b990000 rw-s 6b970000 00:07 420                                /dev/mali0
+6b9d0000-6b9f0000 rw-s 6b9d0000 00:07 420                                /dev/mali0
+6b9f0000-6ba10000 rw-s 6b9f0000 00:07 420                                /dev/mali0
+6ba10000-6ba30000 rw-s 6ba10000 00:07 420                                /dev/mali0
+6bb30000-6bb50000 rw-s 6bb30000 00:07 420                                /dev/mali0
+6c900000-6c9e4000 rw-p 00000000 00:00 0 
+6c9e4000-6ca00000 ---p 00000000 00:00 0 
+6cd00000-6ce00000 rw-p 00000000 00:00 0 
+6cfdb000-6d005000 rw-s 6cfdb000 00:07 420                                /dev/mali0
+6d5f0000-6d610000 rw-s 6d5f0000 00:07 420                                /dev/mali0
+6d690000-6d6b0000 rw-s 6d690000 00:07 420                                /dev/mali0
+6d6b0000-6d6d0000 rw-s 6d6b0000 00:07 420                                /dev/mali0
+6d7c0000-6d8c0000 rw-p 00000000 00:00 0 
+6d8c0000-6d8e0000 rw-s 6d8c0000 00:07 420                                /dev/mali0
+6d960000-6d980000 rw-s 6d960000 00:07 420                                /dev/mali0
+6db00000-6db61000 rw-p 00000000 00:00 0 
+6db61000-6dc00000 ---p 00000000 00:00 0 
+6dc00000-6dd00000 rw-p 00000000 00:00 0 
+6dd00000-6ddc1000 rw-p 00000000 00:00 0 
+6ddc1000-6de00000 ---p 00000000 00:00 0 
+6de00000-6dec1000 rw-p 00000000 00:00 0 
+6dec1000-6df00000 ---p 00000000 00:00 0 
+6df00000-6dfc1000 rw-p 00000000 00:00 0 
+6dfc1000-6e000000 ---p 00000000 00:00 0 
+6e000000-6e0c1000 rw-p 00000000 00:00 0 
+6e0c1000-6e100000 ---p 00000000 00:00 0 
+6e100000-6e300000 rwxp 00000000 00:00 0 
+6e300000-6e3c1000 rw-p 00000000 00:00 0 
+6e3c1000-6e400000 ---p 00000000 00:00 0 
+6e400000-6e4c1000 rw-p 00000000 00:00 0 
+6e4c1000-6e500000 ---p 00000000 00:00 0 
+6e500000-6e5c1000 rw-p 00000000 00:00 0 
+6e5c1000-6e600000 ---p 00000000 00:00 0 
+6e600000-6e6c1000 rw-p 00000000 00:00 0 
+6e6c1000-6e700000 ---p 00000000 00:00 0 
+6e700000-6e7c1000 rw-p 00000000 00:00 0 
+6e7c1000-6e800000 ---p 00000000 00:00 0 
+6e800000-6e8c1000 rw-p 00000000 00:00 0 
+6e8c1000-6e900000 ---p 00000000 00:00 0 
+6e900000-6e9c1000 rw-p 00000000 00:00 0 
+6e9c1000-6ea00000 ---p 00000000 00:00 0 
+6ed00000-6ee00000 rw-p 00000000 00:00 0 
+6ef00000-6efc1000 rw-p 00000000 00:00 0 
+6efc1000-6f000000 ---p 00000000 00:00 0 
+6f000000-6f020000 rw-s 6f000000 00:07 420                                /dev/mali0
+6f020000-6f040000 rw-s 6f020000 00:07 420                                /dev/mali0
+6f040000-6f060000 rw-s 6f040000 00:07 420                                /dev/mali0
+6f060000-6f080000 rw-s 6f060000 00:07 420                                /dev/mali0
+6f080000-6f0a0000 rw-s 6f080000 00:07 420                                /dev/mali0
+6f0a0000-6f0c0000 rw-s 6f0a0000 00:07 420                                /dev/mali0
+6f440000-6f460000 rw-s 6f440000 00:07 420                                /dev/mali0
+6f460000-6f480000 rw-s 6f460000 00:07 420                                /dev/mali0
+6f480000-6f4a0000 rw-s 6f480000 00:07 420                                /dev/mali0
+6f4a0000-6f4c0000 rw-s 6f4a0000 00:07 420                                /dev/mali0
+6f4c0000-6f4e0000 rw-s 6f4c0000 00:07 420                                /dev/mali0
+6f4e0000-6f500000 rw-s 6f4e0000 00:07 420                                /dev/mali0
+6f500000-6f5c1000 rw-p 00000000 00:00 0 
+6f5c1000-6f600000 ---p 00000000 00:00 0 
+6f600000-6f700000 rw-p 00000000 00:00 0 
+6f700000-6f7c1000 rw-p 00000000 00:00 0 
+6f7c1000-6f800000 ---p 00000000 00:00 0 
+6f800000-6f8c1000 rw-p 00000000 00:00 0 
+6f8c1000-6f900000 ---p 00000000 00:00 0 
+6f900000-6f9c1000 rw-p 00000000 00:00 0 
+6f9c1000-6fa00000 ---p 00000000 00:00 0 
+6fa00000-6fac1000 rw-p 00000000 00:00 0 
+6fac1000-6fb00000 ---p 00000000 00:00 0 
+6fb00000-6fd00000 rwxp 00000000 00:00 0 
+6fd00000-6fdfd000 rw-p 00000000 00:00 0 
+6fdfd000-6fe00000 ---p 00000000 00:00 0 
+6fe00000-6ff00000 rw-p 00000000 00:00 0 
+6ff00000-70400000 rw-p 00000000 00:00 0 
+70400000-70600000 rw-p 00000000 00:00 0 
+70600000-70900000 rw-p 00000000 00:00 0 
+70900000-70c00000 rw-p 00000000 00:00 0 
+70c00000-70d00000 rw-p 00000000 00:00 0 
+70d00000-70e00000 rw-p 00000000 00:00 0 
+70e00000-71000000 rw-p 00000000 00:00 0 
+71000000-710fc000 rw-p 00000000 00:00 0 
+710fc000-71100000 ---p 00000000 00:00 0 
+7111f000-7113f000 rw-s 7111f000 00:07 420                                /dev/mali0
+7113f000-7115f000 rw-s 7113f000 00:07 420                                /dev/mali0
+7115f000-7117f000 rw-s 7115f000 00:07 420                                /dev/mali0
+7117f000-7119f000 rw-s 7117f000 00:07 420                                /dev/mali0
+7119f000-711bf000 rw-s 7119f000 00:07 420                                /dev/mali0
+711bf000-711df000 rw-s 711bf000 00:07 420                                /dev/mali0
+711df000-711ff000 rw-s 711df000 00:07 420                                /dev/mali0
+711ff000-71200000 ---p 00000000 00:00 0 
+71200000-71a00000 rw-p 00000000 00:00 0 
+71a00000-71ade000 rw-p 00000000 00:00 0 
+71ade000-71b00000 ---p 00000000 00:00 0 
+71b17000-71b37000 rw-s 71b17000 00:07 420                                /dev/mali0
+71b37000-71b57000 rw-s 71b37000 00:07 420                                /dev/mali0
+71b57000-71bae000 r-xp 00000000 07:00 13552                              /usr/lib32/spa-0.2/audioconvert/libspa-audioconvert.so
+71bae000-71bb3000 r--p 00056000 07:00 13552                              /usr/lib32/spa-0.2/audioconvert/libspa-audioconvert.so
+71bb3000-71bb5000 rw-p 0005b000 07:00 13552                              /usr/lib32/spa-0.2/audioconvert/libspa-audioconvert.so
+71bb5000-71cb5000 rw-p 00000000 00:00 0 
+71cb5000-71cb6000 ---p 00000000 00:00 0 
+71cb6000-724b6000 rw-p 00000000 00:00 0 
+724b6000-724ea000 r-xp 00000000 07:00 13442                              /usr/lib32/pipewire-0.3/libpipewire-module-session-manager.so
+724ea000-724eb000 r--p 00034000 07:00 13442                              /usr/lib32/pipewire-0.3/libpipewire-module-session-manager.so
+724eb000-724ec000 rw-p 00035000 07:00 13442                              /usr/lib32/pipewire-0.3/libpipewire-module-session-manager.so
+724ec000-7251e000 r-xp 00000000 07:00 13420                              /usr/lib32/pipewire-0.3/libpipewire-module-client-node.so
+7251e000-72520000 r--p 00032000 07:00 13420                              /usr/lib32/pipewire-0.3/libpipewire-module-client-node.so
+72520000-72521000 rw-p 00034000 07:00 13420                              /usr/lib32/pipewire-0.3/libpipewire-module-client-node.so
+72521000-72638000 r-xp 00000000 07:00 13381                              /usr/lib32/libzstd.so.1.5.7
+72638000-72639000 r--p 00117000 07:00 13381                              /usr/lib32/libzstd.so.1.5.7
+72639000-7263a000 rw-p 00118000 07:00 13381                              /usr/lib32/libzstd.so.1.5.7
+7263a000-72737000 r-xp 00000000 07:00 12623                              /usr/lib32/libgcrypt.so.20.5.1
+72737000-7273a000 r--p 000fc000 07:00 12623                              /usr/lib32/libgcrypt.so.20.5.1
+7273a000-72740000 rw-p 000ff000 07:00 12623                              /usr/lib32/libgcrypt.so.20.5.1
+72740000-72833000 r-xp 00000000 07:00 13193                              /usr/lib32/libsystemd.so.0.38.0
+72833000-72839000 r--p 000f3000 07:00 13193                              /usr/lib32/libsystemd.so.0.38.0
+72839000-7283a000 rw-p 000f9000 07:00 13193                              /usr/lib32/libsystemd.so.0.38.0
+7283a000-7283b000 rw-p 00000000 00:00 0 
+7283b000-728e4000 r-xp 00000000 07:00 12830                              /usr/lib32/libpipewire-0.3.so.0.1206.0
+728e4000-728f1000 r--p 000a9000 07:00 12830                              /usr/lib32/libpipewire-0.3.so.0.1206.0
+728f1000-728f2000 rw-p 000b6000 07:00 12830                              /usr/lib32/libpipewire-0.3.so.0.1206.0
+728f2000-728f3000 rw-p 00000000 00:00 0 
+728f3000-72af3000 rwxp 00000000 00:00 0 
+72af3000-72bf3000 rw-p 00000000 00:00 0 
+72bf3000-72ca4000 r-xp 00000000 07:00 12493                              /usr/lib32/libasound.so.2.0.0
+72ca4000-72ca7000 r--p 000b1000 07:00 12493                              /usr/lib32/libasound.so.2.0.0
+72ca7000-72ca8000 rw-p 000b4000 07:00 12493                              /usr/lib32/libasound.so.2.0.0
+72ca8000-72da8000 rw-p 00000000 00:00 0 
+72da8000-72ed4000 rw-s 100a9f000 00:07 420                               /dev/mali0
+72ed4000-73000000 rw-s 100972000 00:07 420                               /dev/mali0
+73000000-730f8000 rw-p 00000000 00:00 0 
+730f8000-73100000 ---p 00000000 00:00 0 
+73100000-73400000 rw-p 00000000 00:00 0 
+73400000-73500000 rw-p 00000000 00:00 0 
+73500000-73521000 rw-p 00000000 00:00 0 
+73521000-73600000 ---p 00000000 00:00 0 
+73600000-737da000 rw-p 00000000 00:00 0 
+737da000-73800000 ---p 00000000 00:00 0 
+73806000-7383d000 r-xp 00000000 07:00 13434                              /usr/lib32/pipewire-0.3/libpipewire-module-protocol-native.so
+7383d000-73847000 r--p 00036000 07:00 13434                              /usr/lib32/pipewire-0.3/libpipewire-module-protocol-native.so
+73847000-73848000 rw-p 00040000 07:00 13434                              /usr/lib32/pipewire-0.3/libpipewire-module-protocol-native.so
+73848000-73887000 r-xp 00000000 07:00 12574                              /usr/lib32/libdbus-1.so.3.38.3
+73887000-73888000 r--p 0003f000 07:00 12574                              /usr/lib32/libdbus-1.so.3.38.3
+73888000-73889000 rw-p 00040000 07:00 12574                              /usr/lib32/libdbus-1.so.3.38.3
+73889000-738a9000 r-xp 00000000 07:00 12666                              /usr/lib32/libgpg-error.so.0.39.3
+738a9000-738aa000 r--p 0001f000 07:00 12666                              /usr/lib32/libgpg-error.so.0.39.3
+738aa000-738ab000 rw-p 00020000 07:00 12666                              /usr/lib32/libgpg-error.so.0.39.3
+738ab000-738ac000 ---p 00000000 00:00 0 
+738ac000-740ac000 rw-p 00000000 00:00 0 
+740ac000-745ac000 rw-p 00000000 00:00 0 
+745ac000-747ac000 rwxp 00000000 00:00 0 
+747ac000-748ac000 rw-p 00000000 00:00 0 
+748ac000-748ad000 ---p 00000000 00:00 0 
+748ad000-750ad000 rw-p 00000000 00:00 0 
+750ad000-750ae000 ---p 00000000 00:00 0 
+750ae000-758ae000 rw-p 00000000 00:00 0 
+758ae000-758af000 ---p 00000000 00:00 0 
+758af000-760af000 rw-p 00000000 00:00 0 
+760af000-760b0000 ---p 00000000 00:00 0 
+760b0000-768b0000 rw-p 00000000 00:00 0 
+768b0000-768b1000 ---p 00000000 00:00 0 
+768b1000-770b1000 rw-p 00000000 00:00 0 
+770b1000-770b2000 ---p 00000000 00:00 0 
+770b2000-778b2000 rw-p 00000000 00:00 0 
+778b2000-77aa4000 r-xp 00000000 07:00 13181                              /usr/lib32/libstdc++.so.6.0.34
+77aa4000-77aab000 r--p 001f2000 07:00 13181                              /usr/lib32/libstdc++.so.6.0.34
+77aab000-77aad000 rw-p 001f9000 07:00 13181                              /usr/lib32/libstdc++.so.6.0.34
+77aad000-77ab0000 rw-p 00000000 00:00 0 
+77ab0000-7a068000 r-xp 00000000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a068000-7a077000 r--p 025b8000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a077000-7a110000 r--p 025b7000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a110000-7a15d000 rw-p 02650000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a15d000-7a1a5000 rw-p 00000000 00:00 0 
+7a1a5000-7a1cd000 rw-p 0269d000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a1cd000-7a1d0000 ---p 0271d000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a1d0000-7a1fd000 rw-p 026c5000 07:00 12745                              /usr/lib32/libmali.so.1.10.0
+7a200000-7a321000 rw-p 00000000 00:00 0 
+7a321000-7a400000 ---p 00000000 00:00 0 
+7a400000-7a500000 rw-p 00000000 00:00 0 
+7a500000-7a600000 rw-p 00000000 00:00 0 
+7a600000-7a616000 r-xp 00000000 07:00 10858                              /usr/lib/wine/i386-windows/uxtheme.dll
+7a616000-7a617000 rwxp 00016000 07:00 10858                              /usr/lib/wine/i386-windows/uxtheme.dll
+7a617000-7a631000 r-xp 00017000 07:00 10858                              /usr/lib/wine/i386-windows/uxtheme.dll
+7a631000-7a632000 rwxp 00000000 00:00 0 
+7a632000-7a633000 r-xp 00031000 07:00 10858                              /usr/lib/wine/i386-windows/uxtheme.dll
+7a633000-7a635000 rwxp 00032000 07:00 10858                              /usr/lib/wine/i386-windows/uxtheme.dll
+7a635000-7a63e000 r-xp 00034000 07:00 10858                              /usr/lib/wine/i386-windows/uxtheme.dll
+7a650000-7a653000 r-xp 00000000 07:00 10958                              /usr/lib/wine/i386-windows/winewayland.drv
+7a653000-7a654000 rwxp 00003000 07:00 10958                              /usr/lib/wine/i386-windows/winewayland.drv
+7a654000-7a656000 r-xp 00004000 07:00 10958                              /usr/lib/wine/i386-windows/winewayland.drv
+7a656000-7a657000 rwxp 00000000 00:00 0 
+7a657000-7a658000 rwxp 00006000 07:00 10958                              /usr/lib/wine/i386-windows/winewayland.drv
+7a658000-7a65a000 r-xp 00007000 07:00 10958                              /usr/lib/wine/i386-windows/winewayland.drv
+7a670000-7a680000 r-xp 00000000 07:00 10496                              /usr/lib/wine/i386-windows/imm32.dll
+7a680000-7a681000 rwxp 00010000 07:00 10496                              /usr/lib/wine/i386-windows/imm32.dll
+7a681000-7a689000 r-xp 00011000 07:00 10496                              /usr/lib/wine/i386-windows/imm32.dll
+7a689000-7a68a000 rwxp 00000000 00:00 0 
+7a68a000-7a68c000 r-xp 00019000 07:00 10496                              /usr/lib/wine/i386-windows/imm32.dll
+7a68c000-7a68d000 rwxp 0001b000 07:00 10496                              /usr/lib/wine/i386-windows/imm32.dll
+7a68d000-7a68f000 r-xp 0001c000 07:00 10496                              /usr/lib/wine/i386-windows/imm32.dll
+7a6a0000-7a6b1000 r-xp 00000000 07:00 10569                              /usr/lib/wine/i386-windows/msacm32.dll
+7a6b1000-7a6b2000 rwxp 00011000 07:00 10569                              /usr/lib/wine/i386-windows/msacm32.dll
+7a6b2000-7a6b8000 r-xp 00012000 07:00 10569                              /usr/lib/wine/i386-windows/msacm32.dll
+7a6b8000-7a6b9000 rwxp 00000000 00:00 0 
+7a6b9000-7a6ba000 r-xp 00018000 07:00 10569                              /usr/lib/wine/i386-windows/msacm32.dll
+7a6ba000-7a6bb000 rwxp 00019000 07:00 10569                              /usr/lib/wine/i386-windows/msacm32.dll
+7a6bb000-7a6c9000 r-xp 0001a000 07:00 10569                              /usr/lib/wine/i386-windows/msacm32.dll
+7a6d0000-7a6d8000 rw-s 7a6d0000 00:07 420                                /dev/mali0
+7a6d8000-7a6e0000 rw-s 7a6d8000 00:07 420                                /dev/mali0
+7a6e0000-7a704000 r-xp 00000000 07:00 10968                              /usr/lib/wine/i386-windows/winmm.dll
+7a704000-7a705000 rwxp 00024000 07:00 10968                              /usr/lib/wine/i386-windows/winmm.dll
+7a705000-7a714000 r-xp 00025000 07:00 10968                              /usr/lib/wine/i386-windows/winmm.dll
+7a714000-7a71e000 rwxp 00000000 00:00 0 
+7a71e000-7a720000 r-xp 00034000 07:00 10968                              /usr/lib/wine/i386-windows/winmm.dll
+7a720000-7a722000 rwxp 00036000 07:00 10968                              /usr/lib/wine/i386-windows/winmm.dll
+7a722000-7a7ac000 r-xp 00038000 07:00 10968                              /usr/lib/wine/i386-windows/winmm.dll
+7a7b8000-7a7c0000 rw-s 7a7b8000 00:07 420                                /dev/mali0
+7a7c0000-7a821000 r-xp 00000000 07:00 10694                              /usr/lib/wine/i386-windows/oleaut32.dll
+7a821000-7a823000 rwxp 00061000 07:00 10694                              /usr/lib/wine/i386-windows/oleaut32.dll
+7a823000-7a856000 r-xp 00063000 07:00 10694                              /usr/lib/wine/i386-windows/oleaut32.dll
+7a856000-7a873000 rwxp 00000000 00:00 0 
+7a873000-7a876000 r-xp 00096000 07:00 10694                              /usr/lib/wine/i386-windows/oleaut32.dll
+7a876000-7a878000 rwxp 00099000 07:00 10694                              /usr/lib/wine/i386-windows/oleaut32.dll
+7a878000-7a88c000 r-xp 0009b000 07:00 10694                              /usr/lib/wine/i386-windows/oleaut32.dll
+7a890000-7a8a0000 rw-p 00000000 00:00 0 
+7a8a0000-7a8de000 r-xp 00000000 07:00 10783                              /usr/lib/wine/i386-windows/setupapi.dll
+7a8de000-7a8df000 rwxp 0003e000 07:00 10783                              /usr/lib/wine/i386-windows/setupapi.dll
+7a8df000-7a903000 r-xp 0003f000 07:00 10783                              /usr/lib/wine/i386-windows/setupapi.dll
+7a903000-7a904000 rwxp 00000000 00:00 0 
+7a904000-7a90a000 r-xp 00063000 07:00 10783                              /usr/lib/wine/i386-windows/setupapi.dll
+7a90a000-7a90c000 rwxp 00069000 07:00 10783                              /usr/lib/wine/i386-windows/setupapi.dll
+7a90c000-7a924000 r-xp 0006b000 07:00 10783                              /usr/lib/wine/i386-windows/setupapi.dll
+7a928000-7a930000 rw-s 7a928000 00:07 420                                /dev/mali0
+7a930000-7a940000 rw-p 00000000 00:00 0 
+7a940000-7a946000 r-xp 00000000 07:00 10472                              /usr/lib/wine/i386-windows/hid.dll
+7a946000-7a947000 rwxp 00006000 07:00 10472                              /usr/lib/wine/i386-windows/hid.dll
+7a947000-7a94a000 r-xp 00007000 07:00 10472                              /usr/lib/wine/i386-windows/hid.dll
+7a94a000-7a94b000 rwxp 00000000 00:00 0 
+7a94b000-7a94c000 r-xp 0000a000 07:00 10472                              /usr/lib/wine/i386-windows/hid.dll
+7a94c000-7a94d000 rwxp 0000b000 07:00 10472                              /usr/lib/wine/i386-windows/hid.dll
+7a94d000-7a94f000 r-xp 0000c000 07:00 10472                              /usr/lib/wine/i386-windows/hid.dll
+7a950000-7a960000 rw-p 00000000 00:00 0 
+7a960000-7a9f4000 r-xp 00000000 07:00 10286                              /usr/lib/wine/i386-windows/comctl32.dll
+7a9f4000-7a9f5000 rwxp 00094000 07:00 10286                              /usr/lib/wine/i386-windows/comctl32.dll
+7a9f5000-7aa23000 r-xp 00095000 07:00 10286                              /usr/lib/wine/i386-windows/comctl32.dll
+7aa23000-7aa25000 rwxp 00000000 00:00 0 
+7aa25000-7aa27000 r-xp 000c3000 07:00 10286                              /usr/lib/wine/i386-windows/comctl32.dll
+7aa27000-7aa2a000 rwxp 000c5000 07:00 10286                              /usr/lib/wine/i386-windows/comctl32.dll
+7aa2a000-7aa84000 r-xp 000c8000 07:00 10286                              /usr/lib/wine/i386-windows/comctl32.dll
+7aa88000-7aa90000 rw-s 7aa88000 00:07 420                                /dev/mali0
+7aa90000-7aaa0000 rw-p 00000000 00:00 0 
+7aaa0000-7aabe000 r-xp 00000000 07:00 10394                              /usr/lib/wine/i386-windows/dinput8.dll
+7aabe000-7aabf000 rwxp 0001e000 07:00 10394                              /usr/lib/wine/i386-windows/dinput8.dll
+7aabf000-7aad6000 r-xp 0001f000 07:00 10394                              /usr/lib/wine/i386-windows/dinput8.dll
+7aad6000-7aad7000 rwxp 00000000 00:00 0 
+7aad7000-7aad8000 r-xp 00036000 07:00 10394                              /usr/lib/wine/i386-windows/dinput8.dll
+7aad8000-7aada000 rwxp 00037000 07:00 10394                              /usr/lib/wine/i386-windows/dinput8.dll
+7aada000-7aaeb000 r-xp 00039000 07:00 10394                              /usr/lib/wine/i386-windows/dinput8.dll
+7aaec000-7aaed000 rw-s 7aaec000 00:07 420                                /dev/mali0
+7aaf0000-7aaf8000 rw-s 7aaf0000 00:07 420                                /dev/mali0
+7ab00000-7ab04000 r-xp 00000000 07:00 10289                              /usr/lib/wine/i386-windows/coml2.dll
+7ab04000-7ab05000 rwxp 00004000 07:00 10289                              /usr/lib/wine/i386-windows/coml2.dll
+7ab05000-7ab13000 r-xp 00005000 07:00 10289                              /usr/lib/wine/i386-windows/coml2.dll
+7ab13000-7ab14000 rwxp 00000000 00:00 0 
+7ab14000-7ab15000 r-xp 00013000 07:00 10289                              /usr/lib/wine/i386-windows/coml2.dll
+7ab15000-7ab16000 rwxp 00014000 07:00 10289                              /usr/lib/wine/i386-windows/coml2.dll
+7ab16000-7ab17000 r-xp 00015000 07:00 10289                              /usr/lib/wine/i386-windows/coml2.dll
+7ab30000-7ab33000 r-xp 00000000 07:00 10303                              /usr/lib/wine/i386-windows/cryptbase.dll
+7ab33000-7ab34000 rwxp 00003000 07:00 10303                              /usr/lib/wine/i386-windows/cryptbase.dll
+7ab34000-7ab36000 r-xp 00004000 07:00 10303                              /usr/lib/wine/i386-windows/cryptbase.dll
+7ab36000-7ab38000 rwxp 00000000 00:00 0 
+7ab38000-7ab39000 r-xp 00006000 07:00 10303                              /usr/lib/wine/i386-windows/cryptbase.dll
+7ab39000-7ab3a000 rwxp 00007000 07:00 10303                              /usr/lib/wine/i386-windows/cryptbase.dll
+7ab3a000-7ab3b000 r-xp 00008000 07:00 10303                              /usr/lib/wine/i386-windows/cryptbase.dll
+7ab50000-7aba2000 r-xp 00000000 07:00 10750                              /usr/lib/wine/i386-windows/rpcrt4.dll
+7aba2000-7aba3000 rwxp 00052000 07:00 10750                              /usr/lib/wine/i386-windows/rpcrt4.dll
+7aba3000-7abce000 r-xp 00053000 07:00 10750                              /usr/lib/wine/i386-windows/rpcrt4.dll
+7abce000-7abcf000 rwxp 00000000 00:00 0 
+7abcf000-7abd4000 r-xp 0007e000 07:00 10750                              /usr/lib/wine/i386-windows/rpcrt4.dll
+7abd4000-7abd5000 rwxp 00083000 07:00 10750                              /usr/lib/wine/i386-windows/rpcrt4.dll
+7abd5000-7abe3000 r-xp 00084000 07:00 10750                              /usr/lib/wine/i386-windows/rpcrt4.dll
+7ac00000-7ac2b000 r-xp 00000000 07:00 10284                              /usr/lib/wine/i386-windows/combase.dll
+7ac2b000-7ac2c000 rwxp 0002b000 07:00 10284                              /usr/lib/wine/i386-windows/combase.dll
+7ac2c000-7ac4a000 r-xp 0002c000 07:00 10284                              /usr/lib/wine/i386-windows/combase.dll
+7ac4a000-7ac4b000 rwxp 00000000 00:00 0 
+7ac4b000-7ac4e000 r-xp 0004a000 07:00 10284                              /usr/lib/wine/i386-windows/combase.dll
+7ac4e000-7ac50000 rwxp 0004d000 07:00 10284                              /usr/lib/wine/i386-windows/combase.dll
+7ac50000-7ac53000 r-xp 0004f000 07:00 10284                              /usr/lib/wine/i386-windows/combase.dll
+7ac70000-7acc7000 r-xp 00000000 07:00 10692                              /usr/lib/wine/i386-windows/ole32.dll
+7acc7000-7acc9000 rwxp 00057000 07:00 10692                              /usr/lib/wine/i386-windows/ole32.dll
+7acc9000-7acfb000 r-xp 00059000 07:00 10692                              /usr/lib/wine/i386-windows/ole32.dll
+7acfb000-7acfc000 rwxp 00000000 00:00 0 
+7acfc000-7ad00000 r-xp 0008b000 07:00 10692                              /usr/lib/wine/i386-windows/ole32.dll
+7ad00000-7ad03000 rwxp 0008f000 07:00 10692                              /usr/lib/wine/i386-windows/ole32.dll
+7ad03000-7ad36000 r-xp 00092000 07:00 10692                              /usr/lib/wine/i386-windows/ole32.dll
+7ad40000-7ad50000 rw-p 00000000 00:00 0 
+7ad50000-7ad71000 r-xp 00000000 b3:02 797805                             /usr/lib/wine/i386-windows/dsound.dll
+7ad71000-7ad72000 rwxp 00021000 b3:02 797805                             /usr/lib/wine/i386-windows/dsound.dll
+7ad72000-7ad97000 r-xp 00022000 b3:02 797805                             /usr/lib/wine/i386-windows/dsound.dll
+7ad97000-7ad98000 rwxp 00000000 00:00 0 
+7ad98000-7ad99000 r-xp 00047000 b3:02 797805                             /usr/lib/wine/i386-windows/dsound.dll
+7ad99000-7ad9a000 rwxp 00048000 b3:02 797805                             /usr/lib/wine/i386-windows/dsound.dll
+7ad9a000-7ae91000 r-xp 00049000 b3:02 797805                             /usr/lib/wine/i386-windows/dsound.dll
+7aeb0000-7af6d000 r-xp 00000000 07:00 10706                              /usr/lib/wine/i386-windows/opengl32.dll
+7af6d000-7af70000 rwxp 000bd000 07:00 10706                              /usr/lib/wine/i386-windows/opengl32.dll
+7af70000-7afd9000 r-xp 000c0000 07:00 10706                              /usr/lib/wine/i386-windows/opengl32.dll
+7afd9000-7afda000 rwxp 00000000 00:00 0 
+7afda000-7afdd000 r-xp 00129000 07:00 10706                              /usr/lib/wine/i386-windows/opengl32.dll
+7afdd000-7afde000 rwxp 0012c000 07:00 10706                              /usr/lib/wine/i386-windows/opengl32.dll
+7afde000-7aff3000 r-xp 0012d000 07:00 10706                              /usr/lib/wine/i386-windows/opengl32.dll
+7aff8000-7b000000 rw-s 7aff8000 00:07 420                                /dev/mali0
+7b010000-7b024000 r-xp 00000000 07:00 10899                              /usr/lib/wine/i386-windows/win32u.dll
+7b024000-7b025000 rwxp 00014000 07:00 10899                              /usr/lib/wine/i386-windows/win32u.dll
+7b025000-7b03a000 r-xp 00015000 07:00 10899                              /usr/lib/wine/i386-windows/win32u.dll
+7b03a000-7b03b000 rwxp 00000000 00:00 0 
+7b03b000-7b049000 r-xp 0002a000 07:00 10899                              /usr/lib/wine/i386-windows/win32u.dll
+7b049000-7b04a000 rwxp 00038000 07:00 10899                              /usr/lib/wine/i386-windows/win32u.dll
+7b04a000-7b04c000 r-xp 00039000 07:00 10899                              /usr/lib/wine/i386-windows/win32u.dll
+7b050000-7b060000 rw-p 00000000 00:00 0 
+7b060000-7b0f8000 r-xp 00000000 b3:02 789815                             /usr/lib/wine/i386-windows/user32.dll
+7b0f8000-7b0f9000 rwxp 00098000 b3:02 789815                             /usr/lib/wine/i386-windows/user32.dll
+7b0f9000-7b134000 r-xp 00099000 b3:02 789815                             /usr/lib/wine/i386-windows/user32.dll
+7b134000-7b135000 rwxp 00000000 00:00 0 
+7b135000-7b13c000 r-xp 000d4000 b3:02 789815                             /usr/lib/wine/i386-windows/user32.dll
+7b13c000-7b141000 rwxp 000db000 b3:02 789815                             /usr/lib/wine/i386-windows/user32.dll
+7b141000-7b555000 r-xp 000e0000 b3:02 789815                             /usr/lib/wine/i386-windows/user32.dll
+7b570000-7b5c2000 r-xp 00000000 07:00 10462                              /usr/lib/wine/i386-windows/gdi32.dll
+7b5c2000-7b5c3000 rwxp 00052000 07:00 10462                              /usr/lib/wine/i386-windows/gdi32.dll
+7b5c3000-7b5ea000 r-xp 00053000 07:00 10462                              /usr/lib/wine/i386-windows/gdi32.dll
+7b5ea000-7b5eb000 rwxp 00000000 00:00 0 
+7b5eb000-7b5ef000 r-xp 0007a000 07:00 10462                              /usr/lib/wine/i386-windows/gdi32.dll
+7b5ef000-7b5f2000 rwxp 0007e000 07:00 10462                              /usr/lib/wine/i386-windows/gdi32.dll
+7b5f2000-7b604000 r-xp 00081000 07:00 10462                              /usr/lib/wine/i386-windows/gdi32.dll
+7b610000-7b620000 rw-p 00000000 00:00 0 
+7b620000-7b62f000 r-xp 00000000 07:00 10776                              /usr/lib/wine/i386-windows/sechost.dll
+7b62f000-7b630000 rwxp 0000f000 07:00 10776                              /usr/lib/wine/i386-windows/sechost.dll
+7b630000-7b63a000 r-xp 00010000 07:00 10776                              /usr/lib/wine/i386-windows/sechost.dll
+7b63a000-7b63b000 rwxp 00000000 00:00 0 
+7b63b000-7b63d000 r-xp 0001a000 07:00 10776                              /usr/lib/wine/i386-windows/sechost.dll
+7b63d000-7b63e000 rwxp 0001c000 07:00 10776                              /usr/lib/wine/i386-windows/sechost.dll
+7b63e000-7b63f000 r-xp 0001d000 07:00 10776                              /usr/lib/wine/i386-windows/sechost.dll
+7b640000-7b650000 rw-p 00000000 00:00 0 
+7b650000-7b6c8000 r-xp 00000000 07:00 10641                              /usr/lib/wine/i386-windows/msvcrt.dll
+7b6c8000-7b6ca000 rwxp 00078000 07:00 10641                              /usr/lib/wine/i386-windows/msvcrt.dll
+7b6ca000-7b6f2000 r-xp 0007a000 07:00 10641                              /usr/lib/wine/i386-windows/msvcrt.dll
+7b6f2000-7b6f4000 rwxp 00000000 00:00 0 
+7b6f4000-7b6fb000 r-xp 000a2000 07:00 10641                              /usr/lib/wine/i386-windows/msvcrt.dll
+7b6fb000-7b6fd000 rwxp 000a9000 07:00 10641                              /usr/lib/wine/i386-windows/msvcrt.dll
+7b6fd000-7b70d000 r-xp 000ab000 07:00 10641                              /usr/lib/wine/i386-windows/msvcrt.dll
+7b710000-7b720000 rw-p 00000000 00:00 0 
+7b720000-7b743000 r-xp 00000000 07:00 10241                              /usr/lib/wine/i386-windows/advapi32.dll
+7b743000-7b744000 rwxp 00023000 07:00 10241                              /usr/lib/wine/i386-windows/advapi32.dll
+7b744000-7b754000 r-xp 00024000 07:00 10241                              /usr/lib/wine/i386-windows/advapi32.dll
+7b754000-7b755000 rwxp 00000000 00:00 0 
+7b755000-7b75a000 r-xp 00034000 07:00 10241                              /usr/lib/wine/i386-windows/advapi32.dll
+7b75a000-7b75d000 rwxp 00039000 07:00 10241                              /usr/lib/wine/i386-windows/advapi32.dll
+7b75d000-7b760000 r-xp 0003c000 07:00 10241                              /usr/lib/wine/i386-windows/advapi32.dll
+7b760000-7b770000 rw-p 00000000 00:00 0 
+7b770000-7b771000 r-xp 00000000 b3:02 801673                             /usr/lib/wine/i386-windows/wined3d.dll
+7b771000-7b93f000 r-xp 00000000 00:00 0 
+7b93f000-7b940000 rwxp 00000000 00:00 0 
+7b940000-7b9d8000 r-xp 001ce000 b3:02 801673                             /usr/lib/wine/i386-windows/wined3d.dll
+7b9d8000-7ba0a000 r-xp 00000000 00:00 0 
+7ba0a000-7ba44000 rwxp 00000000 00:00 0 
+7ba44000-7ba48000 r-xp 00000000 00:00 0 
+7ba48000-7ba4a000 rwxp 0029b000 b3:02 801673                             /usr/lib/wine/i386-windows/wined3d.dll
+7ba4a000-7ba66000 r-xp 00000000 00:00 0 
+7ba70000-7ba80000 rw-p 00000000 00:00 0 
+7ba80000-7bb14000 r-xp 00000000 07:00 10842                              /usr/lib/wine/i386-windows/ucrtbase.dll
+7bb14000-7bb16000 rwxp 00094000 07:00 10842                              /usr/lib/wine/i386-windows/ucrtbase.dll
+7bb16000-7bb51000 r-xp 00096000 07:00 10842                              /usr/lib/wine/i386-windows/ucrtbase.dll
+7bb51000-7bb53000 rwxp 00000000 00:00 0 
+7bb53000-7bb61000 r-xp 000d1000 07:00 10842                              /usr/lib/wine/i386-windows/ucrtbase.dll
+7bb61000-7bb63000 rwxp 000df000 07:00 10842                              /usr/lib/wine/i386-windows/ucrtbase.dll
+7bb63000-7bb75000 r-xp 000e1000 07:00 10842                              /usr/lib/wine/i386-windows/ucrtbase.dll
+7bb77000-7bb87000 rw-p 00000000 00:00 0 
+7bb87000-7bb90000 rw-s 00008000 00:01 1071                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=65632 (deleted)
+7bb90000-7bb9e000 r-xp 00000000 b3:02 801672                             /usr/lib/wine/i386-windows/d3d8.dll
+7bb9e000-7bb9f000 rwxp 0000e000 b3:02 801672                             /usr/lib/wine/i386-windows/d3d8.dll
+7bb9f000-7bba5000 r-xp 0000f000 b3:02 801672                             /usr/lib/wine/i386-windows/d3d8.dll
+7bba5000-7bbb8000 rwxp 00000000 00:00 0 
+7bbb8000-7bbb9000 r-xp 00015000 b3:02 801672                             /usr/lib/wine/i386-windows/d3d8.dll
+7bbb9000-7bbbb000 rwxp 00016000 b3:02 801672                             /usr/lib/wine/i386-windows/d3d8.dll
+7bbbb000-7bbbd000 r-xp 00018000 b3:02 801672                             /usr/lib/wine/i386-windows/d3d8.dll
+7bbbe000-7bbc7000 rw-s 00000000 00:01 1071                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=65632 (deleted)
+7bbc7000-7bbd0000 rw-s 00008000 00:01 1070                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=65632 (deleted)
+7bbd0000-7bc58000 r-xp 00000000 07:00 10516                              /usr/lib/wine/i386-windows/kernelbase.dll
+7bc58000-7bc5a000 rwxp 00088000 07:00 10516                              /usr/lib/wine/i386-windows/kernelbase.dll
+7bc5a000-7bc91000 r-xp 0008a000 07:00 10516                              /usr/lib/wine/i386-windows/kernelbase.dll
+7bc91000-7bc93000 rwxp 00000000 00:00 0 
+7bc93000-7bc9e000 r-xp 000c1000 07:00 10516                              /usr/lib/wine/i386-windows/kernelbase.dll
+7bc9e000-7bca2000 rwxp 000cc000 07:00 10516                              /usr/lib/wine/i386-windows/kernelbase.dll
+7bca2000-7be7f000 r-xp 000d0000 07:00 10516                              /usr/lib/wine/i386-windows/kernelbase.dll
+7be87000-7be90000 rw-s 00000000 00:01 1070                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=65632 (deleted)
+7be90000-7bec1000 r-xp 00000000 07:00 10515                              /usr/lib/wine/i386-windows/kernel32.dll
+7bec1000-7bec2000 rwxp 00031000 07:00 10515                              /usr/lib/wine/i386-windows/kernel32.dll
+7bec2000-7bed7000 r-xp 00032000 07:00 10515                              /usr/lib/wine/i386-windows/kernel32.dll
+7bed7000-7bed8000 rwxp 00000000 00:00 0 
+7bed8000-7bee4000 r-xp 00047000 07:00 10515                              /usr/lib/wine/i386-windows/kernel32.dll
+7bee4000-7beec000 rwxp 00053000 07:00 10515                              /usr/lib/wine/i386-windows/kernel32.dll
+7beec000-7bf01000 r-xp 0005b000 07:00 10515                              /usr/lib/wine/i386-windows/kernel32.dll
+7bf03000-7bf1e000 r-xp 00000000 07:00 13571                              /usr/lib32/spa-0.2/support/libspa-support.so
+7bf1e000-7bf1f000 r--p 0001b000 07:00 13571                              /usr/lib32/spa-0.2/support/libspa-support.so
+7bf1f000-7bf20000 rw-p 0001c000 07:00 13571                              /usr/lib32/spa-0.2/support/libspa-support.so
+7bf20000-7bf94000 r-xp 00000000 07:00 10677                              /usr/lib/wine/i386-windows/ntdll.dll
+7bf94000-7bf95000 rwxp 00074000 07:00 10677                              /usr/lib/wine/i386-windows/ntdll.dll
+7bf95000-7bfc6000 r-xp 00075000 07:00 10677                              /usr/lib/wine/i386-windows/ntdll.dll
+7bfc6000-7bfc9000 rwxp 00000000 00:00 0 
+7bfc9000-7bfd4000 r-xp 000a6000 07:00 10677                              /usr/lib/wine/i386-windows/ntdll.dll
+7bfd4000-7bfd5000 rwxp 000b1000 07:00 10677                              /usr/lib/wine/i386-windows/ntdll.dll
+7bfd5000-7bfe6000 r-xp 000b2000 07:00 10677                              /usr/lib/wine/i386-windows/ntdll.dll
+7bfea000-7bff2000 r-xp 00000000 07:00 13427                              /usr/lib32/pipewire-0.3/libpipewire-module-metadata.so
+7bff2000-7bff3000 r--p 00008000 07:00 13427                              /usr/lib32/pipewire-0.3/libpipewire-module-metadata.so
+7bff3000-7bff4000 rw-p 00009000 07:00 13427                              /usr/lib32/pipewire-0.3/libpipewire-module-metadata.so
+7bff4000-7bffe000 r-xp 00000000 07:00 13419                              /usr/lib32/pipewire-0.3/libpipewire-module-client-device.so
+7bffe000-7bfff000 r--p 00009000 07:00 13419                              /usr/lib32/pipewire-0.3/libpipewire-module-client-device.so
+7bfff000-7c000000 rw-p 0000a000 07:00 13419                              /usr/lib32/pipewire-0.3/libpipewire-module-client-device.so
+7c000000-7c321000 rw-p 00000000 00:00 0 
+7c321000-7c400000 ---p 00000000 00:00 0 
+7c400000-7c408000 r-xp 00000000 07:00 13417                              /usr/lib32/pipewire-0.3/libpipewire-module-adapter.so
+7c408000-7c40a000 r--p 00008000 07:00 13417                              /usr/lib32/pipewire-0.3/libpipewire-module-adapter.so
+7c40a000-7c40b000 rw-p 0000a000 07:00 13417                              /usr/lib32/pipewire-0.3/libpipewire-module-adapter.so
+7c40b000-7c411000 r-xp 00000000 07:00 13438                              /usr/lib32/pipewire-0.3/libpipewire-module-rt.so
+7c411000-7c412000 r--p 00005000 07:00 13438                              /usr/lib32/pipewire-0.3/libpipewire-module-rt.so
+7c412000-7c413000 rw-p 00006000 07:00 13438                              /usr/lib32/pipewire-0.3/libpipewire-module-rt.so
+7c413000-7c417000 r-xp 00000000 07:00 13569                              /usr/lib32/spa-0.2/support/libspa-dbus.so
+7c417000-7c418000 r--p 00003000 07:00 13569                              /usr/lib32/spa-0.2/support/libspa-dbus.so
+7c418000-7c419000 rw-p 00004000 07:00 13569                              /usr/lib32/spa-0.2/support/libspa-dbus.so
+7c419000-7c425000 r-xp 00000000 07:00 11906                              /usr/lib32/alsa-lib/libasound_module_pcm_pipewire.so
+7c425000-7c426000 r--p 0000c000 07:00 11906                              /usr/lib32/alsa-lib/libasound_module_pcm_pipewire.so
+7c426000-7c427000 rw-p 0000d000 07:00 11906                              /usr/lib32/alsa-lib/libasound_module_pcm_pipewire.so
+7c43f000-7c45f000 rw-s 7c43f000 00:07 420                                /dev/mali0
+7c45f000-7c47f000 rw-s 7c45f000 00:07 420                                /dev/mali0
+7c487000-7c4a7000 rw-s 7c487000 00:07 420                                /dev/mali0
+7c4a7000-7c4b9000 r-xp 00000000 07:00 13254                              /usr/lib32/libwayland-client.so.0.23.1
+7c4b9000-7c4ba000 r--p 00012000 07:00 13254                              /usr/lib32/libwayland-client.so.0.23.1
+7c4ba000-7c4bb000 rw-p 00013000 07:00 13254                              /usr/lib32/libwayland-client.so.0.23.1
+7c4bb000-7c4d1000 r-xp 00000000 07:00 13263                              /usr/lib32/libwayland-server.so.0.23.1
+7c4d1000-7c4d2000 r--p 00015000 07:00 13263                              /usr/lib32/libwayland-server.so.0.23.1
+7c4d2000-7c4d3000 rw-p 00016000 07:00 13263                              /usr/lib32/libwayland-server.so.0.23.1
+7c4d3000-7c5d3000 rw-p 00000000 00:00 0 
+7c5d3000-7c8d3000 rw-p 00000000 00:00 0 
+7c8d3000-7cad3000 rwxp 00000000 00:00 0 
+7cad3000-7daa9000 rw-p 00000000 00:00 0 
+7daa9000-7db00000 ---p 00000000 00:00 0 
+7db05000-7db2e000 rw-p 00000000 00:00 0 
+7db2e000-7db3d000 r-xp 00000000 07:00 12581                              /usr/lib32/libdrm.so.2.128.0
+7db3d000-7db3e000 r--p 0000e000 07:00 12581                              /usr/lib32/libdrm.so.2.128.0
+7db3e000-7db3f000 rw-p 0000f000 07:00 12581                              /usr/lib32/libdrm.so.2.128.0
+7db41000-7dbb1000 rw-p 00000000 00:00 0 
+7dbb1000-7dcb1000 rw-p 00000000 00:00 0 
+7dcb1000-7e7ca000 rw-p 00000000 00:00 0 
+7e7ce000-7e7d0000 r-xp 00000000 07:00 13570                              /usr/lib32/spa-0.2/support/libspa-journal.so
+7e7d0000-7e7d1000 r--p 00001000 07:00 13570                              /usr/lib32/spa-0.2/support/libspa-journal.so
+7e7d1000-7e7d2000 rw-p 00002000 07:00 13570                              /usr/lib32/spa-0.2/support/libspa-journal.so
+7e7d2000-7e812000 rw-p 00000000 00:00 0 
+7e812000-7e829000 r-xp 00000000 07:00 13378                              /usr/lib32/libz.so.1.3.1
+7e829000-7e82a000 r--p 00016000 07:00 13378                              /usr/lib32/libz.so.1.3.1
+7e82a000-7e82b000 rw-p 00017000 07:00 13378                              /usr/lib32/libz.so.1.3.1
+7e82c000-7e82d000 rw-s 00000000 00:01 1069                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=4096 (deleted)
+7e82d000-7ed3f000 rw-p 00000000 00:00 0 
+7ed3f000-7ef3f000 rwxp 00000000 00:00 0 
+7ef3f000-7ffe0000 rw-p 00000000 00:00 0 
+7ffe0000-7ffe1000 r-xs 00000000 00:28 308                                /tmp/.wine-0/server-b302-c83d8/tmpmap-5a82db09 (deleted)
+7ffe1000-f69c0000 ---p 00000000 00:00 0 
+f69c0000-f69c1000 r-xp 00000000 07:00 12838                              /usr/lib32/libpthread.so.0
+f69c1000-f69c2000 r--p 00000000 07:00 12838                              /usr/lib32/libpthread.so.0
+f69c2000-f69c3000 rw-p 00001000 07:00 12838                              /usr/lib32/libpthread.so.0
+f69c3000-f6a04000 rw-p 00000000 00:00 0 
+f6a04000-f6a05000 rw-s 00000000 00:01 3105                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=2312 (deleted)
+f6a05000-f6a06000 rw-s 00000000 00:01 1068                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=2312 (deleted)
+f6a06000-f6a07000 rw-s 00000000 00:01 1067                               /memfd:pipewire-memfd:flags=0x0000000f,type=2,size=2312 (deleted)
+f6a07000-f6a37000 rw-p 00000000 00:00 0 
+f6a3f000-f6a47000 rw-s f6a3f000 00:07 420                                /dev/mali0
+f6a47000-f6a4f000 rw-s f6a47000 00:07 420                                /dev/mali0
+f6a4f000-f6a57000 rw-s f6a4f000 00:07 420                                /dev/mali0
+f6a5f000-f6a67000 rw-s f6a5f000 00:07 420                                /dev/mali0
+f6a67000-f6a6f000 rw-s f6a67000 00:07 420                                /dev/mali0
+f6a6f000-f6a8f000 rw-p 00000000 00:00 0 
+f6a8f000-f6a97000 rw-s f6a8f000 00:07 420                                /dev/mali0
+f6a98000-f6aa0000 rw-s f6a98000 00:07 420                                /dev/mali0
+f6aa0000-f6aa8000 rw-s f6aa0000 00:07 420                                /dev/mali0
+f6aa8000-f6ab0000 rw-s f6aa8000 00:07 420                                /dev/mali0
+f6ab0000-f6ab8000 rw-s f6ab0000 00:07 420                                /dev/mali0
+f6ab8000-f6ac0000 rw-s f6ab8000 00:07 420                                /dev/mali0
+f6ac0000-f6ac1000 rw-s f6ac0000 00:07 420                                /dev/mali0
+f6ac1000-f6ac9000 rw-s f6ac1000 00:07 420                                /dev/mali0
+f6ac9000-f6ad1000 rw-s f6ac9000 00:07 420                                /dev/mali0
+f6ad1000-f6af1000 rw-s f6ad1000 00:07 420                                /dev/mali0
+f6af1000-f6af9000 rw-s f6af1000 00:07 420                                /dev/mali0
+f6af9000-f6afa000 rw-s f6af9000 00:07 420                                /dev/mali0
+f6afc000-f6b04000 rw-s f6afc000 00:07 420                                /dev/mali0
+f6b04000-f7304000 rw-p 00000000 00:00 0 
+f7306000-f7307000 r-xp 00000000 07:00 12742                              /usr/lib32/libmali-hook.so.1.10.0
+f7307000-f7308000 r--p 00001000 07:00 12742                              /usr/lib32/libmali-hook.so.1.10.0
+f7308000-f7309000 rw-p 00002000 07:00 12742                              /usr/lib32/libmali-hook.so.1.10.0
+f7309000-f730b000 rw-p 00004000 07:00 12742                              /usr/lib32/libmali-hook.so.1.10.0
+f730b000-f730c000 r-xp 00000000 07:00 13384                              /usr/lib32/libEGL.so.1.1.0
+f730c000-f730d000 r--p 00000000 07:00 13384                              /usr/lib32/libEGL.so.1.1.0
+f730d000-f7310000 rw-p 00001000 07:00 13384                              /usr/lib32/libEGL.so.1.1.0
+f7310000-f79aa000 rw-p 00000000 00:00 0 
+f79aa000-f7baa000 rwxp 00000000 00:00 0 
+f7baa000-f7beb000 rw-p 00000000 00:00 0 
+f7beb000-f7bec000 r-xp 00000000 07:00 13159                              /usr/lib32/librt.so.1
+f7bec000-f7bed000 r--p 00000000 07:00 13159                              /usr/lib32/librt.so.1
+f7bed000-f7bee000 rw-p 00001000 07:00 13159                              /usr/lib32/librt.so.1
+f7bee000-f7bef000 r-xp 00000000 07:00 12578                              /usr/lib32/libdl.so.2
+f7bef000-f7bf0000 r--p 00000000 07:00 12578                              /usr/lib32/libdl.so.2
+f7bf0000-f7bf1000 rw-p 00001000 07:00 12578                              /usr/lib32/libdl.so.2
+f7bf2000-f7bf3000 rw-s f7bf2000 00:07 420                                /dev/mali0
+f7bf3000-f7c05000 rw-p 00000000 00:00 0 
+f7c05000-f7c21000 r-xp 00000000 07:00 12620                              /usr/lib32/libgcc_s.so.1
+f7c21000-f7c22000 r--p 0001b000 07:00 12620                              /usr/lib32/libgcc_s.so.1
+f7c22000-f7c23000 rw-p 0001c000 07:00 12620                              /usr/lib32/libgcc_s.so.1
+f7c23000-f7c2f000 r-xp 00000000 07:00 12852                              /usr/lib32/libresolv.so.2
+f7c2f000-f7c30000 r--p 0000b000 07:00 12852                              /usr/lib32/libresolv.so.2
+f7c30000-f7c31000 rw-p 0000c000 07:00 12852                              /usr/lib32/libresolv.so.2
+f7c31000-f7c33000 rw-p 00000000 00:00 0 
+f7c33000-f7c7f000 r-xp 00000000 07:00 12738                              /usr/lib32/libm.so.6
+f7c7f000-f7c80000 r--p 0004b000 07:00 12738                              /usr/lib32/libm.so.6
+f7c80000-f7c81000 rw-p 0004c000 07:00 12738                              /usr/lib32/libm.so.6
+f7c81000-f7e1c000 r-xp 00000000 07:00 12542                              /usr/lib32/libc.so.6
+f7e1c000-f7e1e000 r--p 0019a000 07:00 12542                              /usr/lib32/libc.so.6
+f7e1e000-f7e1f000 rw-p 0019c000 07:00 12542                              /usr/lib32/libc.so.6
+f7e1f000-f7e26000 rw-p 00000000 00:00 0 
+f7e26000-f7e27000 rw-s f7e26000 00:07 420                                /dev/mali0
+f7e27000-f7e28000 rw-s f7e27000 00:07 420                                /dev/mali0
+f7e28000-f7e38000 rw-p 00000000 00:00 0 
+f7e38000-f7e39000 r-xp 00000000 00:00 0                                  [sigpage]
+f7e39000-f7e60000 r-xp 00000000 07:00 12346                              /usr/lib32/ld-linux-armhf.so.3
+f7e60000-f7e62000 r--p 00026000 07:00 12346                              /usr/lib32/ld-linux-armhf.so.3
+f7e62000-f7e63000 rw-p 00028000 07:00 12346                              /usr/lib32/ld-linux-armhf.so.3
+f7e70000-ff8d0000 ---p 00000000 00:00 0 
+ff9d5000-ff9f6000 rw-p 00000000 00:00 0                                  [stack]
+ffa00000-ffcf0000 ---p 00000000 00:00 0 
+ffcf0000-ffff0000 rw-p 00000000 00:00 0 
+ffff0000-ffff1000 r-xp 00000000 00:00 0                                  [vectors]

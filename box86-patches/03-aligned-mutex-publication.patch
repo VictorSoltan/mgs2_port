@@ -1,0 +1,84 @@
+--- a/src/libtools/threads.c
++++ b/src/libtools/threads.c
+@@ -756,8 +756,10 @@
+ 	return ret;
+ }
+ 
+-static int NewMutex() {
+-	mutex_lock(&mutex_mutexes);
++/* mutex_mutexes must be held by the caller.  Keeping allocation and the guest
++ * mutex publication in one critical section prevents two first users from
++ * assigning different native mutexes to the same x86 object. */
++static int NewMutexUnlocked() {
+ 	if(!mutexes) {
+ 		mutexes = NewMutexesBlock();
+ 	}
+@@ -774,10 +776,8 @@
+ 	for (int i=0; i<MUTEXES_SIZE; ++i)
+ 		if(!m->taken[i]) {
+ 			m->taken[i] = 1;
+-			mutex_unlock(&mutex_mutexes);
+ 			return j*MUTEXES_SIZE + i;
+ 		}
+-	mutex_unlock(&mutex_mutexes);
+ 	printf_log(LOG_NONE, "Error: NewMutex unreachable part reached\n");
+ 	return (int)-1;	// error!!!!
+ }
+@@ -832,14 +832,20 @@
+ 	if(!m)
+ 		return NULL;
+ 	aligned_mutex_t* am = (aligned_mutex_t*)m;
+-	if(init && (am->sign==SIGNMTX && am->self==am))
+-		return am->m;
+-	int k = NewMutex();
+-	// check again, it might be created now becayse NewMutex is under mutex
+-	if(init && (am->sign==SIGNMTX && am->self==am)) {
+-		FreeMutex(k);
++	if(init && (__atomic_load_n(&am->sign, __ATOMIC_ACQUIRE)==SIGNMTX && am->self==am))
+ 		return am->m;
++
++	mutex_lock(&mutex_mutexes);
++	/* The fast-path check above is intentionally repeated while creation is
++	 * serialized.  NewMutex used to release this lock before publishing am,
++	 * allowing simultaneous first users to create multiple native mutexes.
++	 * A later unlock could then target a different mutex and leak ownership. */
++	if(init && (__atomic_load_n(&am->sign, __ATOMIC_RELAXED)==SIGNMTX && am->self==am)) {
++		pthread_mutex_t* ret = am->m;
++		mutex_unlock(&mutex_mutexes);
++		return ret;
+ 	}
++	int k = NewMutexUnlocked();
+ 	pthread_mutex_t* ret = GetMutex(k);
+ 
+ 	#ifndef __PTHREAD_MUTEX_HAVE_PREV
+@@ -854,10 +860,13 @@
+ 			((int*)ret)[3+__PTHREAD_MUTEX_HAVE_PREV] = kind;		// inject in new one (i.e. "init" it)
+ 		}
+ 	}
+-	am->self = am;
+-	am->sign = SIGNMTX;
+ 	am->k = k;
+ 	am->m = ret;
++	am->self = am;
++	/* Publish the signature last.  Readers that observe it with acquire
++	 * semantics must also observe k, m and self from this initialization. */
++	__atomic_store_n(&am->sign, SIGNMTX, __ATOMIC_RELEASE);
++	mutex_unlock(&mutex_mutexes);
+ 	return ret;
+ }
+ static pthread_mutex_t* getAlignedMutex(pthread_mutex_t* m)
+@@ -870,12 +879,12 @@
+ 	if(box86_mutex_aligned)
+ 		return pthread_mutex_destroy(m);
+ 	aligned_mutex_t* am = (aligned_mutex_t*)m;
+-	if(am->sign!=SIGNMTX) {
++	if(__atomic_load_n(&am->sign, __ATOMIC_ACQUIRE)!=SIGNMTX) {
+ 		return 1;	//???
+ 	}
+ 	int ret = pthread_mutex_destroy(am->m);
+ 	FreeMutex(am->k);
+-	am->sign = 0;
++	__atomic_store_n(&am->sign, 0, __ATOMIC_RELEASE);
+ 	return ret;
+ }
+ #endif	//ANDROID

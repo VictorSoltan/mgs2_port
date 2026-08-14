@@ -1,0 +1,272 @@
+Patch 05 -- diagnostic native ARM bridge for the exact D3D8 AABB scan.
+
+The current on-device guest/native profile attributes the hottest D3D8 block to
+d3d8_mgs2_scan_aabb().  Patch 31 changed the algorithm and was withdrawn after
+real play.  This candidate does not: range selection, validity checks and every
+culling decision remain in Wine.  It replaces only the inner vertex walk with a
+native ARM implementation using the same loads, isfinite rejection and float
+min/max comparisons.
+
+The bridge is gated by MGS2_BOX86_NATIVE_AABB=1, performs a native self-test
+before publication, and recognises the companion noinline Wine build by an
+exact 32-byte prologue.  Patch 04's complete-range protection check is reused.
+The regparm=3 register arguments and four guest-stack arguments are copied
+explicitly; the result is returned in guest EAX.
+
+MGS2_GLIBC24_COMPAT is only for the retained local Ubuntu cross sysroot, whose
+new libm symbol defaults otherwise raise the executable's requirement above the
+handheld.  Normal/device-native builds leave it undefined.
+
+NOT PRODUCTION. Built successfully as box86-native-aabb1, but a fixed-scene
+device A/B is still required. The production launcher must keep this switch off
+until screenshots, frame-time bands and the guest/native profile agree.
+
+diff --git a/src/box86context.c b/src/box86context.c
+index ad6e5cd4..ecc72b2c 100755
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -3,6 +3,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <dlfcn.h>
++#include <math.h>
+ #include <signal.h>
+
+ #include "box86context.h"
+@@ -60,6 +61,36 @@ void finiAllHelpers(box86context_t* context)
+
+ void x86Syscall(x86emu_t *emu);
+
++#ifdef MGS2_GLIBC24_COMPAT
++/* The diagnostic cross sysroot labels these long-standing libm entry points
++ * GLIBC_2.43.  The device has their ABI-compatible GLIBC_2.4 definitions.
++ * This build-only compatibility block is inactive in normal Box86 builds. */
++extern float mgs2_glibc24_log10f(float);
++extern float mgs2_glibc24_atan2f(float, float);
++extern float mgs2_glibc24_asinf(float);
++extern float mgs2_glibc24_acosf(float);
++extern float mgs2_glibc24_sinhf(float);
++extern float mgs2_glibc24_acoshf(float);
++extern float mgs2_glibc24_coshf(float);
++extern float mgs2_glibc24_sqrtf(float);
++__asm__(".symver mgs2_glibc24_log10f,log10f@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_atan2f,atan2f@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_asinf,asinf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_acosf,acosf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_sinhf,sinhf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_acoshf,acoshf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_coshf,coshf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_sqrtf,sqrtf@GLIBC_2.4");
++float __wrap_log10f(float x) { return mgs2_glibc24_log10f(x); }
++float __wrap_atan2f(float y, float x) { return mgs2_glibc24_atan2f(y, x); }
++float __wrap_asinf(float x) { return mgs2_glibc24_asinf(x); }
++float __wrap_acosf(float x) { return mgs2_glibc24_acosf(x); }
++float __wrap_sinhf(float x) { return mgs2_glibc24_sinhf(x); }
++float __wrap_acoshf(float x) { return mgs2_glibc24_acoshf(x); }
++float __wrap_coshf(float x) { return mgs2_glibc24_coshf(x); }
++float __wrap_sqrtf(float x) { return mgs2_glibc24_sqrtf(x); }
++#endif
++
+ /*
+  * Bounded, memory-only census for the MGS2 Wine memmove bridge.  This is a
+  * diagnostic, not production telemetry: there is no I/O on the hot path and
+@@ -168,6 +199,74 @@ static void mgs2_native_memmove_stats_wrapper(x86emu_t *emu, uintptr_t fnc)
+     mgs2_native_memmove_wrapper(emu, fnc);
+ }
+
++/* Exact native equivalent of Wine d3d8_mgs2_scan_aabb().  The candidate DLL
++ * keeps this one function out of line with regparm=3: buffer/left/count arrive
++ * in eax/edx/ecx and the remaining arguments stay on the guest stack. */
++__attribute__((noinline, visibility("default")))
++uint32_t mgs2_native_aabb_impl(uint32_t buffer_addr, uint32_t left,
++        uint32_t vertex_count, uint32_t stride, uint32_t position_offset,
++        float *min_value, float *max_value)
++{
++    const unsigned char *snapshot;
++    uint32_t snapshot_addr;
++    uint32_t offset = left + position_offset;
++    uint32_t i;
++
++    memcpy(&snapshot_addr, (const void *)(uintptr_t)(buffer_addr + 0x1c),
++            sizeof(snapshot_addr));
++    snapshot = (const unsigned char *)(uintptr_t)snapshot_addr;
++
++    for (i = 0; i < vertex_count; ++i, offset += stride)
++    {
++        float position[3];
++        unsigned int axis;
++
++        memcpy(position, snapshot + offset, sizeof(position));
++        if (!isfinite(position[0]) || !isfinite(position[1]) || !isfinite(position[2]))
++            return 0;
++        for (axis = 0; axis < 3; ++axis)
++        {
++            if (!i || position[axis] < min_value[axis]) min_value[axis] = position[axis];
++            if (!i || position[axis] > max_value[axis]) max_value[axis] = position[axis];
++        }
++    }
++    return 1;
++}
++
++static int mgs2_native_aabb_selftest(void)
++{
++    unsigned char buffer[0x20] = {0};
++    float vertices[12] = {
++        1.0f, 2.0f, 3.0f, 0.0f,
++        -4.0f, 5.0f, 0.5f, 0.0f,
++        2.0f, -3.0f, 9.0f, 0.0f,
++    };
++    uint32_t snapshot = (uintptr_t)vertices;
++    float min_value[3], max_value[3];
++
++    memcpy(buffer + 0x1c, &snapshot, sizeof(snapshot));
++    if (!mgs2_native_aabb_impl((uintptr_t)buffer, 0, 3, 16, 0,
++            min_value, max_value))
++        return 0;
++    return min_value[0] == -4.0f && min_value[1] == -3.0f
++            && min_value[2] == 0.5f && max_value[0] == 2.0f
++            && max_value[1] == 5.0f && max_value[2] == 9.0f;
++}
++
++static void mgs2_native_aabb_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint64_t edxeax = GetEDXEAX(emu);
++    uint32_t esp = GetESP(emu);
++    uint32_t result;
++
++    result = ((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t,
++            uint32_t, float *, float *))fnc)(
++            (uint32_t)edxeax, (uint32_t)(edxeax >> 32), GetECX(emu),
++            *(uint32_t *)(esp + 4), *(uint32_t *)(esp + 8),
++            *(float **)(esp + 12), *(float **)(esp + 16));
++    SetEAX(emu, result);
++}
++
+ /// maxval not inclusive
+ int getrand(int maxval)
+ {
+@@ -368,6 +467,18 @@ box86context_t *NewBox86Context(int argc)
+                 "MGS2 native memmove");
+         SetMGS2NativeMemmove(bridge);
+     }
++    const char *mgs2_native_aabb_env = getenv("MGS2_BOX86_NATIVE_AABB");
++    if (mgs2_native_aabb_env && atoi(mgs2_native_aabb_env))
++    {
++        if (!mgs2_native_aabb_selftest())
++            printf_log(LOG_INFO, "MGS2 native AABB: self-test FAILED, bridge disabled\n");
++        else
++        {
++            uintptr_t bridge = AddBridge(context->system, mgs2_native_aabb_wrapper,
++                    mgs2_native_aabb_impl, 0, "MGS2 native d3d8 AABB scan");
++            SetMGS2NativeAabb(bridge);
++        }
++    }
+     // create exit bridge
+     context->exit_bridge = AddBridge(context->system, NULL, NULL, 0, NULL);
+ #ifdef BUILD_LIB
+diff --git a/src/emu/x86emu.c b/src/emu/x86emu.c
+index 04788bb1..4ed0edd1 100755
+--- a/src/emu/x86emu.c
++++ b/src/emu/x86emu.c
+@@ -270,6 +270,10 @@ uint64_t GetEDXEAX(x86emu_t *emu)
+ {
+     return ((uint64_t)R_EAX)|(((uint64_t)R_EDX)<<32);
+ }
++uint32_t GetECX(x86emu_t *emu)
++{
++    return R_ECX;
++}
+ void SetEAX(x86emu_t *emu, uint32_t v)
+ {
+     R_EAX = v;
+diff --git a/src/include/bridge.h b/src/include/bridge.h
+index 81556612..72d3f53a 100755
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -18,6 +18,7 @@ uintptr_t AddAutomaticBridge(x86emu_t* emu, bridge_t* bridge, wrapper_t w, void*
+ void* GetNativeFnc(uintptr_t fnc);
+ void* GetNativeFncOrFnc(uintptr_t fnc);
+ void SetMGS2NativeMemmove(uintptr_t alt);
++void SetMGS2NativeAabb(uintptr_t alt);
+
+ int hasAlternate(void* addr);
+ void* getAlternate(void* addr);
+diff --git a/src/include/x86emu.h b/src/include/x86emu.h
+index 2747cc10..807a64b1 100755
+--- a/src/include/x86emu.h
++++ b/src/include/x86emu.h
+@@ -17,6 +17,7 @@ box86context_t* GetEmuContext(x86emu_t* emu);
+
+ uint32_t GetEAX(x86emu_t *emu);
+ uint64_t GetEDXEAX(x86emu_t *emu);
++uint32_t GetECX(x86emu_t *emu);
+ void SetEAX(x86emu_t *emu, uint32_t v);
+ void SetEBX(x86emu_t *emu, uint32_t v);
+ void SetECX(x86emu_t *emu, uint32_t v);
+@@ -51,4 +52,4 @@ void D2LD(void* d, void* ld);   // double (64bits) -> long double (64bits)
+ void printFunctionAddr(uintptr_t nextaddr, const char* text);
+ const char* getAddrFunctionName(uintptr_t addr);
+
+-#endif //__X86EMU_H_
+\ No newline at end of file
++#endif //__X86EMU_H_
+diff --git a/src/tools/bridge.c b/src/tools/bridge.c
+index 3e75d950..9eeaa793 100755
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -246,12 +246,19 @@ KHASH_MAP_INIT_INT(alternate, void*)
+ static kh_alternate_t *my_alternates = NULL;
+ static uintptr_t mgs2_native_memmove;
+ static uintptr_t mgs2_memmove_guest;
++static uintptr_t mgs2_native_aabb;
++static uintptr_t mgs2_aabb_guest;
+
+ void SetMGS2NativeMemmove(uintptr_t alt)
+ {
+     mgs2_native_memmove = alt;
+ }
+
++void SetMGS2NativeAabb(uintptr_t alt)
++{
++    mgs2_native_aabb = alt;
++}
++
+ static int mgs2_signature_readable(uintptr_t addr, size_t size)
+ {
+     uintptr_t end, probe;
+@@ -318,6 +325,35 @@ mgs2_memmove:
+             return (void *)mgs2_native_memmove;
+         }
+     }
++
++    if (mgs2_native_aabb)
++    {
++        /* Exact first 32 bytes of the noinline Wine candidate, including its
++         * frame size, regparm saves and count branch. */
++        static const unsigned char signature[] = {
++            0x55, 0x89, 0xe5, 0x57, 0x56, 0x53, 0x83, 0xec,
++            0x1c, 0x8b, 0x5d, 0x10, 0x8b, 0x75, 0x14, 0x89,
++            0x45, 0xe0, 0x85, 0xc9, 0x0f, 0x84, 0x89, 0x00,
++            0x00, 0x00, 0x03, 0x55, 0x0c, 0x89, 0x4d, 0xdc,
++        };
++        uintptr_t guest = __atomic_load_n(&mgs2_aabb_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_aabb;
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, sizeof(signature))
++                && !memcmp(addr, signature, sizeof(signature)))
++        {
++            uintptr_t expected = 0;
++
++            if (!__atomic_compare_exchange_n(&mgs2_aabb_guest, &expected,
++                    (uintptr_t)addr, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
++                    && expected != (uintptr_t)addr)
++                return addr;
++            printf_log(LOG_INFO, "MGS2 native AABB: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_aabb);
++            return (void *)mgs2_native_aabb;
++        }
++    }
+     return addr;
+ }
+ void addAlternate(void* addr, void* alt) {

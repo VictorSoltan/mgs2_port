@@ -1,0 +1,366 @@
+Patch 30 -- experimental separable stage for programmable VS + FFP PS.
+
+This is the previously built p30 source diff that was missing from the exported
+patch series. It is retained for reproducibility but OFF by default behind
+MGS2_GL_SEPARABLE_VS.
+
+The real save/gameplay route measured 27 monolithic links costing 5,765 ms, but
+the corrected probe later showed no eligible programmable-VS/FFP-PS pairs in the
+actual workload. Enabling this patch therefore changed nothing. Do not enable it
+in production; its value here is to make the recovered source and archived
+wined3d_p30_separable_vs.dll reproducible before patch 32.
+
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -123,11 +123,18 @@
+ };
+
+ /* GLSL shader private data */
++/* Patch 30: stage programs for programmable vertex shaders. Declared after
++ * glsl_vs_program, which this file defines below, so priv only carries a pointer
++ * and the table is allocated on first use. */
++struct mgs2_vs_stage_cache;
++
+ struct shader_glsl_priv
+ {
+     bool use_vkd3d;
+     BOOL mgs2_separable_enabled;
+     BOOL mgs2_separable_validate;
++    BOOL mgs2_separable_vs_enabled;
++    struct mgs2_vs_stage_cache *mgs2_vs_stages;
+
+     struct wined3d_string_buffer shader_buffer;
+     struct wined3d_string_buffer_list string_buffers;
+@@ -10527,7 +10534,8 @@
+  * combination while still covering MGS2's fixed-function radio/menu material
+  * permutations. */
+ static BOOL mgs2_make_ffp_stage(const struct wined3d_gl_info *gl_info, struct shader_glsl_priv *priv,
+-        GLuint shader_id, GLenum stage_bit, GLuint *stage_program, void *stage_uniforms)
++        GLuint shader_id, GLenum stage_bit, GLuint *stage_program, void *stage_uniforms,
++        uint32_t bind_attribs_map, unsigned int const_f_count)
+ {
+     struct wined3d_string_buffer *tmp_name;
+     GLint linked = GL_FALSE;
+@@ -10561,7 +10569,12 @@
+         if (stage_bit == GL_VERTEX_SHADER_BIT)
+         {
+             tmp_name = string_buffer_get(&priv->string_buffers);
+-            attribs_map = (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1;
++            /* Patch 30: a programmable vertex shader declares only the inputs its
++             * signature names, so the caller passes reg_maps.input_registers and
++             * the FFP caller keeps passing the full fixed-function set. Binding a
++             * name the shader does not declare is harmless; failing to bind one it
++             * does declare is what corrupted the image for patch 27. */
++            attribs_map = bind_attribs_map;
+             while (attribs_map)
+             {
+                 i = wined3d_bit_scan(&attribs_map);
+@@ -10596,14 +10609,38 @@
+         return FALSE;
+     }
+
++    /* const_f_count is 0 for a fixed-function stage, which has no vs_c[]/ps_c[]
++     * array at all, and the shader's limits->constant_float for a programmable
++     * one. Passing 0 for a programmable vertex shader would leave every
++     * uniform_f_location invalid and the shader would run on stale constants. */
+     if (stage_bit == GL_VERTEX_SHADER_BIT)
+-        shader_glsl_init_vs_uniform_locations(gl_info, priv, program, stage_uniforms, 0);
++        shader_glsl_init_vs_uniform_locations(gl_info, priv, program, stage_uniforms, const_f_count);
+     else
+-        shader_glsl_init_ps_uniform_locations(gl_info, priv, program, stage_uniforms, 0);
++        shader_glsl_init_ps_uniform_locations(gl_info, priv, program, stage_uniforms, const_f_count);
+     *stage_program = program;
+     return TRUE;
+ }
+
++/* Patch 30: stage programs for programmable vertex shaders, keyed on the compiled
++ * GL shader id. The whole gain is reuse -- the FFP side gets it from the shader
++ * cache wined3d already keeps, and a programmable shader has no such slot, so one
++ * lives here. Sized for MGS2: the measured session linked 27 pairs, and distinct
++ * vertex shaders are far fewer than pairs. A full table simply falls back to the
++ * monolithic path rather than evicting, because evicting a stage program that a
++ * live pipeline still references would be a use-after-free in the driver. */
++#define MGS2_VS_STAGE_CACHE_SIZE 64
++
++struct mgs2_vs_stage_cache
++{
++    unsigned int count;
++    struct
++    {
++        GLuint shader_id;
++        GLuint stage_program;
++        struct glsl_vs_program stage;
++    } entries[MGS2_VS_STAGE_CACHE_SIZE];
++};
++
+ /* The FFP half of the monolithic path's constant_update_mask, derived from the
+  * uniform locations that the two stage programs actually exposed.  The first
+  * candidate hard-coded a fixed mask instead; that both requested updates for
+@@ -10662,6 +10699,50 @@
+         entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_COLOR_KEY;
+ }
+
++/* Patch 30: the vertex half of the monolithic path's programmable branch, plus the
++ * fixed-function pixel half, because this pairing is a programmable vertex shader
++ * with an FFP pixel shader. Mirrors glsl_shader.c's monolithic assembly rather
++ * than inventing a mask: patch 27's first candidate hard-coded one and both asked
++ * for absent uniforms and dropped clip planes.
++ *
++ * VS_CLIP_PLANES and VS_POINTSIZE stay keyed on their locations, exactly as the
++ * FFP variant does, because both uniforms exist in either kind of vertex shader. */
++static void mgs2_set_programmable_vs_constant_update_mask(struct glsl_shader_prog_link *entry,
++        const struct wined3d_shader *vshader)
++{
++    unsigned int i;
++
++    entry->constant_update_mask = WINED3D_SHADER_CONST_VS_F | WINED3D_SHADER_CONST_FFP_PS;
++    if (vshader->reg_maps.integer_constants)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_I;
++    if (vshader->reg_maps.boolean_constants)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_B;
++    if (entry->vs.pos_fixup_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_POS_FIXUP;
++    if (entry->vs.base_vertex_id_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_BASE_VERTEX_ID;
++    if (entry->vs.clip_planes_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_CLIP_PLANES;
++    if (entry->vs.pointsize_min_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_POINTSIZE;
++
++    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
++    {
++        if (entry->ps.bumpenv_mat_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_BUMP_ENV;
++            break;
++        }
++    }
++
++    if (entry->ps.fog_color_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_FOG;
++    if (entry->ps.alpha_test_ref_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_ALPHA_TEST;
++    if (entry->ps.color_key_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_COLOR_KEY;
++}
++
+ static BOOL mgs2_make_ffp_pipeline(const struct wined3d_context_gl *context_gl,
+         struct shader_glsl_priv *priv, struct glsl_ffp_vertex_shader *vs,
+         struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
+@@ -10673,9 +10754,9 @@
+     /* The fixed-function pair keeps exactly the arguments it had before patch 30
+      * generalised this: the whole FFP attribute set, and no vs_c[]/ps_c[] array. */
+     if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs->id, GL_VERTEX_SHADER_BIT,
+-            &vs->stage_program, &vs->stage)
++            &vs->stage_program, &vs->stage, (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1, 0)
+             || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
+-                    &ps->stage_program, &ps->stage))
++                    &ps->stage_program, &ps->stage, 0, 0))
+         return FALSE;
+
+     probe_start = mgs2_probe_now();
+@@ -10745,6 +10826,128 @@
+     return TRUE;
+ }
+
++/* Patch 30: a pipeline whose vertex stage is a programmable shader and whose
++ * fragment stage is fixed function -- the pairing MGS2 uses for the world and its
++ * characters, and therefore the one that produced all 27 monolithic links and
++ * 5765 ms of stalls in the measured gameplay session.
++ *
++ * Written as a sibling of mgs2_make_ffp_pipeline rather than by generalising it.
++ * That duplicates the pipeline plumbing, and deliberately: the FFP path is
++ * production and each of the six defects patch 27 had to fix lived in exactly
++ * these lines, so an experimental path must not be able to change its behaviour.
++ *
++ * Feasible here only because the vertex shader needs no companion: the monolithic
++ * path attaches a VS3 rasterizer helper for shader_version.major < 4, but skips it
++ * when is_gles && major < 3, and MGS2 is D3D8 with 1.x vertex shaders on a GLES
++ * driver. The caller checks that. */
++static BOOL mgs2_make_programmable_vs_pipeline(const struct wined3d_context_gl *context_gl,
++        struct shader_glsl_priv *priv, const struct wined3d_shader *vshader, GLuint vs_id,
++        struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
++{
++    const struct wined3d_gl_info *gl_info = context_gl->gl_info;
++    struct glsl_vs_program *stage = NULL;
++    GLuint *stage_program = NULL;
++    struct mgs2_vs_stage_cache *cache;
++    GLint valid = GL_FALSE;
++    LONGLONG probe_start;
++    unsigned int i;
++    GLuint pipeline;
++
++    if (!(cache = priv->mgs2_vs_stages))
++    {
++        if (!(cache = calloc(1, sizeof(*cache))))
++            return FALSE;
++        priv->mgs2_vs_stages = cache;
++    }
++
++    for (i = 0; i < cache->count; ++i)
++    {
++        if (cache->entries[i].shader_id == vs_id)
++        {
++            stage_program = &cache->entries[i].stage_program;
++            stage = &cache->entries[i].stage;
++            break;
++        }
++    }
++    if (!stage_program)
++    {
++        /* A full table falls back to the monolithic path instead of evicting.
++         * Evicting a stage program that a live pipeline still names would be a
++         * use-after-free inside the driver, and pipelines outlive this call. */
++        if (cache->count >= MGS2_VS_STAGE_CACHE_SIZE)
++            return FALSE;
++        cache->entries[cache->count].shader_id = vs_id;
++        stage_program = &cache->entries[cache->count].stage_program;
++        stage = &cache->entries[cache->count].stage;
++        ++cache->count;
++    }
++
++    if (!mgs2_make_ffp_stage(gl_info, priv, vs_id, GL_VERTEX_SHADER_BIT, stage_program, stage,
++            vshader->reg_maps.input_registers, vshader->limits->constant_float)
++            || !mgs2_make_ffp_stage(gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
++                    &ps->stage_program, &ps->stage, 0, 0))
++        return FALSE;
++
++    probe_start = mgs2_probe_now();
++    mgs2_glGenProgramPipelines(1, &pipeline);
++    if (!pipeline)
++        return FALSE;
++    mgs2_glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, *stage_program);
++    mgs2_glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, ps->stage_program);
++    if (priv->mgs2_separable_validate)
++    {
++        mgs2_glValidateProgramPipeline(pipeline);
++        mgs2_glGetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &valid);
++        if (!valid)
++        {
++            ERR("Programmable-VS pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
++                    pipeline, *stage_program, ps->stage_program);
++            if (mgs2_glGetProgramPipelineInfoLog)
++            {
++                char log[1024];
++
++                log[0] = '\0';
++                mgs2_glGetProgramPipelineInfoLog(pipeline, sizeof(log), NULL, log);
++                if (log[0])
++                    ERR("Pipeline info log: %s\n", debugstr_a(log));
++            }
++            /* d = 1 marks the programmable-VS variant in the probe ring, so a
++             * capture can tell the two pairings apart. */
++            mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++                    *stage_program, ps->stage_program, 0, 1, pipeline);
++            mgs2_glDeleteProgramPipelines(1, &pipeline);
++            return FALSE;
++        }
++    }
++    mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++            *stage_program, ps->stage_program, 1, 1, pipeline);
++
++    entry->id = 0;
++    entry->pipeline_id = pipeline;
++    entry->vs_program_id = *stage_program;
++    entry->ps_program_id = ps->stage_program;
++    entry->separable = TRUE;
++    entry->vs = *stage;
++    entry->ps = ps->stage;
++    entry->vs.id = vs_id;
++    entry->ps.id = ps->id;
++    entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++
++    mgs2_set_programmable_vs_constant_update_mask(entry, vshader);
++
++    /* Samplers and uniform blocks belong to the stage program, not the pipeline,
++     * and shader_glsl_load_program_resources() assigns them with plain glUniform1i.
++     * Make the stage current for that and drop back to no current program, which
++     * is what a bound pipeline needs -- the same sequence the FFP pair already uses
++     * for its fragment samplers, rather than glActiveShaderProgram, because that
++     * sequence is the one proven on this driver. */
++    GL_EXTCALL(glUseProgram(*stage_program));
++    shader_glsl_load_program_resources(context_gl, priv, *stage_program, vshader);
++    GL_EXTCALL(glUseProgram(0));
++    checkGLcall("separable programmable-VS resource setup");
++    return TRUE;
++}
++
+ static HRESULT shader_glsl_compile_compute_shader(struct shader_glsl_priv *priv,
+         const struct wined3d_context_gl *context_gl, struct wined3d_shader *shader)
+ {
+@@ -11049,6 +11252,37 @@
+             free(entry);
+         }
+     }
++    /* Patch 30, off unless MGS2_GL_SEPARABLE_VS is set: the same treatment for a
++     * programmable vertex shader paired with an FFP pixel shader. Admitted only
++     * when the monolithic path would attach no VS3 rasterizer helper, because a
++     * stage program can carry just the one shader object; that is the is_gles and
++     * major < 3 case, which is every MGS2 vertex shader on this device. */
++    else if (priv->mgs2_separable_enabled && priv->mgs2_separable_vs_enabled
++            && vshader && vs_id && ffp_ps && !hshader && !dshader && !gshader
++            && vshader->reg_maps.shader_version.major < 3 && gl_info->is_gles)
++    {
++        if ((entry = calloc(1, sizeof(*entry))))
++        {
++            entry->vs.id = vs_id;
++            entry->ps.id = ps_id;
++            entry->constant_version = 0;
++            entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++            if (mgs2_make_programmable_vs_pipeline(context_gl, priv, vshader, vs_id, ffp_ps, entry))
++            {
++                list_add_head(vs_list, &entry->vs.shader_entry);
++                list_add_head(ps_list, &entry->ps.shader_entry);
++                GL_EXTCALL(glUseProgram(entry->ps_program_id));
++                shader_glsl_load_samplers(&context_gl->c, priv, entry->ps_program_id, NULL);
++                GL_EXTCALL(glUseProgram(0));
++                checkGLcall("separable programmable-VS sampler setup");
++                add_glsl_program_entry(priv, entry);
++                ctx_data->glsl_program = entry;
++                return;
++            }
++            free(entry);
++        }
++    }
++
+     /* If we get to this point, then no matching program exists, so we create one */
+     program_id = GL_EXTCALL(glCreateProgram());
+     TRACE("Created new GLSL shader program %u.\n", program_id);
+@@ -11893,6 +12127,25 @@
+      * query also reports on current GL state, so a failure is not by itself
+      * evidence of an incompatible stage interface. */
+     priv->mgs2_separable_validate = !(separable_env && !strcmp(separable_env, "2"));
++    /* Patch 30 extends the path to pairs whose vertex shader is programmable
++     * instead of fixed function. Measured 2026-08-13 in real gameplay, save
++     * loaded and the player walking between rooms: 27 program links costing
++     * 5765 ms, every one monolithic, because the gate requires an FFP vertex
++     * shader while MGS2 draws the world and its characters with a programmable
++     * one. That is about half of all stall time in the run.
++     *
++     * OFF by default, deliberately: this touches the six places patch 27 had to
++     * get right -- attribute bindings, vs_c[] locations, the constant update
++     * mask, sampler resources, the stage cache and the pipeline builder -- and
++     * every one of them broke the picture at least once while patch 27 was being
++     * written. Enable for a single run with MGS2_GL_SEPARABLE_VS=1 and check the
++     * picture with harness/autoload_save.sh before trusting it. */
++    {
++        const char *vs_env = getenv("MGS2_GL_SEPARABLE_VS");
++
++        priv->mgs2_separable_vs_enabled = vs_env && strcmp(vs_env, "0");
++    }
++
+     priv->next_constant_version = 1;
+     priv->vertex_pipe = vertex_pipe;
+     priv->fragment_pipe = fragment_pipe;
+@@ -11923,6 +12176,11 @@
+     wine_rb_destroy(&priv->program_lookup, NULL, NULL);
+     constant_free(&priv->pconst_heap);
+     constant_free(&priv->vconst_heap);
++    /* Patch 30's programmable-VS stage table. Only the table itself is freed: the
++     * stage programs it names are owned by the GL context that is going away with
++     * this private data, exactly like the FFP stage programs in the shader caches. */
++    free(priv->mgs2_vs_stages);
++    priv->mgs2_vs_stages = NULL;
+     free(priv->stack);
+     string_buffer_list_cleanup(&priv->string_buffers);
+     string_buffer_free(&priv->shader_buffer);

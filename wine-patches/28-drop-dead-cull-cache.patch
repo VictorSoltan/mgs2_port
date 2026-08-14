@@ -1,0 +1,134 @@
+Patch 28 -- remove the dead visibility-cull AABB cache from d3d8.
+
+Measured on the device 2026-08-12 with the only build that still carries the
+counters, d3d8_producer_batch20_visibilitycull.dll:
+
+    MGS2CULL: frames=300 tested=112800 376.00/f culled=33297 110.99/f
+              cache_hit=0 cache_miss=112800
+
+Zero hits in 112,800 lookups, and it cannot be otherwise: the cache key includes
+mgs2_geometry_generation, which is bumped on every writable Unlock, and MGS2
+re-uploads its dynamic vertex buffers every frame -- the reason the cached
+DISCARD shadow of patch 26 exists at all. No entry can survive to its next
+lookup, so the cache paid one hash plus up to four key comparisons per tested
+draw and 73,760 bytes of BSS for nothing.
+
+Removing it cannot change any culling decision: on a miss the old code computed
+the AABB with exactly this loop, and there were only misses.
+
+Measured effect on the stripped production DLL:
+
+    .bss   74,464 -> 704 bytes   (-73,760)
+    .text  52,368 -> 51,520      (-848)
+
+Frame rate effect not measured: the available windows came from attract-mode
+scenes, and rule 3 of this project forbids reading an A/B off unequal scenes.
+The change only removes work, so no regression is expected; a fixed-spot pair of
+windows would settle it.
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -2221,67 +2221,22 @@
+     return code;
+ }
+
+-#define D3D8_MGS2_CULL_CACHE_SETS 256
+-#define D3D8_MGS2_CULL_CACHE_WAYS 4
+-struct d3d8_mgs2_cull_cache_entry
+-{
+-    ULONGLONG identity, generation;
+-    const struct d3d8_vertex_declaration *declaration;
+-    unsigned int left, vertex_count, stride, position_offset;
+-    float min[3], max[3];
+-    unsigned int stamp;
+-    BOOL valid;
+-};
+-static struct d3d8_mgs2_cull_cache_entry
+-        d3d8_mgs2_cull_cache[D3D8_MGS2_CULL_CACHE_SETS][D3D8_MGS2_CULL_CACHE_WAYS];
+-static unsigned int d3d8_mgs2_cull_cache_stamp;
+-
+-static unsigned int d3d8_mgs2_cull_cache_set(ULONGLONG identity, ULONGLONG generation,
+-        unsigned int left, unsigned int vertex_count, unsigned int stride,
+-        unsigned int position_offset, const struct d3d8_vertex_declaration *declaration)
+-{
+-    ULONGLONG hash = identity ^ generation * 0x9e3779b97f4a7c15ull;
+-
+-    hash ^= (ULONGLONG)(ULONG_PTR)declaration;
+-    hash ^= (ULONGLONG)left << 32 | vertex_count;
+-    hash ^= (ULONGLONG)stride << 32 | position_offset;
+-    hash ^= hash >> 33;
+-    hash *= 0xff51afd7ed558ccdull;
+-    hash ^= hash >> 33;
+-    return hash & (D3D8_MGS2_CULL_CACHE_SETS - 1);
+-}
+-
+-static BOOL d3d8_mgs2_cull_aabb(struct d3d8_vertexbuffer *buffer,
+-        const struct d3d8_vertex_declaration *declaration, unsigned int left,
++/* The model-space AABB is computed on every call. A 256x4 set-associative cache
++ * keyed on (identity, generation, declaration, range, stride, position_offset)
++ * used to sit in front of this loop; it was removed on 2026-08-12 after its own
++ * telemetry measured cache_hit=0 against cache_miss=112800 over 300 frames.
++ * MGS2 re-uploads its dynamic vertex buffers every frame -- that is why the
++ * cached DISCARD shadow exists at all -- so mgs2_geometry_generation is bumped
++ * on the writable Unlock before any entry can ever be reused. The cache could
++ * not hit by construction. It only cost one hash plus up to four key comparisons
++ * per tested draw (376 per frame measured) and 72 KB of BSS. */
++static BOOL d3d8_mgs2_cull_aabb(struct d3d8_vertexbuffer *buffer, unsigned int left,
+         unsigned int vertex_count, unsigned int stride, unsigned int position_offset,
+         float min_value[3], float max_value[3])
+ {
+-    struct d3d8_mgs2_cull_cache_entry *entry, *victim;
+-    unsigned int set, way, i, axis;
++    unsigned int i, axis;
+     float position[3];
+
+-    set = d3d8_mgs2_cull_cache_set(buffer->mgs2_geometry_identity,
+-            buffer->mgs2_geometry_generation, left, vertex_count, stride,
+-            position_offset, declaration);
+-    victim = &d3d8_mgs2_cull_cache[set][0];
+-    for (way = 0; way < D3D8_MGS2_CULL_CACHE_WAYS; ++way)
+-    {
+-        entry = &d3d8_mgs2_cull_cache[set][way];
+-        if (entry->valid && entry->identity == buffer->mgs2_geometry_identity
+-                && entry->generation == buffer->mgs2_geometry_generation
+-                && entry->declaration == declaration && entry->left == left
+-                && entry->vertex_count == vertex_count && entry->stride == stride
+-                && entry->position_offset == position_offset)
+-        {
+-            memcpy(min_value, entry->min, sizeof(entry->min));
+-            memcpy(max_value, entry->max, sizeof(entry->max));
+-            entry->stamp = ++d3d8_mgs2_cull_cache_stamp;
+-            return TRUE;
+-        }
+-        if (!entry->valid || (victim->valid && entry->stamp < victim->stamp))
+-            victim = entry;
+-    }
+-
+     for (i = 0; i < vertex_count; ++i)
+     {
+         memcpy(position, buffer->mgs2_snapshot + left + i * stride + position_offset,
+@@ -2295,17 +2250,6 @@
+         }
+     }
+
+-    victim->identity = buffer->mgs2_geometry_identity;
+-    victim->generation = buffer->mgs2_geometry_generation;
+-    victim->declaration = declaration;
+-    victim->left = left;
+-    victim->vertex_count = vertex_count;
+-    victim->stride = stride;
+-    victim->position_offset = position_offset;
+-    memcpy(victim->min, min_value, sizeof(victim->min));
+-    memcpy(victim->max, max_value, sizeof(victim->max));
+-    victim->stamp = ++d3d8_mgs2_cull_cache_stamp;
+-    victim->valid = TRUE;
+     return TRUE;
+ }
+
+@@ -2331,7 +2275,7 @@
+         return FALSE;
+     if (!d3d8_mgs2_geometry_range_valid(buffer, left, left + vertex_count * stride))
+         return FALSE;
+-    if (!d3d8_mgs2_cull_aabb(buffer, declaration, left, vertex_count, stride,
++    if (!d3d8_mgs2_cull_aabb(buffer, left, vertex_count, stride,
+             position_offset, min_value, max_value))
+         return FALSE;

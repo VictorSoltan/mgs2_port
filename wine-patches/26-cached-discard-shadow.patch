@@ -1,0 +1,87 @@
+diff --git a/dlls/d3d8/buffer.c b/dlls/d3d8/buffer.c
+index 74d252e..da7c8a9 100644
+--- a/dlls/d3d8/buffer.c
++++ b/dlls/d3d8/buffer.c
+@@ -221,12 +221,12 @@ static HRESULT WINAPI d3d8_vertexbuffer_Lock(IDirect3DVertexBuffer8 *iface, UINT
+ #endif
+     }
+ 
+-    /* DISCARD already has WineD3D's mapped upload-BO path. After the first
+-     * discard, however, Wine rewrites later locks of this buffer to
+-     * NOOVERWRITE. On this GLES stack that path has no mapped client BO and
+-     * falls back to a synchronous map + unmap round-trip through CSMT, so let
+-     * the producer shadow handle NOOVERWRITE as well. */
+-    if (buffer->mgs2_snapshot && !(flags & D3DLOCK_DISCARD))
++    /* Keep all writable dynamic data in the cached producer shadow, including
++     * DISCARD. The visibility culler needs this exact copy; letting DISCARD
++     * write WineD3D's mapped upload BO first would make Unlock read that whole
++     * mapping back into the shadow. The draw-side dirty flush already publishes
++     * queue-owned bytes before the buffer is consumed. */
++    if (buffer->mgs2_snapshot)
+     {
+         d3d8_mgs2_count(D3D8_MGS2_VB_LOCK_SNAPSHOT);
+         if (!data || buffer->mgs2_snapshot_locked || offset > buffer->mgs2_snapshot_size
+@@ -286,10 +286,11 @@ static void d3d8_vertexbuffer_add_geometry_valid_range(struct d3d8_vertexbuffer
+         }
+         left = min(left, range_left);
+         right = max(right, range_right);
+-        memmove(&buffer->mgs2_geometry_valid_ranges[i],
+-                &buffer->mgs2_geometry_valid_ranges[i + 1],
+-                (buffer->mgs2_geometry_valid_count - i - 1)
+-                * sizeof(buffer->mgs2_geometry_valid_ranges[0]));
++        if (i + 1 < buffer->mgs2_geometry_valid_count)
++            memmove(&buffer->mgs2_geometry_valid_ranges[i],
++                    &buffer->mgs2_geometry_valid_ranges[i + 1],
++                    (buffer->mgs2_geometry_valid_count - i - 1)
++                    * sizeof(buffer->mgs2_geometry_valid_ranges[0]));
+         --buffer->mgs2_geometry_valid_count;
+     }
+     if (buffer->mgs2_geometry_valid_count == D3D8_MGS2_GEOMETRY_VALID_RANGES)
+@@ -298,10 +299,11 @@ static void d3d8_vertexbuffer_add_geometry_valid_range(struct d3d8_vertexbuffer
+         buffer->mgs2_geometry_valid_overflow = TRUE;
+         return;
+     }
+-    memmove(&buffer->mgs2_geometry_valid_ranges[i + 1],
+-            &buffer->mgs2_geometry_valid_ranges[i],
+-            (buffer->mgs2_geometry_valid_count - i)
+-            * sizeof(buffer->mgs2_geometry_valid_ranges[0]));
++    if (i < buffer->mgs2_geometry_valid_count)
++        memmove(&buffer->mgs2_geometry_valid_ranges[i + 1],
++                &buffer->mgs2_geometry_valid_ranges[i],
++                (buffer->mgs2_geometry_valid_count - i)
++                * sizeof(buffer->mgs2_geometry_valid_ranges[0]));
+     buffer->mgs2_geometry_valid_ranges[i].left = left;
+     buffer->mgs2_geometry_valid_ranges[i].right = right;
+     ++buffer->mgs2_geometry_valid_count;
+@@ -310,10 +312,11 @@ static void d3d8_vertexbuffer_add_geometry_valid_range(struct d3d8_vertexbuffer
+ 
+ static void d3d8_vertexbuffer_remove_dirty_range(struct d3d8_vertexbuffer *buffer, unsigned int index)
+ {
+-    memmove(&buffer->mgs2_snapshot_dirty_ranges[index],
+-            &buffer->mgs2_snapshot_dirty_ranges[index + 1],
+-            (buffer->mgs2_snapshot_dirty_count - index - 1)
+-            * sizeof(buffer->mgs2_snapshot_dirty_ranges[0]));
++    if (index + 1 < buffer->mgs2_snapshot_dirty_count)
++        memmove(&buffer->mgs2_snapshot_dirty_ranges[index],
++                &buffer->mgs2_snapshot_dirty_ranges[index + 1],
++                (buffer->mgs2_snapshot_dirty_count - index - 1)
++                * sizeof(buffer->mgs2_snapshot_dirty_ranges[0]));
+     --buffer->mgs2_snapshot_dirty_count;
+ }
+ 
+@@ -364,10 +367,11 @@ static void d3d8_vertexbuffer_add_dirty_range(struct d3d8_vertexbuffer *buffer,
+         d3d8_vertexbuffer_remove_dirty_range(buffer, i);
+     }
+ 
+-    memmove(&buffer->mgs2_snapshot_dirty_ranges[i + 1],
+-            &buffer->mgs2_snapshot_dirty_ranges[i],
+-            (buffer->mgs2_snapshot_dirty_count - i)
+-            * sizeof(buffer->mgs2_snapshot_dirty_ranges[0]));
++    if (i < buffer->mgs2_snapshot_dirty_count)
++        memmove(&buffer->mgs2_snapshot_dirty_ranges[i + 1],
++                &buffer->mgs2_snapshot_dirty_ranges[i],
++                (buffer->mgs2_snapshot_dirty_count - i)
++                * sizeof(buffer->mgs2_snapshot_dirty_ranges[0]));
+     buffer->mgs2_snapshot_dirty_ranges[i].left = left;
+     buffer->mgs2_snapshot_dirty_ranges[i].right = right;
+     ++buffer->mgs2_snapshot_dirty_count;

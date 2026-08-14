@@ -1,0 +1,230 @@
+[New LWP 9377]
+[New LWP 9376]
+[New LWP 9375]
+[New LWP 9374]
+[New LWP 9373]
+[New LWP 9367]
+[New LWP 9366]
+[New LWP 9365]
+[New LWP 9364]
+[New LWP 9363]
+[New LWP 9362]
+[New LWP 9361]
+[New LWP 9360]
+[New LWP 9353]
+[New LWP 9347]
+[New LWP 9346]
+[New LWP 9345]
+[New LWP 9344]
+[New LWP 9343]
+[New LWP 9342]
+[New LWP 9341]
+[New LWP 9339]
+[New LWP 9334]
+[New LWP 9328]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+  Id   Target Id                                      Frame 
+* 1    Thread 0xf7d25020 (LWP 8704) "mgs2_sse_rg353v" 0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+  2    Thread 0x6fdff120 (LWP 9377) "wine_dinput_wor" 0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+  3    Thread 0x6feff120 (LWP 9376) "mgs2_sse_rg353v" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  4    Thread 0x6ffff120 (LWP 9375) "mgs2_sse_rg353v" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  5    Thread 0x700ff120 (LWP 9374) "mgs2_sse_rg353v" 0xf7ec3d0c in syscall () from /usr/lib32/libc.so.6
+  6    Thread 0x701ff120 (LWP 9373) "mgs2_sse_rg353v" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  7    Thread 0x704ff120 (LWP 9367) "wine_dmsynth_si" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  8    Thread 0x705ff120 (LWP 9366) "wine_dmsynth_si" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  9    Thread 0x706ff120 (LWP 9365) "wine_dmime_mess" 0xf7ec3d0c in syscall () from /usr/lib32/libc.so.6
+  10   Thread 0x70aff120 (LWP 9364) "mmdevapi_midi_n" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  11   Thread 0x70cff120 (LWP 9363) "wine_dsound_mix" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  12   Thread 0x70dff120 (LWP 9362) "audio_client_ti" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  13   Thread 0x717ff120 (LWP 9361) "data-loop.0"     0xf7e38938 in ?? () from /usr/lib32/libc.so.6
+  14   Thread 0x7246a120 (LWP 9360) "alsa-pipewire"   0xf7e38938 in ?? () from /usr/lib32/libc.so.6
+  15   Thread 0x731ff120 (LWP 9353) "wined3d_cs"      0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+  16   Thread 0x73dab120 (LWP 9347) "mali-compiler"   0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  17   Thread 0x74dac120 (LWP 9346) "mali-cmar-backe" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  18   Thread 0x755ad120 (LWP 9345) "mali-utility-wo" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  19   Thread 0x75dae120 (LWP 9344) "mali-utility-wo" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  20   Thread 0x765af120 (LWP 9343) "mali-utility-wo" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  21   Thread 0x76db0120 (LWP 9342) "mali-utility-wo" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  22   Thread 0x775b1120 (LWP 9341) "mali-mem-purge"  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+  23   Thread 0x7a2ff120 (LWP 9339) "mgs2_sse_rg353v" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  24   Thread 0x7c2d2120 (LWP 9334) "mgs2_sse_rg353v" 0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+  25   Thread 0x7d9cf120 (LWP 9328) "mgs2_sse_rg353v" 0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+
+Thread 25 (Thread 0x7d9cf120 (LWP 9328) "mgs2_sse_rg353v"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c734 in ?? () from /usr/lib32/libc.so.6
+#2  0xf7ebb41c in poll () from /usr/lib32/libc.so.6
+#3  0x6296f400 in iFpui (emu=0x7dcab4b8, fcn=4159419392) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2991
+#4  0x7eaa009c in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 24 (Thread 0x7c2d2120 (LWP 9334) "mgs2_sse_rg353v"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7dca5ef8, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 23 (Thread 0x7a2ff120 (LWP 9339) "mgs2_sse_rg353v"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7dca7160, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 22 (Thread 0x775b1120 (LWP 9341) "mali-mem-purge"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e2f5e4 in pthread_cond_wait () from /usr/lib32/libc.so.6
+#4  0x78bfbdd4 in osup_sync_object_wait () from /usr/lib32/libmali.so.1
+#5  0x78addf48 in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 21 (Thread 0x76db0120 (LWP 9342) "mali-utility-wo"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e38600 in ?? () from /usr/lib32/libc.so.6
+#4  0xf7e386dc in ?? () from /usr/lib32/libc.so.6
+#5  0x78a40c2e in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 20 (Thread 0x765af120 (LWP 9343) "mali-utility-wo"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e38600 in ?? () from /usr/lib32/libc.so.6
+#4  0xf7e386dc in ?? () from /usr/lib32/libc.so.6
+#5  0x78a40c2e in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 19 (Thread 0x75dae120 (LWP 9344) "mali-utility-wo"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e38600 in ?? () from /usr/lib32/libc.so.6
+#4  0xf7e386dc in ?? () from /usr/lib32/libc.so.6
+#5  0x78a40c2e in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 18 (Thread 0x755ad120 (LWP 9345) "mali-utility-wo"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e38600 in ?? () from /usr/lib32/libc.so.6
+#4  0xf7e386dc in ?? () from /usr/lib32/libc.so.6
+#5  0x78a40c2e in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 17 (Thread 0x74dac120 (LWP 9346) "mali-cmar-backe"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c734 in ?? () from /usr/lib32/libc.so.6
+#2  0xf7ebb41c in poll () from /usr/lib32/libc.so.6
+#3  0x78a40de2 in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 16 (Thread 0x73dab120 (LWP 9347) "mali-compiler"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e2f5e4 in pthread_cond_wait () from /usr/lib32/libc.so.6
+#4  0x78b0ed44 in ?? () from /usr/lib32/libmali.so.1
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 15 (Thread 0x731ff120 (LWP 9353) "wined3d_cs"):
+#0  0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+#1  0x00000000 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 14 (Thread 0x7246a120 (LWP 9360) "alsa-pipewire"):
+#0  0xf7e38938 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c734 in ?? () from /usr/lib32/libc.so.6
+#2  0xf7ec6cbc in epoll_wait () from /usr/lib32/libc.so.6
+#3  0x7c009ac8 in ?? () from /usr/lib32/spa-0.2/support/libspa-support.so
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 13 (Thread 0x717ff120 (LWP 9361) "data-loop.0"):
+#0  0xf7e38938 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c734 in ?? () from /usr/lib32/libc.so.6
+#2  0xf7ec6cbc in epoll_wait () from /usr/lib32/libc.so.6
+#3  0x7c009ac8 in ?? () from /usr/lib32/spa-0.2/support/libspa-support.so
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 12 (Thread 0x70dff120 (LWP 9362) "audio_client_ti"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c734 in ?? () from /usr/lib32/libc.so.6
+#2  0xf7ec3878 in select () from /usr/lib32/libc.so.6
+#3  0x62977830 in iFipppp (emu=0x7d4a39b0, fcn=4159453168) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:3795
+#4  0x71ab06f4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 11 (Thread 0x70cff120 (LWP 9363) "wine_dsound_mix"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7d4a4000, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 10 (Thread 0x70aff120 (LWP 9364) "mmdevapi_midi_n"):
+#0  0xf7e38934 in ?? () from /usr/lib32/libc.so.6
+#1  0xf7e2c69c in ?? () from /usr/lib32/libc.so.6
+#2  0xf7e2c9ec in ?? () from /usr/lib32/libc.so.6
+#3  0xf7e2f5e4 in pthread_cond_wait () from /usr/lib32/libc.so.6
+#4  0x6296ed6c in iFEpp (emu=0x7d4a4650, fcn=1654023104) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2948
+#5  0x71ac3334 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 9 (Thread 0x706ff120 (LWP 9365) "wine_dmime_mess"):
+#0  0xf7ec3d0c in syscall () from /usr/lib32/libc.so.6
+#1  0x62956784 in my_syscall (emu=0x7d4a4ca0) at /tmp/mgs2-box86-source/src/emu/x86syscall.c:817
+#2  0x6296d9e0 in lFEv () at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2797
+#3  0xf7aefc44 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 8 (Thread 0x705ff120 (LWP 9366) "wine_dmsynth_si"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7d4a52f0, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 7 (Thread 0x704ff120 (LWP 9367) "wine_dmsynth_si"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7d4a5940, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 6 (Thread 0x701ff120 (LWP 9373) "mgs2_sse_rg353v"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7d4a5f90, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 5 (Thread 0x700ff120 (LWP 9374) "mgs2_sse_rg353v"):
+#0  0xf7ec3d0c in syscall () from /usr/lib32/libc.so.6
+#1  0x62956784 in my_syscall (emu=0x7d4a65e0) at /tmp/mgs2-box86-source/src/emu/x86syscall.c:817
+#2  0x6296d9e0 in lFEv () at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2797
+#3  0xf7aefc44 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 4 (Thread 0x6ffff120 (LWP 9375) "mgs2_sse_rg353v"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7d4a6c30, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 3 (Thread 0x6feff120 (LWP 9376) "mgs2_sse_rg353v"):
+#0  0xf7ec1410 in ioctl () from /usr/lib32/libc.so.6
+#1  0x6296f030 in iFiLN (emu=0x7d4a7280, fcn=4159443952) at /tmp/mgs2-box86-source/src/wrapped/generated/wrapper.c:2963
+#2  0xf7b2bfe4 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 2 (Thread 0x6fdff120 (LWP 9377) "wine_dinput_wor"):
+#0  0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+#1  0x00000000 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+
+Thread 1 (Thread 0xf7d25020 (LWP 8704) "mgs2_sse_rg353v"):
+#0  0xf7e2cc6c in ?? () from /usr/lib32/libc.so.6
+#1  0x00000000 in ?? ()
+Backtrace stopped: previous frame identical to this frame (corrupt stack?)
+[Inferior 1 (process 8704) detached]

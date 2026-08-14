@@ -3,9 +3,10 @@
 This repo is a working port of Metal Gear Solid 2: Substance (2003, Direct3D 8)
 to an Anbernic RG353VS handheld: RK3566, four Cortex-A55, Mali-G52, 1 GB RAM,
 ROCKNIX, sway on Wayland, 32-bit Wine under Box86. Picture, sound and saves work.
-The open work is frame rate plus two intermittent runtime defects: gameplay SFX
-can disappear across encounter/map transitions, and the game can enter a
-no-render/input stall in its empty-message loop.
+The open work is frame rate plus intermittent gameplay SFX loss across
+encounter/map transitions. Two no-render/input stalls have been captured: the
+earlier empty-message spin and a distinct Box86 aligned-mutex first-use race;
+the latter has a direct reproducer and is fixed in FINALPLAY3/FINALPLAY4.
 
 The point of the repo is not the game. It is the Wine patches, the measurement
 harness, and the briefs recording **which hypotheses turned out wrong**.
@@ -18,6 +19,14 @@ docs/briefs/MGS2_DSOUND_SFX_STATE_CAPTURE_2026-08-10.md
                            current diagnostic for a missing player attack: exact
                            persistent DirectSound-pool controls, bounded ring,
                            valid interpretations and corrected live reader
+docs/briefs/MGS2_MANUAL_COMBAT_FREEZE_SOUND_CAPTURE_2026-08-13.md
+                           latest user-driven combined report: sustained combat
+                           slowdown measured, audio APIs healthy, but the exact
+                           missing attack was not timestamp-correlated
+docs/briefs/MGS2_REINFORCEMENT_ARM_TARGET_2026-08-14.md
+                           valid reinforcements profile: 11.9--19.5 fps at
+                           fixed 1992 MHz, exact JIT blocks, and why a whole
+                           WineD3D/ARM port is not a candidate
 docs/briefs/MGS2_DMIME_STATE_CAPTURE_2026-08-10.md
                            current one-reproduction diagnostic: capture point,
                            exact interpretations, build verification and rollback
@@ -31,7 +40,29 @@ docs/briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md
 docs/briefs/MGS2_RUNTIME_BUG_CAPTURE_2026-08-09.md
                            full chronological record of SFX work and the captured
                            PeekMessage no-render/input stall
-docs/briefs/MGS2_PERF_BRIEF_40.md   latest performance state and next measured work
+docs/briefs/MGS2_RUNTIME_MUTEX_FREEZE_2026-08-11.md
+                           START HERE for the later complete freeze: live mutex
+                           owner proof, Box86 root cause, direct A/B and fix
+docs/briefs/MGS2_SEPARABLE_FREEZE_CAPTURE_2026-08-12.md
+                           START HERE for the third freeze: live thread capture,
+                           untimed futex lost wakeup, what is ruled out, why it is
+                           NOT the 08-11 mutex bug, and patch 27's rollback
+docs/briefs/MGS2_TRANSITION_HITCH_RESEARCH_2026-08-12.md
+                           first-use link hitches: cause measured, separable
+                           stages measured at -42%, temporarily withdrawn during
+                           freeze triage, then restored after the attribution failed
+docs/briefs/MGS2_SHADER_FIRST_USE_RESEARCH_2026-08-13.md
+                           START HERE for save/map/enemy hitches: corrected autoload
+                           route, exact duplicate GLSL proof, patch 32 A/B and limits
+docs/briefs/MGS2_NATIVE_DSOUND_FIR_2026-08-13.md
+                           FINALPLAY4 native audio work: exact guest hotspot,
+                           bridge ABI, fixed-clock A/B, production hashes and rollback
+docs/briefs/MGS2_PERF_BRIEF_43.md   START HERE for performance: native Wine
+                                    memmove, exact copy census, cached DISCARD
+                                    shadow and measured 30 fps at the heavy spot
+docs/briefs/MGS2_FINALPLAY_BRIEF_42.md
+                                    clean FINALPLAY renderer baseline before #43
+docs/briefs/MGS2_PERF_BRIEF_40.md   earlier performance state and next measured work
 docs/briefs/MGS2_PERF_BRIEF_38.md   START HERE: real batchability is 8.49x, the merge
                                     mechanism works on this Mali, and the batcher is
                                     written and built but NOT yet measured
@@ -109,7 +140,15 @@ source and configured i386 build deliberately live one level above it:
     runtime bug capture; inspect the caller-specific PeekMessage wait before
     changing controller or gptokeyb code.
 
+box86-patches/03-aligned-mutex-publication.patch
+    Apply the production Box86 patch chain to the exact upstream commit named
+    in the runtime-mutex brief.
+    Patch 03 serialises aligned-mutex first allocation and publication; preserve
+    its acquire/release signature ordering and test it with
+    `harness/box86_mutex_first_use_stress.c` before changing the bridge.
+
 ../recovered-session/wine-11.0/dlls/wined3d/context_gl.c
+../recovered-session/wine-11.0/dlls/wined3d/glsl_shader.c
 ../recovered-session/wine-11.0/dlls/d3d8/device.c
 ../recovered-session/wine-11.0/dlls/d3d8/buffer.c
     Current MGS2 batch cache and D3D8 vertex-buffer dirty-range implementation.
@@ -164,14 +203,52 @@ often superseded or retracted **in writing** by later measurements.
 7. **Say what is measured and what is assumed.** Every number here is either
    from the device or labelled as an estimate. Keep it that way.
 
-## The current picture, in four lines
+## The current picture
 
 ```text
-the frame is CPU-bound: ~1000 draw calls and ~103 ms of CPU against 1.5 ms of GPU
-everything removable from the GPU and presentation path has been removed already
-the draws come in runs of 8.5 that can be merged; the batcher for that is unmeasured
-the largest untapped lever is thermal: the guard drops the clock 1992 -> 1104 MHz
-freezes are a wait inside Wine, not the SD card, not shaders, not throttling
+the old frame was CPU-bound; FINALPLAY already reduces ~1299 source draws to ~151 GL calls
+Box86 now bridges exact Wine _sse2_memmove to native ARM without changing semantics
+D3D8 keeps DISCARD writes in cached shadow instead of reading mapped upload memory back
+the former 20-fps fixed spot is measured at 30.0/30.0/30.1 fps at fixed 1992 MHz
+the 2026-08-11 complete freeze was Box86's racy native backing-mutex publication
+the direct old/fixed race test is FAIL versus 10/10 x 1,000 PASS; its fix remains deployed
+a third freeze on 2026-08-12 is captured but NOT attributed: untimed futex lost
+wakeup in the Box86 sync arena, waiting for non-zero, so not the 08-11 mutex bug
+patch 27 (separable stages, -42% on link) was rolled back and then restored: the
+freezes predate it, so it is production again and the trade is deliberate
+the opengl32 facade and the win32u GLES bridge are both load-bearing, measured
+ntdll_fastyield.so is no longer mounted: MGS2_YIELD was unset, so it was dead weight
+the attract-mode demo is deterministic: 31/9/11/4 frames over 50/100/200/500 ms in
+every arm, which makes it the cheapest valid A/B harness this project has
+the attract-mode stall buckets are not shaders, paging, SD or dynarec knobs; that
+claim does NOT transfer to a loaded save, where new enemies add measured links
+the least-optimised stack has the WORST stalls, so the optimisation chain reduces
+them; the freeze hypothesis about "some optimisation added them" is refuted
+patch 28 removed the culler's dead AABB cache; the culler itself is worth +17.5%
+BOX86_DYNAREC_SAFEFLAGS is back at its default 1: lowering it bought 0.9%
+patch 29 cut rejected GL state from ~436 to ~48 calls a second and is production
+patch 30 (separable for a programmable VS) is written, correct and OFF: measured to
+change nothing, because gameplay has no such pairs -- 6k also retracts 6j
+patch 31 measured +74% fps on an autoloaded corridor and was REVERTED the same day
+when the player found the game barely playable: the route had no transitions, no
+enemies, no cutscenes, and averaging fps over windows hid the cost. Read 6l before
+trusting any fps number taken from autoload_save.sh alone.
+the old autoload walk was invalid: up held Raiden against the upper closed door;
+down reaches the first guard and is now the default, with MGS2_WALK_KEY override
+patch 32 is production: an off-arm built 36 stages from 19 exact GLSL sources;
+17 redundant links cost 2.04 s, while cache-on emitted no source duplicate
+unique first-use links remain, so patch 32 reduces the hitch series rather than
+claiming that every multi-second save/map transition is fixed
+FINALPLAY4 is production: Wine's exact float DirectSound FIR target runs as native
+ARM in Box86; at fixed 1416 MHz mixer CPU fell 12.97% -> 7.57% of one core and
+guest dsound samples 717 -> 40. This is measured CPU relief, not a claimed FPS A/B
+because the two automatic combat windows diverged. The player's initial combat
+validation was normal; intermittent SFX loss remains open until a correlated repro
+the valid 14 August reinforcement profile is 18.3--19.5 fps, later 11.9--14.8,
+with one process, fixed 1992 MHz and 82.777 C: it is real scene cost, not a cap
+wined3d_cs is split 1218 Box86/Wine samples versus 1208 already-native libmali;
+whole-thread WineD3D-to-ARM is therefore rejected, and the next renderer decision
+needs an external, memory-only census of draw paths still reaching the driver
 ```
 
 ## Before proposing anything

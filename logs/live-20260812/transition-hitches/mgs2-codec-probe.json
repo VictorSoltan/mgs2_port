@@ -1,0 +1,73 @@
+{
+  "pid": 55335,
+  "address": "0x7b93f220",
+  "next_sequence": 6,
+  "records": [
+    {
+      "sequence": 1,
+      "op": "generate_texture",
+      "tid": 308,
+      "duration_us": 22,
+      "a": 26,
+      "b": 3553,
+      "c": 117,
+      "d": 0,
+      "object": "0x0f207e18"
+    },
+    {
+      "sequence": 2,
+      "op": "allocate_texture",
+      "tid": 308,
+      "duration_us": 177,
+      "a": 512,
+      "b": 256,
+      "c": 117,
+      "d": 32855,
+      "object": "0x0f207e18"
+    },
+    {
+      "sequence": 3,
+      "op": "upload_texture",
+      "tid": 308,
+      "duration_us": 744,
+      "a": 512,
+      "b": 256,
+      "c": 117,
+      "d": 0,
+      "object": "0x0f207e18"
+    },
+    {
+      "sequence": 4,
+      "op": "generate_texture",
+      "tid": 308,
+      "duration_us": 23,
+      "a": 27,
+      "b": 3553,
+      "c": 118,
+      "d": 0,
+      "object": "0x0af49138"
+    },
+    {
+      "sequence": 5,
+      "op": "allocate_texture",
+      "tid": 308,
+      "duration_us": 344,
+      "a": 256,
+      "b": 256,
+      "c": 118,
+      "d": 32856,
+      "object": "0x0af49138"
+    },
+    {
+      "sequence": 6,
+      "op": "upload_texture",
+      "tid": 308,
+      "duration_us": 4093,
+      "a": 256,
+      "b": 256,
+      "c": 118,
+      "d": 0,
+      "object": "0x0af49138"
+    }
+  ]
+}

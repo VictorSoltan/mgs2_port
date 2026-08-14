@@ -533,3 +533,27 @@ MGS2_D3D8_VISIBILITY_CULL=0
 ```text
 logs/rg353vs/visibility-cull/mgs2-visibility-cull-ab.log
 ```
+
+## 14. Закрытие исследовательской фазы
+
+Patch24 production default выше был промежуточным состоянием. После решения
+закончить renderer research он заменён FINALPLAY cleanup из брифа #42:
+
+```text
+wined3d_finalplay.dll  062252ffb24670485918384e62ce6257fa5828da53dabc14a53e6cc295e9d0cd
+d3d8_finalplay.dll     4246693700fcf8664001bbe94f313ec9b9e1d67b097e8b813ce5a730741cc3f3
+CPU PLAY target       1992000 Hz
+```
+
+Исторические A/B этого брифа остаются измерениями при 1800 МГц. 1992 МГц —
+выбранная пользователем частота финальной игры после улучшения охлаждения, а не
+основание пересчитывать старые результаты.
+
+Последняя проверка persistent shared arena + WORLD lift после FINALPLAY также
+закрыта в брифе #42: bounded arena работала без OOM, но дала ровно ноль lifted
+batches как вместе с visibility culling, так и вместо него. Production остался
+на FINALPLAY + culling.
+
+Последующий production-refactor физически удалил из patch 25 выключенные
+лабораторные ветки и release-ограждения. Поведение и launcher не менялись;
+актуальные SHA выше относятся уже к очищенным воспроизводимым DLL.

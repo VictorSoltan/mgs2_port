@@ -1,0 +1,18 @@
+Patch 35 -- keep the exact MGS2 AABB scan as a bridgeable diagnostic target.
+
+The production compiler inlines d3d8_mgs2_scan_aabb() into DrawPrimitive.  The
+native ARM experiment must identify exactly one reviewed function without
+changing its algorithm, so keep only this helper out of line.  Companion Box86
+patch 05 recognises its exact prologue and remains off unless
+MGS2_BOX86_NATIVE_AABB=1 is set.
+
+This patch alone is expected to be neutral/slightly slower and is not for
+production.  Its stripped candidate SHA256 is
+4ec1b13f30a8fb603d8f9b627739e81197b5170772afda6c73cc0994ea4ed619.
+
+--- a/dlls/d3d8/device.c
++++ b/dlls/d3d8/device.c
+@@ -2233,1 +2233,2 @@
+-static BOOL d3d8_mgs2_scan_aabb(const struct d3d8_vertexbuffer *buffer, unsigned int left,
++static __attribute__((noinline)) BOOL d3d8_mgs2_scan_aabb(
++        const struct d3d8_vertexbuffer *buffer, unsigned int left,

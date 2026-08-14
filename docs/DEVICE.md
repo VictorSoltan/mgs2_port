@@ -62,13 +62,20 @@ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq   # expect 1992000
 for p in /sys/devices/system/cpu/cpufreq/policy*; do echo 1992000 > $p/scaling_max_freq; done
 ```
 
+  1992000 is the correct value even though `scaling_available_frequencies` stops
+  at 1800000. That list omits the top OPP; `cpuinfo_max_freq` reports 1992000 and
+  the write above takes (verified on OS_VERSION 20260722, 2026-08-12). Do not
+  conclude from the shorter list that the fixed-clock baseline of the performance
+  briefs is unreachable — it is. There is one shared policy, `policy0`, for all
+  four A55 cores, so the loop writes a single file.
+
 ## Verifying what is actually running
 
 Never trust the filename you passed. Compare the mount target byte for byte:
 
 ```sh
 G=/storage/roms/ports/MGS2-Substance
-cmp -s /usr/lib/wine/i386-windows/wined3d.dll $G/wined3d_release3.dll && echo ok
+cmp -s /usr/lib/wine/i386-windows/wined3d.dll $G/wined3d_p32_ffp_source_dedup.dll && echo ok
 cmp -s /usr/lib/wine/i386-unix/winewayland.so $G/winewayland_stall1.so && echo ok
 ```
 
@@ -92,6 +99,12 @@ Each names a file in the game directory; the launcher bind-mounts it over the
 Wine module of that name and unmounts it on exit. This is how every A/B in this
 project was done — no rebuild, no reinstall.
 
+FINALPLAY4 production defaults are `box86-native-dsound-fir1`,
+`dsound_p36_native_fir_target.dll`, `dmsynth_p34_interp_reset.dll`, and
+`MGS2_BOX86_NATIVE_DSOUND_FIR=1`. The native FIR switch is valid only with that
+exact Box86/dsound pair. Set it to `0`, or select the previous FINALPLAY3
+`box86-native-memmove3` + `dsound_se1.dll` pair, for rollback.
+
 ## Measuring
 
 ```text
@@ -107,9 +120,82 @@ Harness scripts, all read-only against the game:
 
 ```text
 harness/perf_sample.py <seconds>     per-thread CPU, temperatures, GPU clock, cap
+harness/box86_guest_snapshot.py      external snapshot of Box86's bounded JIT map
+harness/box86_guest_profile.py       resolve an external perf trace using that map
+harness/freeze_capture.py --out DIR  one-shot capture AT a freeze, before killing
+harness/freeze_watchdog.sh           unattended: detects a freeze and captures it
+harness/autoload_save.sh [DIR]       cold start -> loaded save, no hands
 harness/stall_watch2.py <log> <sec>  what threads were doing during a freeze
 harness/sink_audible_test.sh         is anything audible, judged by capture not ears
 ```
+
+## Profiling a reported reinforcements slowdown
+
+Use production files plus only `MGS2_BOX86_GUEST_MAP=1`: it records bounded JIT
+block mappings in memory and makes no per-frame or per-draw output.  Once the
+player says reinforcements are entering, take one short external `perf` interval
+and snapshot the map immediately afterwards.  Do not enable `MGS2_TRACE`, batch
+profiles, or hot Wine debug output together with this run; those have changed the
+very frame bands being investigated.
+
+The 14 August valid capture had one process, fixed 1992 MHz and 82.777 C, yet
+showed 18.3--19.5 fps and later 11.9--14.8 fps.  It is the reference control for
+any future combat change; details and the exact external-reader interpretation
+are in `MGS2_REINFORCEMENT_ARM_TARGET_2026-08-14.md`.
+
+## Getting into real gameplay without hands
+
+The attract-mode demo is **not** a valid stand-in for gameplay, and both halves of
+that matter. It is frame-capped at 60, so an fps A/B inside it measures nothing:
+dropping the clock from 1992 to 1416 MHz left the average at 58.9 against 58.83.
+And the permanent freeze does not occur there — 8.4 hours on 2026-08-13 produced
+none.
+
+```sh
+./MGS2-Substance/autoload_save.sh /tmp/autoload
+```
+
+Cold start to a loaded save, writing a screenshot after every step so a wrong key
+is visible rather than mysterious. Gameplay walking now defaults to `down` and
+can be changed with `MGS2_WALK_KEY`. The old `up` route held Raiden against the
+upper closed door and never exposed the first guard. Its earlier 26.3 fps / six
+frames-over-500-ms result therefore describes a loaded but transition-free wall
+route and must not qualify enemy or map hitches. Use the corrected route, not the
+demo or that old number, for anything about gameplay stalls.
+
+Two things it cost to learn, both now encoded in the script:
+
+- **START does not advance the title screen.** `mgs2.gptk` maps `start=tab`, but
+  the game only reacts to the A button, which the same profile maps to `z`.
+- **One uinput device per keypress loses keys.** Creating and destroying the
+  device around each step dropped roughly every other event, which shifted the
+  whole route and confirmed NEW GAME twice, landing on the difficulty screen.
+  `autoload_save.py` creates the device once and times the steps inside its
+  lifetime; `send_key.py` remains correct for single keys.
+
+For a rare freeze, arm the watchdog instead of watching by hand and leave the game
+running:
+
+```sh
+setsid nohup ./MGS2-Substance/freeze_watchdog.sh 20 200 /tmp/auto-freeze \
+    /tmp/watchdog.log >/dev/null 2>&1 </dev/null &
+```
+
+It sums utime+stime over every thread each 20 s and fires after two consecutive
+windows below 200 ticks, then captures and exits, leaving the game frozen. The
+thresholds are calibrated, not guessed: normal running measured 4329 ticks per
+20 s on 2026-08-12, and the captured freeze left about 26. A recoverable
+multi-second stall cannot span two windows, so this only catches the permanent
+kind. It never kills anything.
+
+At a freeze, run `freeze_capture.py` first and kill the game only afterwards. It
+samples each thread exactly twice and reads nothing else, so it does not amplify
+the freeze the way the `stall_watch*` scripts do. It answers, in one pass, whether
+any thread is running, which threads stopped moving, whether their waits carry a
+timeout, whether the futex word can still be signalled, and what is mounted. Read
+its caveat: an untimed wait on an unchanged word is normal for an idle worker, so
+what matters is whether the *high-utime* threads stopped. That distinction is what
+produced the 2026-08-12 diagnosis.
 
 Read the caveat in brief #28 before using `stall_watch2.py`: it reads `wchan` for
 every thread ten times a second, which unwinds kernel stacks and measurably

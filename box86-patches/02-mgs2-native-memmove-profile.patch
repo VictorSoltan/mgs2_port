@@ -1,0 +1,309 @@
+diff --git a/src/box86context.c b/src/box86context.c
+index bdaaf91c..ad6e5cd4 100755
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -60,6 +60,114 @@ void finiAllHelpers(box86context_t* context)
+ 
+ void x86Syscall(x86emu_t *emu);
+ 
++/*
++ * Bounded, memory-only census for the MGS2 Wine memmove bridge.  This is a
++ * diagnostic, not production telemetry: there is no I/O on the hot path and
++ * the mapping is allocated only when MGS2_BOX86_MEMMOVE_STATS is enabled.
++ * An external reader snapshots the exported mapping after a fixed-scene run.
++ */
++#define MGS2_MEMMOVE_STATS_CAPACITY 16384u
++
++typedef struct mgs2_memmove_stat_s
++{
++    uint32_t state;                 /* 0 empty, 1 claimed, 2 published */
++    uint32_t caller;
++    uint32_t size;
++    uint32_t count;
++} mgs2_memmove_stat_t;
++
++__attribute__((visibility("default")))
++volatile uint32_t mgs2_memmove_stats_overflow;
++__attribute__((visibility("default")))
++const uint32_t mgs2_memmove_stats_capacity = MGS2_MEMMOVE_STATS_CAPACITY;
++__attribute__((visibility("default")))
++mgs2_memmove_stat_t *mgs2_memmove_stats;
++
++static int mgs2_memmove_stats_enabled;
++
++static void mgs2_memmove_stats_init(void)
++{
++    const char *value = getenv("MGS2_BOX86_MEMMOVE_STATS");
++
++    if (!value || !value[0] || value[0] == '0')
++        return;
++
++    mgs2_memmove_stats = mmap(NULL,
++            sizeof(*mgs2_memmove_stats) * MGS2_MEMMOVE_STATS_CAPACITY,
++            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    if (mgs2_memmove_stats == MAP_FAILED)
++    {
++        mgs2_memmove_stats = NULL;
++        return;
++    }
++    mgs2_memmove_stats_enabled = 1;
++}
++
++static void mgs2_memmove_stats_record(uint32_t caller, uint32_t size)
++{
++    uint32_t index = (caller * 2654435761u ^ size * 2246822519u)
++            & (MGS2_MEMMOVE_STATS_CAPACITY - 1);
++    uint32_t n;
++
++    if (!mgs2_memmove_stats_enabled)
++        return;
++
++    for (n = 0; n < MGS2_MEMMOVE_STATS_CAPACITY; ++n)
++    {
++        mgs2_memmove_stat_t *entry = &mgs2_memmove_stats[index];
++        uint32_t state = __atomic_load_n(&entry->state, __ATOMIC_ACQUIRE);
++
++        if (state == 2 && entry->caller == caller && entry->size == size)
++        {
++            __atomic_fetch_add(&entry->count, 1, __ATOMIC_RELAXED);
++            return;
++        }
++        if (!state)
++        {
++            uint32_t expected = 0;
++
++            if (__atomic_compare_exchange_n(&entry->state, &expected, 1, 0,
++                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
++            {
++                entry->caller = caller;
++                entry->size = size;
++                entry->count = 1;
++                __atomic_store_n(&entry->state, 2, __ATOMIC_RELEASE);
++                return;
++            }
++        }
++        index = (index + 1) & (MGS2_MEMMOVE_STATS_CAPACITY - 1);
++    }
++
++    __atomic_store_n(&mgs2_memmove_stats_overflow, 1, __ATOMIC_RELAXED);
++}
++
++static void mgs2_native_memmove_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++    void *dst = *(void **)(esp + 4);
++    const void *src = *(const void **)(esp + 8);
++    uint32_t size = *(uint32_t *)(esp + 12);
++
++    if (!size)
++    {
++        SetEAX(emu, (uintptr_t)dst);
++        return;
++    }
++    SetEAX(emu, (uintptr_t)((void *(*)(void *, const void *, size_t))fnc)
++            (dst, src, size));
++}
++
++static void mgs2_native_memmove_stats_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++
++    /* Wine's memmove tail-jumps to _sse2_memmove after restoring its frame, so
++     * the guest return address is the renderer call site we need to resolve. */
++    mgs2_memmove_stats_record(*(uint32_t *)esp, *(uint32_t *)(esp + 12));
++    mgs2_native_memmove_wrapper(emu, fnc);
++}
++
+ /// maxval not inclusive
+ int getrand(int maxval)
+ {
+@@ -239,10 +347,27 @@ box86context_t *NewBox86Context(int argc)
+     context->local_maplib = NewLibrarian(context, 1);
+     context->versym = NewDictionnary();
+     context->system = NewBridge();
++    mgs2_memmove_stats_init();
+     // Cannot use Bridge name as the map is not initialized yet
+     // create vsyscall
+     context->vsyscall = AddBridge(context->system, iFEv, x86Syscall, 0, NULL);
+     addAlternate((void*)0xffffe400, (void*)context->vsyscall);
++    /*
++     * MGS2 on 32-bit Wine spends a large part of its main thread in Wine's
++     * guest _sse2_memmove.  Allow a measured guest entry point to use the
++     * already wrapped native libc memmove instead.  bridge.c gates the redirect
++     * on Wine's exact function prologue, independent of the PE load address.
++     */
++    const char *mgs2_native_memmove_env = getenv("MGS2_BOX86_NATIVE_MEMMOVE");
++    if (mgs2_native_memmove_env && atoi(mgs2_native_memmove_env))
++    {
++        uintptr_t bridge = AddBridge(context->system,
++                mgs2_memmove_stats ? mgs2_native_memmove_stats_wrapper
++                        : mgs2_native_memmove_wrapper,
++                memmove, 0,
++                "MGS2 native memmove");
++        SetMGS2NativeMemmove(bridge);
++    }
+     // create exit bridge
+     context->exit_bridge = AddBridge(context->system, NULL, NULL, 0, NULL);
+ #ifdef BUILD_LIB
+diff --git a/src/dynarec/dynablock.c b/src/dynarec/dynablock.c
+index 66a6e4ce..0411aa83 100755
+--- a/src/dynarec/dynablock.c
++++ b/src/dynarec/dynablock.c
+@@ -32,6 +32,79 @@
+ 
+ KHASH_MAP_INIT_INT(dynablocks, dynablock_t*)
+ 
++/*
++ * MGS2 guest/native map recorder.
++ *
++ * Linux perf sees dynamically generated ARM instructions, but the standard
++ * Box86 build does not expose the x86 address that produced each block.  Keep
++ * a bounded anonymous mapping so an external reader can resolve a perf
++ * capture without adding any I/O to the emulation threads.  Keeping the
++ * records out of the executable's BSS is important: Wine uses nearby fixed
++ * 32-bit address ranges for PE modules.  Recording happens only when a block
++ * is compiled, never when it is executed, and is opt-in.
++ */
++#define MGS2_GUEST_MAP_CAPACITY 262144u
++
++typedef struct mgs2_guest_map_record_s
++{
++    uint32_t native_start;
++    uint32_t native_size;
++    uint32_t x86_start;
++    uint32_t x86_size;
++} mgs2_guest_map_record_t;
++
++__attribute__((visibility("default")))
++volatile uint32_t mgs2_guest_map_count;
++__attribute__((visibility("default")))
++volatile uint32_t mgs2_guest_map_overflow;
++__attribute__((visibility("default")))
++const uint32_t mgs2_guest_map_capacity = MGS2_GUEST_MAP_CAPACITY;
++__attribute__((visibility("default")))
++mgs2_guest_map_record_t *mgs2_guest_map;
++
++static int mgs2_guest_map_enabled;
++static pthread_once_t mgs2_guest_map_once = PTHREAD_ONCE_INIT;
++
++static void mgs2_guest_map_init(void)
++{
++    const char *value = getenv("MGS2_BOX86_GUEST_MAP");
++
++    if (!value || !value[0] || value[0] == '0')
++        return;
++
++    mgs2_guest_map = mmap(NULL,
++            sizeof(*mgs2_guest_map) * MGS2_GUEST_MAP_CAPACITY,
++            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    if (mgs2_guest_map == MAP_FAILED)
++    {
++        mgs2_guest_map = NULL;
++        return;
++    }
++    mgs2_guest_map_enabled = 1;
++}
++
++static void mgs2_guest_map_record(const dynablock_t *block)
++{
++    uint32_t index;
++
++    pthread_once(&mgs2_guest_map_once, mgs2_guest_map_init);
++    if (!mgs2_guest_map_enabled || !block || !block->block || !block->x86_size)
++        return;
++
++    index = __atomic_fetch_add(&mgs2_guest_map_count, 1, __ATOMIC_RELAXED);
++    if (index >= MGS2_GUEST_MAP_CAPACITY)
++    {
++        __atomic_store_n(&mgs2_guest_map_overflow, 1, __ATOMIC_RELAXED);
++        return;
++    }
++
++    mgs2_guest_map[index].native_start = (uintptr_t)block->block;
++    mgs2_guest_map[index].native_size = block->size - sizeof(void *);
++    mgs2_guest_map[index].x86_start = (uintptr_t)block->x86_addr;
++    mgs2_guest_map[index].x86_size = block->x86_size;
++    __atomic_thread_fence(__ATOMIC_RELEASE);
++}
++
+ uint32_t X31_hash_code(void* addr, int len)
+ {
+     if(!len) return 0;
+@@ -250,6 +323,7 @@ static dynablock_t* internalDBGetBlock(x86emu_t* emu, uintptr_t addr, uintptr_t
+         } else {
+             if(block->x86_size)
+                 block->done = 1;    // don't validate the block if the size is null, but keep the block
++            mgs2_guest_map_record(block);
+         }
+     }
+     if(need_lock)
+diff --git a/src/include/bridge.h b/src/include/bridge.h
+index ba9fc5cb..81556612 100755
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -17,6 +17,7 @@ uintptr_t AddCheckBridge(bridge_t* bridge, wrapper_t w, void* fnc, int N, const
+ uintptr_t AddAutomaticBridge(x86emu_t* emu, bridge_t* bridge, wrapper_t w, void* fnc, int N, const char* name);
+ void* GetNativeFnc(uintptr_t fnc);
+ void* GetNativeFncOrFnc(uintptr_t fnc);
++void SetMGS2NativeMemmove(uintptr_t alt);
+ 
+ int hasAlternate(void* addr);
+ void* getAlternate(void* addr);
+@@ -30,4 +31,4 @@ const char* getBridgeName(void* addr);
+ void init_bridge_helper();
+ void fini_bridge_helper();
+ 
+-#endif //__BRIDGE_H_
+\ No newline at end of file
++#endif //__BRIDGE_H_
+diff --git a/src/tools/bridge.c b/src/tools/bridge.c
+index 86d88e46..d9025ee1 100755
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -244,6 +244,12 @@ const char* getBridgeName(void* addr)
+ // Alternate address handling
+ KHASH_MAP_INIT_INT(alternate, void*)
+ static kh_alternate_t *my_alternates = NULL;
++static uintptr_t mgs2_native_memmove;
++
++void SetMGS2NativeMemmove(uintptr_t alt)
++{
++    mgs2_native_memmove = alt;
++}
+ 
+ int hasAlternate(void* addr) {
+     if(!my_alternates)
+@@ -256,10 +262,32 @@ int hasAlternate(void* addr) {
+ 
+ void* getAlternate(void* addr) {
+     if(!my_alternates)
+-        return addr;
++        goto mgs2_memmove;
+     khint_t k = kh_get(alternate, my_alternates, (uintptr_t)addr);
+     if(k!=kh_end(my_alternates))
+         return kh_value(my_alternates, k);
++
++mgs2_memmove:
++    if (mgs2_native_memmove && (uintptr_t)addr >= 0x10000 &&
++            getProtection((uintptr_t)addr))
++    {
++        /* Wine 11 i386 sse2_memmove through the direction comparison.  Match
++         * code, not its PE load address, so the lossless host bridge remains
++         * valid if Wine changes the module allocation order. */
++        static const unsigned char signature[] = {
++            0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c, 0x8b, 0x74, 0x24, 0x10,
++            0x8b, 0x4c, 0x24, 0x14, 0x89, 0xfa, 0x29, 0xf2, 0x39, 0xca,
++        };
++
++        if (!memcmp(addr, signature, sizeof(signature)))
++        {
++            static int reported;
++            if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED))
++                printf_log(LOG_INFO, "MGS2 native memmove: matched guest %p -> bridge %p\n",
++                        addr, (void *)mgs2_native_memmove);
++            return (void *)mgs2_native_memmove;
++        }
++    }
+     return addr;
+ }
+ void addAlternate(void* addr, void* alt) {

@@ -1,0 +1,118 @@
+Patch 36 -- expose Wine's exact DirectSound FIR loop to a native Box86 bridge.
+
+Guest profiling at the loaded combat route put 647/717 dsound samples in this
+single resampler block.  Keep the normal implementation as valid x86 and move
+only the float-output convolution behind a one-pointer job ABI.  Companion
+Box86 patch 06 recognises the exact helper prologue and is independently gated
+by MGS2_BOX86_NATIVE_DSOUND_FIR=1; with that variable unset this patch runs the
+same C loop inside Wine.
+
+Non-float output converters keep Wine's original callback path.  Buffer
+selection, committed-buffer handling, phase advancement and every DirectSound
+control remain in Wine.  The candidate DLL SHA256 is
+302eff548429c6b87aed3931bb0bb1acd4c4c8a130a96ae7025612c2d7eb999c.
+
+--- a/dlls/dsound/mixer.c
++++ b/dlls/dsound/mixer.c
+@@ -308,6 +308,65 @@ static UINT cp_fields_noresample(IDirectSoundBufferImpl *dsb, UINT count)
+     return count;
+ }
+
++/* Keep the expensive FIR convolution behind a simple, pointer-only ABI.  The
++ * ordinary implementation below remains valid x86 code; the MGS2 Box86 build
++ * may recognise its exact prologue and run the same job natively on ARM. */
++struct mgs2_fir_job
++{
++    float *output;
++    const float *intermediate;
++    float *fir_copy;
++    const float *fir_table;
++    DWORD count;
++    DWORD required_input;
++    DWORD channels;
++    DWORD output_channels;
++    DWORD firstep;
++    float firgain;
++    DWORD fir_length;
++    DWORD freq_start_low, freq_start_high;
++    DWORD freq_num_low, freq_num_high;
++    DWORD freq_den_low, freq_den_high;
++};
++
++static DECLSPEC_NOINLINE __attribute__((noclone)) void mgs2_resample_fir_target(
++        const struct mgs2_fir_job *job)
++{
++    ULONGLONG freq_start = ((ULONGLONG)job->freq_start_high << 32) | job->freq_start_low;
++    ULONGLONG freq_num = ((ULONGLONG)job->freq_num_high << 32) | job->freq_num_low;
++    ULONGLONG freq_den = ((ULONGLONG)job->freq_den_high << 32) | job->freq_den_low;
++    DWORD i;
++
++    for (i = 0; i < job->count; ++i)
++    {
++        ULONGLONG phase = freq_start + i * freq_num;
++        UINT int_fir_steps = phase * job->firstep / freq_den;
++        float total_fir_steps = phase * job->firstep / (float)freq_den;
++        UINT ipos = int_fir_steps / job->firstep;
++        UINT idx = (ipos + 1) * job->firstep - int_fir_steps - 1;
++        float rem = int_fir_steps + 1.0 - total_fir_steps;
++        UINT fir_used = 0, channel;
++
++        while (idx < job->fir_length - 1)
++        {
++            job->fir_copy[fir_used++] = job->fir_table[idx] * (1.0 - rem)
++                    + job->fir_table[idx + 1] * rem;
++            idx += job->firstep;
++        }
++
++        for (channel = 0; channel < job->channels; ++channel)
++        {
++            const float *cache = job->intermediate + channel * job->required_input + ipos;
++            float sum = 0.0f;
++            UINT j;
++
++            for (j = 0; j < fir_used; ++j)
++                sum += job->fir_copy[j] * cache[j];
++            job->output[i * job->output_channels + channel] = sum * job->firgain;
++        }
++    }
++}
++
+ static UINT cp_fields_resample(IDirectSoundBufferImpl *dsb, UINT count, LONG64 *freqAccNum)
+ {
+     UINT i, channel;
+@@ -364,7 +423,34 @@ static UINT cp_fields_resample(IDirectSoundBufferImpl *dsb, UINT count, LONG64 *
+                     dsb->buflen, dsb->sec_mixpos + i * istride, channel);
+     }
+
+-    for(i = 0; i < count; ++i) {
++    if (dsb->put == putieee32)
++    {
++        union { LONG64 value; struct { DWORD low, high; } word; } start, num, den;
++        struct mgs2_fir_job job;
++
++        start.value = freqAcc_start;
++        num.value = dsb->freqAdjustNum;
++        den.value = dsb->freqAdjustDen;
++        job.output = dsb->device->tmp_buffer;
++        job.intermediate = intermediate;
++        job.fir_copy = fir_copy;
++        job.fir_table = fir;
++        job.count = count;
++        job.required_input = required_input;
++        job.channels = dsb->mix_channels;
++        job.output_channels = ostride / sizeof(float);
++        job.firstep = dsbfirstep;
++        job.firgain = dsb->firgain;
++        job.fir_length = fir_len;
++        job.freq_start_low = start.word.low;
++        job.freq_start_high = start.word.high;
++        job.freq_num_low = num.word.low;
++        job.freq_num_high = num.word.high;
++        job.freq_den_low = den.word.low;
++        job.freq_den_high = den.word.high;
++        mgs2_resample_fir_target(&job);
++    }
++    else for(i = 0; i < count; ++i) {
+         UINT int_fir_steps = (freqAcc_start + i * dsb->freqAdjustNum) * dsbfirstep / dsb->freqAdjustDen;
+         float total_fir_steps = (freqAcc_start + i * dsb->freqAdjustNum) * dsbfirstep / (float)dsb->freqAdjustDen;
+         UINT ipos = int_fir_steps / dsbfirstep;
