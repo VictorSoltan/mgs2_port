@@ -1,7 +1,7 @@
 #!/bin/bash
-# MGS2 Substance RG353VS FINALPLAY4.
-# Fixed production stack only: no census, profile, stats, live switches or A/B
-# overrides. The renderer fast paths are compile-time policy in the FINAL DLLs.
+# MGS2 Substance RG353VS FINALPLAY6.
+# Production defaults, with explicit rollback/measurement overrides retained.
+# The renderer fast paths themselves remain compile-time policy in the DLLs.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster" ]; then
@@ -64,6 +64,15 @@ export BOX86_DYNAREC_SAFEFLAGS=1
 export BOX86_DYNAREC_BIGBLOCK=2
 export BOX86_DYNAREC_FORWARD=512
 export BOX86_DYNAREC_CALLRET=1
+# The 2026-08-14 live freeze captured wine_dinput_worker waiting on Wine's
+# session_lock while the backing ARM mutex named that same thread as owner.
+# Box86 patch 03 made first publication safe, but this second occurrence proves
+# that its shadow mutex pool is still not a safe production boundary here.
+# ROCKNIX armhf and this Wine i386 build both use a 24-byte, 4-byte-aligned
+# pthread_mutex_t with lock/count/owner/kind/nusers at identical offsets, so use
+# Box86's upstream direct-mutex mode and bypass the shadow pool completely.
+# This does not alter Wine locking semantics; set 0 only for rollback diagnosis.
+export BOX86_MUTEX_ALIGNED="${BOX86_MUTEX_ALIGNED:-1}"
 # Device profile at the fixed Game Data 02 spot attributes 31% of main-thread
 # samples to Wine's guest _sse2_memmove.  The patched Box86 recognises that
 # exact Wine 11 prologue and executes the same overlap-safe operation in native
@@ -112,12 +121,16 @@ CPU_POLICIES=$(ls -d /sys/devices/system/cpu/cpufreq/policy* 2>/dev/null)
 SAVED_GOV=""
 SAVED_MAX=""
 
+GPU_DEVFREQ=/sys/class/devfreq/fde60000.gpu
+SAVED_GPU_GOV=""
+
 save_cpu_state() {
     local p
     for p in $CPU_POLICIES; do
         SAVED_GOV="$SAVED_GOV $p:$(cat "$p/scaling_governor" 2>/dev/null)"
         SAVED_MAX="$SAVED_MAX $p:$(cat "$p/scaling_max_freq" 2>/dev/null)"
     done
+    SAVED_GPU_GOV="$(cat "$GPU_DEVFREQ/governor" 2>/dev/null)"
 }
 
 set_final_cpu_cap() {
@@ -126,10 +139,27 @@ set_final_cpu_cap() {
         echo performance > "$p/scaling_governor" 2>/dev/null
         echo 1992000 > "$p/scaling_max_freq" 2>/dev/null
     done
+    # The GPU sat on simple_ondemand and spent the reinforcement scene at
+    # 400-600 of its 800 MHz. The dead-end list said pinning it to 800 was a net
+    # loss because the CPU cap then fell to 816 MHz on a shared thermal budget --
+    # that was measured before the cooling was fixed, and it no longer holds.
+    #
+    # Re-measured 2026-08-16, one process, one spot (the autoload save), governor
+    # switched live, arms interleaved ondemand/performance/ondemand/performance:
+    #
+    #   simple_ondemand   n=35  median 15.20 fps  mean 15.21  sd 0.23
+    #   performance       n=39  median 16.90 fps  mean 16.85  sd 0.09
+    #   +1.64 fps, +10.8%, and the two ranges do not overlap at all
+    #
+    # The CPU stayed at 1992000 in every arm -- the old throttling did not
+    # recur -- ending at 78.1 C CPU / 73.3 C GPU, well under the 88 C cutoff.
+    # MGS2_GPU_GOVERNOR=simple_ondemand reverts it for one run.
+    echo "${MGS2_GPU_GOVERNOR:-performance}" > "$GPU_DEVFREQ/governor" 2>/dev/null
 }
 
 restore_cpu_state() {
     local e p v
+    [ -n "$SAVED_GPU_GOV" ] && echo "$SAVED_GPU_GOV" > "$GPU_DEVFREQ/governor" 2>/dev/null
     for e in $SAVED_MAX; do
         p="${e%%:*}"; v="${e##*:}"
         [ -n "$v" ] && echo "$v" > "$p/scaling_max_freq" 2>/dev/null
@@ -145,7 +175,63 @@ restore_cpu_state() {
 # captured leaving Wine's shared-session lock owned forever when concurrent
 # first users selected different native mutexes.  This changes no Wine lock
 # semantics and retains the measured native memmove path from FINALPLAY2.
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-native-dsound-fir1}" /usr/bin/box86 || exit 1
+# FINALPLAY6 promotes the native ARM WineD3D island. 32 WineD3D sources are
+# compiled for armhf and linked into Box86; 17 entry points are routed to them,
+# recognised by a marker in the guest prologue. Read this before trusting it:
+#
+#   Entry 10, wined3d_buffer_load, IS routed, and it is the one entry here
+#   carried by a measurement rather than by judgement:
+#
+#       routed      60.6 ms/frame
+#       unrouted    69.4 ms/frame
+#       difference  median -8.87 ms/f, -12.8%, 30 of 30 cycles, se 0.44 ms
+#
+#   That is about +2.1 fps on the reinforcement scene. It was measured with
+#   MGS2_ISLAND_AB=10, which switches that one entry between the native ARM
+#   route and the guest body every 64 displayed frames, ABBA, inside ONE live
+#   process. Eight separate playthroughs had previously measured nothing at
+#   all, because the scene moves between runs by more than 9 ms/frame.
+#
+#   Routing it required the class-B resolver: the dispatch inside its closure
+#   goes through pointers held in guest structures, and 21,433,346 of
+#   21,433,463 of those calls target a function the island already has natively.
+#
+#   Entry 4, mgs2_batch_flush, is the second performance-promoted route. In ten
+#   stable same-process ABBA pairs at the fixed reinforcement spot it measured
+#   53.466 ms/frame routed against 56.050 guest: paired median -2.680 ms/frame,
+#   +0.899 fps (+4.8%), with 10/10 stable pairs and zero island faults. The
+#   island31/p56 pair shares the authoritative guest batch state; do not mix
+#   island31 with an older WineD3D DLL.
+#
+#   The other 15 remain promoted on the owner's judgement, not on a number.
+#   They are exactly those with no reachable abort stub, no NtCurrentTeb read
+#   and no indirect call, from harness/island/full/island_reach.py. Anything
+#   else must not be added without re-running it.
+#
+#   MGS2_ISLAND_AB is CLEARED here, not merely left unset, and this is not
+#   defensive tidiness. The A/B harness deliberately runs half the frames
+#   through the guest path, so a value leaking in from a parent shell -- an
+#   exported measurement variable, a stale profile line -- would silently give
+#   back about half of the 8.87 ms and look like the island regressing. It is
+#   the one variable in this launcher whose accidental presence costs
+#   performance rather than causing an obvious failure, so it is cleared here.
+#
+#   A measurement run opts in under a DIFFERENT name, which is the point: the
+#   variable that can leak is not the variable that arms the harness, so an
+#   inherited environment cannot turn play into a measurement.
+#   device/launch-island-ab.sh sets MGS2_ISLAND_AB_MEASURE.
+unset MGS2_ISLAND_AB
+if [ -n "${MGS2_ISLAND_AB_MEASURE:-}" ]; then
+    export MGS2_ISLAND_AB="$MGS2_ISLAND_AB_MEASURE"
+    echo "MGS2: A/B harness armed on island entry $MGS2_ISLAND_AB -- this is a" \
+         "MEASUREMENT run, half the frames deliberately run unrouted" >&2
+fi
+#
+# MGS2_BOX86_ISLAND_FULL=0 turns the island off and takes the run back to the
+# previous stack, which is the first thing to try if anything misbehaves.
+export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-1}"
+export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,28,29,32,33}"
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-island31}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 mount_bind "$GAMEDIR/winewayland_stall1.so" /usr/lib/wine/i386-unix/winewayland.so || exit 1
 mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32.so || exit 1
@@ -171,7 +257,43 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # byte-identical duplicates costing 2.04 s; the cache-on run created no duplicate.
 # It changes first-use work only, not drawing. MGS2_GL_SOURCE_DEDUP=0 is the A/B
 # escape hatch. See MGS2_SHADER_FIRST_USE_RESEARCH_2026-08-13.md.
-mount_bind "$GAMEDIR/wined3d_p32_ffp_source_dedup.dll" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+# Patch 51 is p32 plus the island entry markers, with the laboratory counters
+# (p46 entry census, p50 indirect-call census) compiled out. The markers are not
+# instrumentation -- Box86 needs them to recognise an entry at all.
+# harness/island/full/island_marker_check.py verifies every id appears in exactly
+# one function AND inside Box86's matching window; nine of them used to sit past
+# the old 16-byte window and could never match, which read as "armed but not
+# called" until the check was written.
+# Patch 52 rides along: a memory-only census of the WineD3D CS synchronisation
+# events. The freeze that is still open has been captured three times, every one
+# of them in real play and never under a harness -- an accelerated soak with the
+# spin count at 1 could not provoke it in 30 minutes. So instrument what does
+# provoke it. The census records submits, alerts and wait enter/return, never
+# draws, and publishes the live cs pointer and field offsets so that
+# harness/cs_deadlock_census.py can answer the question no previous capture
+# could: were commands published while the consumer slept (A), or were the
+# queues empty and the fault elsewhere (B)?
+#
+# Cost is a handful of counter writes per sync event. MGS2_CS_DEADLOCK_CENSUS=0
+# turns it off; the DLL is otherwise identical to p51.
+#
+# p55 supersedes p52 and KEEPS that census -- it is p52 plus 8538 bytes: the
+# class-B/C plumbing entry 10 needs. Checked byte-wise rather than assumed,
+# because losing the census here would silently end the freeze investigation
+# that has been waiting for a natural occurrence.
+#
+# The rest of p55 is the GL side of routing: gl_ops is translated once per
+# device, keyed on each slot's POSITION in the struct rather than on the address
+# it holds. Both sides generate that struct from the same four macro lists, so
+# the position already carries the name. The address-keyed version resolved 3
+# slots of 493 and wrote the other 490 back as NULL, which then faulted in-game
+# minutes later; by name it resolves 233, and the 260 still unresolved are not
+# reached by any armed entry.
+#
+# p56 adds the cold guest-batch accessor required by island31. Keep these two
+# binaries paired. p55 + island29 is the exact rollback baseline.
+export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_p56_batch_state.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the

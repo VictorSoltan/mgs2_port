@@ -1,0 +1,453 @@
+Patch 37 -- bounded memory-only submission census for the reinforcement scene.
+
+This diagnostic patch records source indexed/non-indexed draws, exact adjacent
+indexed ranges, conservative CSMT barriers, and final GL submissions. It writes
+no log, allocates no memory in the hot path, and is off unless
+MGS2_REINFORCEMENT_CENSUS=1. Read it externally with
+harness/reinforcement_submit_census.py.
+
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -665,6 +665,239 @@
+     return packet;
+ }
+ 
++/* Bounded, memory-only census for the reinforcement renderer profile. Source
++ * draws and final GL submissions are counted by the CSMT consumer. The public
++ * snapshot is copied only at Present and is read externally through
++ * /proc/<pid>/mem; there is no hot-thread output, allocation, or timestamping. */
++#define MGS2_SUBMIT_CENSUS_MAGIC 0x31534352 /* RCS1 */
++
++struct mgs2_submit_census_payload
++{
++    unsigned int cs_presents;
++    unsigned int source_draws;
++    unsigned int source_nonindexed;
++    unsigned int source_indexed;
++    unsigned int source_direct_packets;
++    unsigned int source_batch_packets;
++    unsigned int indexed_trianglelist;
++    unsigned int indexed_strip;
++    unsigned int indexed_other;
++    unsigned int indexed_adjacent_pairs;
++    unsigned int indexed_mergeable_list_pairs;
++    unsigned int indexed_candidate_strip_pairs;
++    unsigned int break_after_other_draw;
++    unsigned int break_state;
++    unsigned int break_primitive;
++    unsigned int break_ib;
++    unsigned int break_format_offset;
++    unsigned int break_base;
++    unsigned int break_instanced;
++    unsigned int break_gap;
++    unsigned int break_unsupported;
++    unsigned int final_draws;
++    unsigned int final_arrays;
++    unsigned int final_elements;
++    unsigned int final_batch_elements;
++    unsigned int final_instanced;
++    unsigned int final_other;
++};
++
++struct mgs2_submit_census_public
++{
++    unsigned int magic;
++    unsigned int version;
++    unsigned int size_words;
++    unsigned int signature;
++    unsigned int enabled;
++    LONG publish_sequence;
++    struct mgs2_submit_census_payload counters;
++};
++
++struct mgs2_submit_census_public mgs2_reinforcement_submit_census =
++{
++    MGS2_SUBMIT_CENSUS_MAGIC,
++    1,
++    sizeof(struct mgs2_submit_census_public) / sizeof(unsigned int),
++    ~MGS2_SUBMIT_CENSUS_MAGIC,
++};
++
++static struct
++{
++    struct mgs2_submit_census_payload counters;
++    unsigned int epoch;
++    BOOL previous_valid;
++    BOOL previous_indexed;
++    enum wined3d_primitive_type previous_primitive;
++    struct wined3d_buffer *previous_ib;
++    enum wined3d_format_id previous_format;
++    unsigned int previous_index_offset;
++    int previous_base;
++    unsigned int previous_start;
++    unsigned int previous_count;
++    unsigned int previous_instance_count;
++    unsigned int previous_epoch;
++} mgs2_submit_census_live;
++
++static BOOL mgs2_submit_census_on(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        const char *value = getenv("MGS2_REINFORCEMENT_CENSUS");
++
++        enabled = value && strcmp(value, "0");
++        mgs2_reinforcement_submit_census.enabled = enabled;
++    }
++    return enabled;
++}
++
++static void mgs2_submit_census_present(void)
++{
++    if (!mgs2_submit_census_on())
++        return;
++
++    ++mgs2_submit_census_live.counters.cs_presents;
++    InterlockedIncrement(&mgs2_reinforcement_submit_census.publish_sequence);
++    mgs2_reinforcement_submit_census.counters = mgs2_submit_census_live.counters;
++    InterlockedIncrement(&mgs2_reinforcement_submit_census.publish_sequence);
++}
++
++static void mgs2_submit_census_barrier(void)
++{
++    if (mgs2_submit_census_on())
++        ++mgs2_submit_census_live.epoch;
++}
++
++static void mgs2_submit_census_packet(BOOL batch)
++{
++    if (!mgs2_submit_census_on())
++        return;
++    if (batch)
++        ++mgs2_submit_census_live.counters.source_batch_packets;
++    else
++        ++mgs2_submit_census_live.counters.source_direct_packets;
++}
++
++static void mgs2_submit_census_source_draw(const struct wined3d_state *state,
++        enum wined3d_primitive_type primitive_type, const struct wined3d_draw_parameters *parameters)
++{
++    const struct wined3d_direct_draw_parameters *direct;
++    struct mgs2_submit_census_payload *c;
++
++    if (!mgs2_submit_census_on())
++        return;
++
++    c = &mgs2_submit_census_live.counters;
++    ++c->source_draws;
++    if (!parameters->indexed)
++    {
++        ++c->source_nonindexed;
++    }
++    else if (primitive_type == WINED3D_PT_TRIANGLELIST)
++    {
++        ++c->source_indexed;
++        ++c->indexed_trianglelist;
++    }
++    else if (primitive_type == WINED3D_PT_TRIANGLESTRIP)
++    {
++        ++c->source_indexed;
++        ++c->indexed_strip;
++    }
++    else
++    {
++        ++c->source_indexed;
++        ++c->indexed_other;
++    }
++
++    if (parameters->indexed && !parameters->indirect)
++    {
++        direct = &parameters->u.direct;
++        if (!mgs2_submit_census_live.previous_valid || !mgs2_submit_census_live.previous_indexed)
++        {
++            if (mgs2_submit_census_live.previous_valid)
++                ++c->break_after_other_draw;
++        }
++        else
++        {
++            ++c->indexed_adjacent_pairs;
++            if (mgs2_submit_census_live.previous_epoch != mgs2_submit_census_live.epoch)
++                ++c->break_state;
++            else if (mgs2_submit_census_live.previous_primitive != primitive_type)
++                ++c->break_primitive;
++            else if (mgs2_submit_census_live.previous_ib != state->index_buffer)
++                ++c->break_ib;
++            else if (mgs2_submit_census_live.previous_format != state->index_format
++                    || mgs2_submit_census_live.previous_index_offset != state->index_offset)
++                ++c->break_format_offset;
++            else if (mgs2_submit_census_live.previous_base != direct->base_vertex_idx)
++                ++c->break_base;
++            else if (mgs2_submit_census_live.previous_instance_count || direct->instance_count)
++                ++c->break_instanced;
++            else if (mgs2_submit_census_live.previous_start
++                    + mgs2_submit_census_live.previous_count != direct->start_idx)
++                ++c->break_gap;
++            else if (primitive_type == WINED3D_PT_TRIANGLELIST)
++                ++c->indexed_mergeable_list_pairs;
++            else if (primitive_type == WINED3D_PT_TRIANGLESTRIP)
++                ++c->indexed_candidate_strip_pairs;
++            else
++                ++c->break_unsupported;
++        }
++    }
++
++    mgs2_submit_census_live.previous_valid = TRUE;
++    mgs2_submit_census_live.previous_indexed = parameters->indexed;
++    mgs2_submit_census_live.previous_primitive = primitive_type;
++    mgs2_submit_census_live.previous_ib = state->index_buffer;
++    mgs2_submit_census_live.previous_format = state->index_format;
++    mgs2_submit_census_live.previous_index_offset = state->index_offset;
++    mgs2_submit_census_live.previous_epoch = mgs2_submit_census_live.epoch;
++    if (!parameters->indirect)
++    {
++        direct = &parameters->u.direct;
++        mgs2_submit_census_live.previous_base = direct->base_vertex_idx;
++        mgs2_submit_census_live.previous_start = direct->start_idx;
++        mgs2_submit_census_live.previous_count = direct->index_count;
++        mgs2_submit_census_live.previous_instance_count = direct->instance_count;
++    }
++    else
++    {
++        mgs2_submit_census_live.previous_base = 0;
++        mgs2_submit_census_live.previous_start = 0;
++        mgs2_submit_census_live.previous_count = 0;
++        mgs2_submit_census_live.previous_instance_count = 1;
++    }
++}
++
++void mgs2_submit_census_gl_draw(unsigned int kind, unsigned int count)
++{
++    struct mgs2_submit_census_payload *c;
++
++    if (!mgs2_submit_census_on() || !count)
++        return;
++    c = &mgs2_submit_census_live.counters;
++    c->final_draws += count;
++    switch (kind)
++    {
++        case MGS2_SUBMIT_GL_ARRAYS:
++            c->final_arrays += count;
++            break;
++        case MGS2_SUBMIT_GL_ELEMENTS:
++            c->final_elements += count;
++            break;
++        case MGS2_SUBMIT_GL_BATCH_ELEMENTS:
++            c->final_batch_elements += count;
++            break;
++        case MGS2_SUBMIT_GL_INSTANCED:
++            c->final_instanced += count;
++            break;
++        default:
++            c->final_other += count;
++            break;
++    }
++}
++
+ static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
+ {
+ }
+@@ -687,6 +920,7 @@
+     /* MGS2: a merged draw run left pending at end of frame would otherwise be
+      * drawn into the NEXT frame. This is the one flush that is not optional. */
+     mgs2_batch_present();
++    mgs2_submit_census_present();
+ 
+     swapchain = op->swapchain;
+     desc = &swapchain->state.desc;
+@@ -1154,6 +1388,7 @@
+     }
+     state->patch_vertex_count = patch_vertex_count;
+ 
++    mgs2_submit_census_source_draw(state, primitive_type, parameters);
+     cs->c.device->adapter->adapter_ops->adapter_draw_primitive(cs->c.device, state, parameters);
+ }
+ 
+@@ -1161,6 +1396,7 @@
+ {
+     const struct wined3d_cs_draw *op = data;
+ 
++    mgs2_submit_census_packet(FALSE);
+     wined3d_cs_exec_draw_one(cs, op->primitive_type, op->patch_vertex_count, &op->parameters);
+ }
+ 
+@@ -1169,6 +1405,7 @@
+     const struct wined3d_cs_draw_batch *op = data;
+     unsigned int i;
+ 
++    mgs2_submit_census_packet(TRUE);
+     for (i = 0; i < op->count; ++i)
+     {
+         struct wined3d_draw_parameters parameters;
+@@ -3203,7 +3440,10 @@
+ static inline void mgs2_cs_dispatch(struct wined3d_cs *cs, enum wined3d_cs_op opcode, const void *data)
+ {
+     if (opcode != WINED3D_CS_OP_DRAW && opcode != WINED3D_CS_OP_DRAW_BATCH)
++    {
++        mgs2_submit_census_barrier();
+         mgs2_batch_flush();
++    }
+     wined3d_cs_op_handlers[opcode](cs, data);
+ }
+ 
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4670,6 +4670,7 @@
+     /* One draw is not worth an index buffer: issue it the ordinary way. */
+     if (mgs2_batch.n == 1)
+     {
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1);
+         gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                 mgs2_batch.first[0], mgs2_batch.count[0]);
+         mgs2_batch.n = 0;
+@@ -4696,6 +4697,7 @@
+     {
+         wined3d_context_gl_bind_bo(context_gl, GL_ELEMENT_ARRAY_BUFFER, entry->bo);
+         mgs2_batch_restart_begin(context_gl, gl_info);
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1);
+         gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+                 entry->index_type, (const void *)(ULONG_PTR)entry->offset);
+         mgs2_batch.n = 0;
+@@ -4706,6 +4708,7 @@
+     entry = mgs2_batch_cache_make_room(context_gl, gl_info, bytes, hash);
+     if (!entry)
+     {
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
+         for (i = 0; i < mgs2_batch.n; ++i)
+             gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+@@ -4752,6 +4755,7 @@
+         free(entry->count);
+         entry->first = entry->count = NULL;
+         mgs2_batch_cache_cancel(entry);
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
+         for (i = 0; i < mgs2_batch.n; ++i)
+             gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+@@ -4768,6 +4772,7 @@
+         free(entry->count);
+         entry->first = entry->count = NULL;
+         mgs2_batch_cache_cancel(entry);
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
+         for (i = 0; i < mgs2_batch.n; ++i)
+             gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+@@ -4790,6 +4795,7 @@
+     mgs2_batch_cache_bytes += bytes;
+ 
+     mgs2_batch_restart_begin(context_gl, gl_info);
++    mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1);
+     gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+             entry->index_type, (const void *)(ULONG_PTR)entry->offset);
+     mgs2_batch.n = 0;
+@@ -4875,6 +4881,7 @@
+                 return;
+ 
+ 
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1);
+             gl_info->gl_ops.gl.p_glDrawArrays(mode, start_idx, count);
+             checkGLcall("glDrawArrays");
+             return;
+@@ -4882,11 +4889,13 @@
+ 
+         if (gl_info->supported[ARB_DRAW_ELEMENTS_BASE_VERTEX])
+         {
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ELEMENTS, 1);
+             GL_EXTCALL(glDrawElementsBaseVertex(mode, count, idx_type, indices, base_vertex_idx));
+             checkGLcall("glDrawElementsBaseVertex");
+             return;
+         }
+ 
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ELEMENTS, 1);
+         gl_info->gl_ops.gl.p_glDrawElements(mode, count, idx_type, indices);
+         checkGLcall("glDrawElements");
+         return;
+@@ -4901,11 +4910,13 @@
+         {
+             if (gl_info->supported[ARB_BASE_INSTANCE])
+             {
++                mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+                 GL_EXTCALL(glDrawArraysInstancedBaseInstance(mode, start_idx, count, instance_count, start_instance));
+                 checkGLcall("glDrawArraysInstancedBaseInstance");
+                 return;
+             }
+ 
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+             GL_EXTCALL(glDrawArraysInstanced(mode, start_idx, count, instance_count));
+             checkGLcall("glDrawArraysInstanced");
+             return;
+@@ -4913,6 +4924,7 @@
+ 
+         if (gl_info->supported[ARB_BASE_INSTANCE])
+         {
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+             GL_EXTCALL(glDrawElementsInstancedBaseVertexBaseInstance(mode, count, idx_type,
+                     indices, instance_count, base_vertex_idx, start_instance));
+             checkGLcall("glDrawElementsInstancedBaseVertexBaseInstance");
+@@ -4920,12 +4932,14 @@
+         }
+         if (gl_info->supported[ARB_DRAW_ELEMENTS_BASE_VERTEX])
+         {
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+             GL_EXTCALL(glDrawElementsInstancedBaseVertex(mode, count, idx_type,
+                     indices, instance_count, base_vertex_idx));
+             checkGLcall("glDrawElementsInstancedBaseVertex");
+             return;
+         }
+ 
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+         GL_EXTCALL(glDrawElementsInstanced(mode, count, idx_type, indices, instance_count));
+         checkGLcall("glDrawElementsInstanced");
+         return;
+@@ -4975,11 +4989,13 @@
+ 
+         if (gl_info->supported[ARB_DRAW_ELEMENTS_BASE_VERTEX])
+         {
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+             GL_EXTCALL(glDrawElementsBaseVertex(mode, count, idx_type, indices, base_vertex_idx));
+             checkGLcall("glDrawElementsBaseVertex");
+         }
+         else
+         {
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+             gl_info->gl_ops.gl.p_glDrawElements(mode, count, idx_type, indices);
+             checkGLcall("glDrawElements");
+         }
+@@ -5009,10 +5025,12 @@
+         GLenum idx_type = idx_size == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
+         if (state->index_offset)
+             FIXME("Ignoring index offset %u.\n", state->index_offset);
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_OTHER, 1);
+         GL_EXTCALL(glDrawElementsIndirect(gl_primitive_type, idx_type, offset));
+     }
+     else
+     {
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_OTHER, 1);
+         GL_EXTCALL(glDrawArraysIndirect(gl_primitive_type, offset));
+     }
+ 
+@@ -5603,6 +5621,7 @@
+         GL_EXTCALL(glEnableVertexAttribArray(0));
+         GL_EXTCALL(glEnableVertexAttribArray(1));
+ 
++        mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_OTHER, 1);
+         gl_info->gl_ops.gl.p_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+ 
+         GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -5108,4 +5108,13 @@
+ void mgs2_batch_flush(void);
+ void mgs2_batch_present(void);
+ 
++/* Diagnostic-only reinforcement submission census. The implementation is
++ * memory-only and enabled by MGS2_REINFORCEMENT_CENSUS. */
++#define MGS2_SUBMIT_GL_ARRAYS          1
++#define MGS2_SUBMIT_GL_ELEMENTS        2
++#define MGS2_SUBMIT_GL_BATCH_ELEMENTS  3
++#define MGS2_SUBMIT_GL_INSTANCED       4
++#define MGS2_SUBMIT_GL_OTHER           5
++void mgs2_submit_census_gl_draw(unsigned int kind, unsigned int count);
++
+ #endif

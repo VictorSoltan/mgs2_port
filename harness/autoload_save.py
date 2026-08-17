@@ -34,11 +34,23 @@ import send_key  # constants, uinput plumbing and the sway focus helper
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/autoload"
 CONFIRM = sys.argv[2] if len(sys.argv) > 2 else "z"
 
+# The save list opens on the wrong entry. The save this project measures on --
+# the heavy spot with the reinforcement encounter -- is two positions up, so the
+# cursor has to be moved before confirming. Reported by the owner on
+# 2026-08-15, after the first unattended runs kept loading a different save and
+# quietly measuring the wrong scene. MGS2_SAVE_UP overrides the count for a
+# different save; 0 keeps the old behaviour.
+SAVE_UP = int(os.environ.get("MGS2_SAVE_UP", "2"))
+
 # step name, key, seconds to wait AFTER it before the screenshot
 ROUTE = [
     ("1-main-menu",    CONFIRM, 6),
     ("2-on-load-game", "down",  3),
     ("3-save-list",    CONFIRM, 7),
+] + [
+    ("3%s-save-up-%d" % (chr(ord("a") + i), i + 1), "up", 2)
+    for i in range(SAVE_UP)
+] + [
     ("4-confirm-box",  CONFIRM, 5),
     ("5-on-yes",       "left",  3),
     ("6-loaded",       CONFIRM, 50),

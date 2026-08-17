@@ -1,0 +1,239 @@
+Patch 39 -- bounded memory-only renderer-wait census.
+
+Splits the CSMT consumer into exec / present / idle so the CPU-occupancy
+reading can be separated into real work, GPU round-trip and empty-queue spin.
+Two clock reads per present, two per idle episode, none per packet. No
+allocation, no I/O, no logging. Off unless MGS2_REINFORCEMENT_CENSUS=1.
+Read with harness/reinforcement_wait_census.py.
+
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -1653,6 +1653,185 @@
+     InterlockedIncrement(&mgs2_reinforcement_break_census.publish_sequence);
+ }
+ 
++
++/* ---------------------------------------------------------------------------
++ * Patch 39 -- where the renderer thread's idle time goes.
++ *
++ * The 2026-08-14 frame-limit probe measured wined3d_cs at 0.671 of a core while
++ * the GPU spent 71.6% of the fight at or below half its maximum frequency: the
++ * frame is lost to waiting, not to throughput. But the CSMT consumer *spins*
++ * with YieldProcessor() on an empty queue before it ever blocks, and a spin
++ * burns utime exactly like real work. So "0.671 core" may be mostly waiting.
++ *
++ * This splits the consumer loop into four bounded accounts:
++ *
++ *   exec      executing command packets
++ *   present   inside the PRESENT handler, i.e. the GPU round-trip
++ *   spin      queue empty, spinning
++ *   blocked   queue empty, actually asleep on the event
++ *
++ * Cost control: the clock is read twice per present and twice per *idle
++ * episode* (a run of empty-queue polls), never per spin iteration and never per
++ * packet. At ~14 fps that is a few dozen QueryPerformanceCounter calls a second.
++ * Spin iterations are a plain counter. No allocation, no I/O, no logging.
++ * Off unless MGS2_REINFORCEMENT_CENSUS=1.
++ * --------------------------------------------------------------------------- */
++#define MGS2_P39_CENSUS_MAGIC 0x39335250 /* PR39 */
++
++struct mgs2_p39_payload
++{
++    unsigned int presents;
++    unsigned int idle_episodes;
++    unsigned int spin_iterations;
++    unsigned int wait_event_calls;
++    unsigned int packets;
++
++    /* Accumulated microseconds. 32-bit is enough for a bounded capture and
++     * keeps the published record a flat array of words like p37 and p38. */
++    unsigned int present_us;
++    unsigned int idle_us;
++    unsigned int exec_us;
++    unsigned int wall_us;
++
++    /* Per-present distribution of the GPU round-trip, in microseconds. */
++    unsigned int present_hist[8];   /* <1ms 1-2 2-4 4-8 8-16 16-32 32-64 64+ */
++    unsigned int idle_hist[8];
++};
++
++struct mgs2_p39_public
++{
++    unsigned int magic;
++    unsigned int version;
++    unsigned int size_words;
++    unsigned int signature;
++    unsigned int enabled;
++    LONG publish_sequence;
++    struct mgs2_p39_payload counters;
++};
++
++struct mgs2_p39_public mgs2_reinforcement_wait_census =
++{
++    MGS2_P39_CENSUS_MAGIC,
++    1,
++    sizeof(struct mgs2_p39_public) / sizeof(unsigned int),
++    ~MGS2_P39_CENSUS_MAGIC,
++};
++
++static LARGE_INTEGER mgs2_p39_present_start;
++
++static struct
++{
++    struct mgs2_p39_payload counters;
++    LARGE_INTEGER frequency;
++    LARGE_INTEGER last_mark;      /* wall clock reference, advanced at present */
++    LARGE_INTEGER idle_start;
++    BOOL idle_open;
++    BOOL started;
++} mgs2_p39;
++
++static unsigned int mgs2_p39_us_bucket(unsigned int us)
++{
++    if (us < 1000)   return 0;
++    if (us < 2000)   return 1;
++    if (us < 4000)   return 2;
++    if (us < 8000)   return 3;
++    if (us < 16000)  return 4;
++    if (us < 32000)  return 5;
++    if (us < 64000)  return 6;
++    return 7;
++}
++
++static unsigned int mgs2_p39_elapsed_us(const LARGE_INTEGER *from, const LARGE_INTEGER *to)
++{
++    LONGLONG ticks = to->QuadPart - from->QuadPart;
++
++    if (ticks <= 0 || !mgs2_p39.frequency.QuadPart)
++        return 0;
++    return (unsigned int)((ticks * 1000000) / mgs2_p39.frequency.QuadPart);
++}
++
++static BOOL mgs2_p39_on(void)
++{
++    if (!mgs2_submit_census_on())
++        return FALSE;
++    if (!mgs2_p39.started)
++    {
++        QueryPerformanceFrequency(&mgs2_p39.frequency);
++        QueryPerformanceCounter(&mgs2_p39.last_mark);
++        mgs2_p39.started = TRUE;
++        mgs2_reinforcement_wait_census.enabled = 1;
++    }
++    return TRUE;
++}
++
++/* Called every time the consumer sees an empty queue. Only the first poll of a
++ * run reads the clock; the rest just increment. */
++static void mgs2_p39_spin(void)
++{
++    if (!mgs2_p39_on())
++        return;
++    ++mgs2_p39.counters.spin_iterations;
++    if (!mgs2_p39.idle_open)
++    {
++        QueryPerformanceCounter(&mgs2_p39.idle_start);
++        mgs2_p39.idle_open = TRUE;
++        ++mgs2_p39.counters.idle_episodes;
++    }
++}
++
++static void mgs2_p39_wait_event(void)
++{
++    if (mgs2_p39_on())
++        ++mgs2_p39.counters.wait_event_calls;
++}
++
++/* Called when the consumer finds work again, closing an idle episode. */
++static void mgs2_p39_busy(void)
++{
++    LARGE_INTEGER now;
++    unsigned int us;
++
++    if (!mgs2_p39_on() || !mgs2_p39.idle_open)
++        return;
++    QueryPerformanceCounter(&now);
++    us = mgs2_p39_elapsed_us(&mgs2_p39.idle_start, &now);
++    mgs2_p39.counters.idle_us += us;
++    ++mgs2_p39.counters.idle_hist[mgs2_p39_us_bucket(us)];
++    mgs2_p39.idle_open = FALSE;
++}
++
++static void mgs2_p39_packet(void)
++{
++    if (mgs2_p39_on())
++        ++mgs2_p39.counters.packets;
++}
++
++/* Wraps the PRESENT handler: this is where the GPU round-trip is paid. */
++static void mgs2_p39_present(const LARGE_INTEGER *start)
++{
++    struct mgs2_p39_payload *c = &mgs2_p39.counters;
++    LARGE_INTEGER now;
++    unsigned int us;
++
++    if (!mgs2_p39_on())
++        return;
++    QueryPerformanceCounter(&now);
++    us = mgs2_p39_elapsed_us(start, &now);
++    c->present_us += us;
++    ++c->present_hist[mgs2_p39_us_bucket(us)];
++    ++c->presents;
++
++    /* Close the frame: everything not present and not idle was execution. */
++    c->wall_us += mgs2_p39_elapsed_us(&mgs2_p39.last_mark, &now);
++    mgs2_p39.last_mark = now;
++    c->exec_us = c->wall_us > c->present_us + c->idle_us
++            ? c->wall_us - c->present_us - c->idle_us : 0;
++
++    InterlockedIncrement(&mgs2_reinforcement_wait_census.publish_sequence);
++    mgs2_reinforcement_wait_census.counters = *c;
++    InterlockedIncrement(&mgs2_reinforcement_wait_census.publish_sequence);
++}
++
+ static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
+ {
+ }
+@@ -1677,6 +1856,8 @@
+     mgs2_batch_present();
+     mgs2_submit_census_present();
+     mgs2_p38_publish();
++    if (mgs2_p39_on())
++        QueryPerformanceCounter(&mgs2_p39_present_start);
+ 
+     swapchain = op->swapchain;
+     desc = &swapchain->state.desc;
+@@ -1760,6 +1941,8 @@
+     InterlockedDecrement(&cs->pending_presents);
+     if (InterlockedCompareExchange(&cs->waiting_for_present, FALSE, TRUE))
+         SetEvent(cs->present_event);
++
++    mgs2_p39_present(&mgs2_p39_present_start);
+ }
+ 
+ void wined3d_cs_emit_present(struct wined3d_cs *cs, struct wined3d_swapchain *swapchain,
+@@ -4684,18 +4867,24 @@
+             queue = &cs->queue[WINED3D_CS_QUEUE_DEFAULT];
+             if (wined3d_cs_queue_is_empty(cs, queue))
+             {
++                mgs2_p39_spin();
+                 YieldProcessor();
+                 if (++spin_count >= WINED3D_CS_SPIN_COUNT)
+                 {
+                     if (poll)
+                         poll = WINED3D_CS_QUERY_POLL_INTERVAL - 1;
+                     else
++                    {
++                        mgs2_p39_wait_event();
+                         wined3d_cs_wait_event(cs);
++                    }
+                 }
+                 continue;
+             }
+         }
+         spin_count = 0;
++        mgs2_p39_busy();
++        mgs2_p39_packet();
+ 
+         run = wined3d_cs_execute_next(cs, queue);
+     }

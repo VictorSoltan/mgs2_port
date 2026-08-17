@@ -20,14 +20,16 @@ sound       music/menu clicks work; gameplay SFX are audible but can vanish
             after encounter/map state transitions and return after another map
 input       works normally. Two distinct stalls were captured: a stock-user32
             PeekMessage spin and a Box86 first-use mutex race. FINALPLAY4 keeps
-            both fixes and moves the hot DirectSound FIR loop to native ARM
+            both fixes and moves the hot DirectSound FIR loop to native ARM.
+            A later self-owned shadow-mutex freeze was captured on 14 August;
+            production now bypasses that Box86 pool with direct compatible
+            mutexes (`BOX86_MUTEX_ALIGNED=1`), with no FPS claim
 saves       work
 ```
 
-The final playable configuration is now `device/launch-play.sh`; the old
+The FINALPLAY6 configuration is `device/launch-play.sh`; the old
 `device/launch.sh` remains an archival measurement harness. Measured wins kept
-from FINALPLAY2, plus the FINALPLAY3 reliability fix and FINALPLAY4 audio-CPU
-bridge, are:
+from the earlier releases plus the native WineD3D routes are:
 
 | change | effect |
 |---|---|
@@ -37,8 +39,12 @@ bridge, are:
 | exact Wine `_sse2_memmove` → native ARM libc bridge | removes the former 744-sample top guest block without changing overlap semantics |
 | cached `DISCARD` shadow instead of reading mapped upload memory back | fixed spot: three consecutive windows at 30.0, 30.0 and 30.1 fps |
 | atomic Box86 aligned-mutex first-use publication | old bridge fails the direct race test; fixed bridge passes 10/10 × 1,000 mappings |
+| direct compatible Box86 mutexes | bypasses the shadow pool after a second live session-lock self-deadlock; reliability change, not an FPS claim |
 | exact-source FFP shader/stage cache | corrected save/enemy control: 36 stages from 19 sources; removes 17 duplicate links that cost 2.04 s |
 | exact Wine DirectSound FIR → native ARM bridge | fixed 1416 MHz: mixer thread 12.97% → 7.57% of one core (-41.6%); guest `dsound` samples 717 → 40 |
+| GPU governor `simple_ondemand` → `performance` after the cooling fix | same-process interleaved arms: 15.21 → 16.85 fps (+10.8%), CPU held 1992 MHz |
+| native ARM `wined3d_buffer_load` (island entry 10) | same-process ABBA: -8.87 ms/frame (-12.8%), about +2.1 fps |
+| native ARM `mgs2_batch_flush` with shared guest state (entry 4) | 10 stable same-process pairs: -2.680 ms/frame, +0.899 fps median (+4.8%), zero faults |
 
 FINALPLAY uses a fixed 1992000 Hz target after the cooling upgrade. The culling
 A/B above remains a historical 1800 MHz measurement; it is not relabelled.
@@ -102,10 +108,14 @@ harness/box86_guest_profile.py  resolve Box86 JIT perf samples through a bounded
 harness/box86_guest_snapshot.py take the external snapshot of that map after a
                           bounded profile; neither tool logs from a hot thread
 harness/box86_memmove_stats.py  external reader/diff for the bounded memmove census
+harness/reinforcement_submit_census.py  external reader/diff for the bounded
+                          source-draw and final-GL-submission census
 harness/box86_mutex_first_use_stress.c  direct A/B for Box86's aligned-mutex
                           first-use publication race
 harness/box86_pthread_link_stub.c  link-only symbols for the freestanding i386
                           mutex stress executable; never deployed
+harness/box86_mutex_signal_stress.c, box86_signal_link_stub.c
+                          unvalidated signal/mutex diagnostic; never deployed
 harness/perf_sample.py    per-thread CPU, temperatures, GPU clock, CPU cap
 harness/sink_audible_test.sh  tone injection plus speaker-monitor capture with a
                           Goertzel bin, i.e. "is this audible" without ears
@@ -299,8 +309,17 @@ persistent shared VBO + WORLD lift
 byte-identical instancing exact WORLD+VB census finds only 1.43-1.93 removable
                           batches/frame against the required 40
 rebuilding the presenter  identical to the shipped build
-GPU governor pinned to 800 MHz   GPU wait halves, CPU cap falls to 816 MHz
-                                 because both share one thermal budget: net loss
+GPU governor pinned to 800 MHz   SUPERSEDED 2026-08-16, and it is now production.
+                                 The old reading was real: GPU wait halved but the
+                                 CPU cap fell to 816 MHz on a shared thermal budget.
+                                 After the cooling fix that no longer happens. Re-
+                                 measured in one process at one spot with the
+                                 governor switched live and arms interleaved:
+                                 ondemand n=35 mean 15.21 fps, performance n=39
+                                 mean 16.85, +10.8%, ranges not overlapping, and
+                                 the CPU held 1992000 in every arm. Cooling changed,
+                                 so the dead end was worth re-opening; nothing else
+                                 on this list has new data behind it
 GPU capped to 400 MHz     no gain
 Mali shader LTO / pilot-shader disable
                           driver confirmed both config files; neither changed
@@ -309,6 +328,30 @@ whole `wined3d_cs` / WineD3D ARM port
                           valid reinforcement profile splits its cost about half
                           Box86/Wine, half already-native Mali driver; it would
                           retain GL side effects and cannot remove driver work
+native ARM WineD3D island, routed entry point by entry point
+                          FINALPLAY6 production, but do not re-cost it the old way. The
+                          2026-08-15 illegal instruction was the x86 entry marker
+                          being compiled into the ARM instruction stream, where
+                          0x474d is `bx r9`; patch 48 fixes it and the mechanism
+                          then works end to end on a live entry. What the fix
+                          exposed is the real constraint: of 37 entries, 23 reach
+                          an abort stub, 3 read `NtCurrentTeb()` (which on ARM is
+                          the host thread pointer, not Wine's TEB), and most make
+                          indirect calls through function pointers held in guest
+                          structures -- x86 addresses native ARM cannot call.
+                          Patches 48/49 and native replacements for the debug and
+                          CRT stubs cleared the first two, after which a class-B
+                          resolver made entry 10 measurable at -8.87 ms/frame
+                          (about +2.1 fps). Entry 4 required one more correction:
+                          native WineD3D had a duplicate file-scope batch object,
+                          so the first candidate crashed. The island31/p56 pair
+                          instead shares the authoritative guest batch state;
+                          ten stable same-process pairs measured -2.680 ms/frame,
+                          +0.899 fps (+4.8%), zero faults. Production now arms 17
+                          entries. The GL-slot preflight is not semantic proof;
+                          texture/rendertarget roots remain closed until their
+                          state and indirect-call cuts are proved. See the latest
+                          `MGS2_ISLAND_*` brief before extending the allow-list
 WINE_D3D_CONFIG=csmt=0    the game does not start (page fault at 0x3C), twice
 suspending EmulationStation      ~1 fps, and it can leave the menu frozen
 PChannel disjoint allocation, group→channel remapping, DLS gain boost,
@@ -316,6 +359,14 @@ DirectSound committed-region      none of these restored SE
 DXVK / PanVK              PanVK on G52 is Vulkan 1.1 non-conformant, and the GPU
                           is not the bottleneck anyway
 lowering resolution       works, obviously, and the owner refused it
+indexed-draw reinforcement batch
+                          the p37 memory-only census saw zero indexed source draws
+                          through save load, ALERT, the guard response, visible
+                          arriving enemies and the connecting-bridge transition;
+                          the proposed indexed
+                          merger would remove exactly zero submissions on that
+                          route. The earlier dense manual 12--15 fps interval still
+                          needs one p37 snapshot before generalising the zero
 ```
 
 ## Still open
@@ -324,10 +375,16 @@ lowering resolution       works, obviously, and the owner refused it
    capture at fixed 1992 MHz and one process confirms this is real scene cost,
    not thermal throttling. `wined3d_cs` splits almost evenly between translated
    Wine and already-native `libmali`; replacing the whole WineD3D thread cannot
-   reach 25 fps. Before an image-quality trade-off, the one remaining bounded
-   renderer experiment is a memory-only census of draw paths that still escape
-   the existing batcher, then a candidate that demonstrably reduces driver
-   submissions. See `MGS2_REINFORCEMENT_ARM_TARGET_2026-08-14.md`.
+   reach 25 fps. The p37 memory-only census is now built. On the automated
+   ALERT/guard-call route it measured zero indexed draws throughout; the proposed
+   indexed batch is thus rejected for that route. A stationary 20-second follow-up
+   measured about 740 source draws and 205 final GL draws per displayed frame
+   (WineD3D submitted two CS Present commands per displayed frame). Take one
+   manually verified dense reinforcement scene also had zero indexed draws:
+   323,788 source non-indexed draws became 85,966 final GL submissions over the
+   capture interval. The direct mutex reliability path measured 15.22 fps over
+   300 frames there; it is not a renderer gain. See
+   `MGS2_REINFORCEMENT_MUTEX_DIRECT_2026-08-14.md`.
 2. **Intermittent gameplay-SFX loss.** Use the bounded DirectSound/DirectMusic
    state captures documented in the current audio handoff; do not add hot-thread
    logging. The 13 August manual combat report captured successful DirectSound,
@@ -336,10 +393,11 @@ lowering resolution       works, obviously, and the owner refused it
    control mapping: player attack is `x`; earlier `z` automation performed
    rolls/throws, so its bank 0 / program 8 event is not a punch signature.
 3. **Soak the runtime fixes.** The earlier caller-specific empty-message spin
-   and the later Box86 mutex-mapping deadlock are separate captures. FINALPLAY3
-   keeps the measured bounded PeekMessage wait and removes the exact Box86
-   first-use race; a future stall needs a new owner/wait capture, not an assumed
-   attribution to either old incident.
+   and the Box86 session-lock stalls are separate captures. The 14 August
+   self-owner reproduction occurred after the first-use publication fix, so
+   production bypasses Box86's shadow pool with `BOX86_MUTEX_ALIGNED=1`. A future
+   stall needs a new owner/wait capture, not an assumed attribution to either
+   old incident. See `MGS2_REINFORCEMENT_MUTEX_DIRECT_2026-08-14.md`.
 4. **Unique first-use shader stages.** Patch 32 removes exact duplicates, not the
    first 200-320 ms link of a genuinely new source. Any next candidate must move
    measured stages earlier in the same GL context; the cross-process program
@@ -363,6 +421,7 @@ box86-clean1                               archived Box86 baseline
 box86-native-memmove2                      previous production Box86 rollback
 box86-native-memmove3                      previous FINALPLAY3 rollback
 box86-native-dsound-fir1                   production memmove/mutex fixes + native dsound FIR
+box86-island31                             FINALPLAY6 native WineD3D island + shared batch state
 d3d8_producer_batch14_dirtyranges.dll      bounded dirty-range aggregation for game VBs
 d3d8_producer_batch15_projectedcensus.dll  300-frame projected break census; diagnostic only
 d3d8_producer_batch16_mixedcensus.dll      top mixed-state masks plus 64-mask projections
@@ -394,6 +453,8 @@ wined3d_batch16_setcache.dll               bounded 4-way batch cache, no hot tel
 wined3d_batch17_relative_range.dll          relative-index/range-draw candidate; off by default
 wined3d_finalplay.dll                       clean production batch16/set-cache policy
 wined3d_p32_ffp_source_dedup.dll            production exact-source shader/stage cache
+wined3d_p37_reinforcement_census.dll         p32 plus bounded submission census; diagnostic only
+wined3d_p56_batch_state.dll                  FINALPLAY6 island markers, class-B/GL plumbing and guest batch accessor
 ```
 
 The archived research renderer DLLs are intentionally included even though each

@@ -1,0 +1,924 @@
+Patch 38 -- bounded memory-only packet-break census for the reinforcement scene.
+
+Applies on top of patch 37. It attributes every real closure of the pending
+GL batch to its immediate cause, and decides at each closure whether the two
+adjacent real draws were issued under an identical effective rendering state,
+by exact field comparison of each CS opcode rather than by hashing. A sampled
+full-state snapshot cross-checks that model; verify_disagree must be zero.
+It changes no rendering decision, allocates nothing, and writes no log. Off
+unless MGS2_REINFORCEMENT_CENSUS=1. Read it with
+harness/reinforcement_break_census.py.
+
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -898,6 +898,761 @@
+     }
+ }
+ 
++
++/* ---------------------------------------------------------------------------
++ * Patch 38 -- bounded, memory-only packet-break census.
++ *
++ * p37 answered "how many source draws became how many GL submissions".  p38
++ * answers "why did each pending batch close", and, at every real closure,
++ * whether the two adjacent real draws were issued under an identical effective
++ * rendering state.
++ *
++ * Method, and why it is exact rather than a hash:
++ *
++ *   The only way struct wined3d_state can change between two draws is a
++ *   non-draw CS opcode, and mgs2_cs_dispatch() already closes the pending batch
++ *   on every non-draw opcode.  So the whole question reduces to: was every
++ *   opcode in the run between the two draws a no-op against the state the CSMT
++ *   consumer already holds?  Each comparable opcode is compared field by field
++ *   against cs->state before its handler runs.  Nothing is hashed, so nothing
++ *   can collide.  Any opcode without an implemented exact comparison, every
++ *   resource mutation and every hard barrier counts as "different", so the
++ *   result can only under-report merge opportunity, never over-report it.
++ *
++ *   As an independent check on that model, one boundary in
++ *   MGS2_P38_VERIFY_STRIDE takes a full byte snapshot of the effective state
++ *   (render/texture-stage/sampler states, bound views/samplers/shaders,
++ *   streams, declaration, index buffer, viewport, scissor, framebuffer,
++ *   blend/depth-stencil/rasterizer objects, material, topology and the FFP
++ *   push-constant buffers, which carry the WORLD/VIEW/PROJECTION matrices) at
++ *   the draw before and the draw after that boundary, and memcmp()s them.
++ *   verify_disagree must be zero for the run to be usable.
++ *
++ * The census changes no rendering decision: every counter is written after the
++ * behaviour it observes has already been chosen.  It performs no allocation, no
++ * I/O, no clock query and no logging on the render thread.  It is off unless
++ * MGS2_REINFORCEMENT_CENSUS=1.
++ * --------------------------------------------------------------------------- */
++
++enum mgs2_p38_break
++{
++    MGS2_P38_BRK_CS_BARRIER,     /* a non-draw CS opcode arrived */
++    MGS2_P38_BRK_STATE_DIRTY,    /* draw-time dirty graphics state */
++    MGS2_P38_BRK_INDEXED,        /* an indexed draw ends a non-indexed run */
++    MGS2_P38_BRK_TOPOLOGY,       /* GL mode changed inside the batcher */
++    MGS2_P38_BRK_CONTEXT,        /* GL context changed inside the batcher */
++    MGS2_P38_BRK_LIMIT,          /* the 256-strip batch limit */
++    MGS2_P38_BRK_PRESENT,        /* end of frame */
++    MGS2_P38_BRK_OTHER,
++    MGS2_P38_BRK_COUNT,
++};
++
++enum mgs2_p38_dirty_cat
++{
++    MGS2_P38_DIRTY_RENDER_STATE,
++    MGS2_P38_DIRTY_TEXTURE_STAGE,
++    MGS2_P38_DIRTY_SAMPLER,
++    MGS2_P38_DIRTY_TEXTURE,
++    MGS2_P38_DIRTY_SHADER,
++    MGS2_P38_DIRTY_SHADER_CONSTANTS,
++    MGS2_P38_DIRTY_VERTEX_DECL,
++    MGS2_P38_DIRTY_STREAM_VB,
++    MGS2_P38_DIRTY_INDEX_BUFFER,
++    MGS2_P38_DIRTY_VIEWPORT_SCISSOR,
++    MGS2_P38_DIRTY_FRAMEBUFFER,
++    MGS2_P38_DIRTY_BLEND_DEPTH_RASTER,
++    MGS2_P38_DIRTY_TRANSFORM,
++    MGS2_P38_DIRTY_OTHER,
++    MGS2_P38_DIRTY_COUNT,
++};
++
++#define MGS2_P38_OPCODES        56
++#define MGS2_P38_PRIMS           8
++#define MGS2_P38_LEN_BUCKETS     8
++#define MGS2_P38_VERIFY_STRIDE  64
++
++struct mgs2_p38_payload
++{
++    /* Real batch closures, by immediate cause. */
++    unsigned int close_total;
++    unsigned int close_reason[MGS2_P38_BRK_COUNT];
++    unsigned int close_cs_opcode[MGS2_P38_OPCODES];
++
++    /* Draw-time dirty-state closures, decomposed. A closure whose dirty mask
++     * spans several categories increments each of them and close_dirty_mixed. */
++    unsigned int close_dirty_total;
++    unsigned int close_dirty_mixed;
++    unsigned int close_dirty_cat[MGS2_P38_DIRTY_COUNT];
++
++    /* Length of each closed batch, in source strips. */
++    unsigned int close_len_hist[MGS2_P38_LEN_BUCKETS];
++
++    /* Exact effective-state verdict for the pair of real draws that the
++     * closure separates. */
++    unsigned int boundary_state_equal;
++    unsigned int boundary_state_different;
++    unsigned int boundary_state_no_next_draw;
++    unsigned int boundary_mergeable;          /* equal AND same topology AND
++                                               * non-indexed AND under the limit */
++
++    /* Inter-draw opcode runs. */
++    unsigned int run_ops;
++    unsigned int run_ops_comparable;
++    unsigned int run_ops_redundant;
++    unsigned int run_ops_by_opcode[MGS2_P38_OPCODES];
++    unsigned int run_redundant_by_opcode[MGS2_P38_OPCODES];
++
++    /* Independent full-snapshot check of the verdict above. */
++    unsigned int verify_checked;
++    unsigned int verify_agree;
++    unsigned int verify_disagree;
++    unsigned int verify_unavailable;
++
++    /* Primitive-type breakdown. Index is enum wined3d_primitive_type clamped. */
++    unsigned int source_by_prim[MGS2_P38_PRIMS];
++    unsigned int gl_arrays_by_prim[MGS2_P38_PRIMS];
++    unsigned int gl_batch_by_prim[MGS2_P38_PRIMS];
++    unsigned int gl_bypass_by_prim[MGS2_P38_PRIMS];
++    unsigned int gl_bypass_total;
++};
++
++/* The verification snapshot. Fixed size, two instances, never grown. */
++struct mgs2_p38_snapshot
++{
++    unsigned int render_states[WINEHIGHEST_RENDER_STATE + 1];
++    unsigned int texture_states[WINED3D_MAX_FFP_TEXTURES][WINED3D_HIGHEST_TEXTURE_STATE + 1];
++    const void *shader_resource_view[WINED3D_SHADER_TYPE_GRAPHICS_COUNT][MAX_SHADER_RESOURCE_VIEWS];
++    const void *sampler[WINED3D_SHADER_TYPE_GRAPHICS_COUNT][MAX_SAMPLER_OBJECTS];
++    const void *shader[WINED3D_SHADER_TYPE_GRAPHICS_COUNT];
++    const void *cb[WINED3D_SHADER_TYPE_GRAPHICS_COUNT][MAX_CONSTANT_BUFFERS];
++    struct wined3d_stream_state streams[WINED3D_MAX_STREAMS];
++    const void *vertex_declaration;
++    const void *index_buffer;
++    unsigned int index_format;
++    unsigned int index_offset;
++    unsigned int base_vertex_index;
++    struct wined3d_viewport viewports[WINED3D_MAX_VIEWPORTS];
++    unsigned int viewport_count;
++    RECT scissor_rects[WINED3D_MAX_VIEWPORTS];
++    unsigned int scissor_rect_count;
++    const void *render_targets[WINED3D_MAX_RENDER_TARGETS];
++    const void *depth_stencil;
++    const void *blend_state;
++    struct wined3d_color blend_factor;
++    unsigned int sample_mask;
++    const void *depth_stencil_state;
++    unsigned int stencil_ref;
++    const void *rasterizer_state;
++    struct wined3d_extra_vs_args extra_vs_args;
++    struct wined3d_extra_ps_args extra_ps_args;
++    unsigned char depth_bounds_enable;
++    float depth_bounds_min, depth_bounds_max;
++    unsigned int primitive_type;
++    unsigned int patch_vertex_count;
++    /* FFP transforms/material/lights reach the shader through these buffers. */
++    unsigned int push_constants_hash_present;
++    unsigned char push_constants[2][1024];
++    unsigned int push_constants_size[2];
++};
++
++static struct
++{
++    struct mgs2_p38_payload counters;
++
++    /* Pending closure being attributed. */
++    unsigned int pending;                /* a closure is waiting for the next draw */
++    unsigned int pending_reason;
++    unsigned int pending_len;
++    unsigned int pending_mode_ok;        /* the closed batch could still accept draws */
++    unsigned int run_all_redundant;      /* every opcode since the closure was a no-op */
++
++    /* Hint set by the caller immediately before mgs2_batch_flush(). */
++    unsigned int hint_reason;
++    unsigned int hint_opcode;
++
++    unsigned int boundary_index;
++    unsigned int verify_state;           /* 0 idle, 1 want "before", 2 want "after" */
++    struct mgs2_p38_snapshot snap[2];
++    unsigned int snap_valid;
++} mgs2_p38;
++
++static unsigned int mgs2_p38_prim_bucket(enum wined3d_primitive_type type)
++{
++    switch (type)
++    {
++        case WINED3D_PT_POINTLIST:     return 0;
++        case WINED3D_PT_LINELIST:      return 1;
++        case WINED3D_PT_LINESTRIP:     return 2;
++        case WINED3D_PT_TRIANGLELIST:  return 3;
++        case WINED3D_PT_TRIANGLESTRIP: return 4;
++        case WINED3D_PT_TRIANGLEFAN:   return 5;
++        case WINED3D_PT_UNDEFINED:     return 7;
++        default:                       return 6;
++    }
++}
++
++static unsigned int mgs2_p38_len_bucket(unsigned int n)
++{
++    if (n <= 1)  return 0;
++    if (n == 2)  return 1;
++    if (n <= 4)  return 2;
++    if (n <= 8)  return 3;
++    if (n <= 16) return 4;
++    if (n <= 32) return 5;
++    if (n <= 63) return 6;
++    return 7;
++}
++
++/* Exact, field-by-field comparison of one non-draw opcode against the state the
++ * consumer already holds. TRUE means "this opcode cannot change any pixel".
++ * Every opcode not listed here is reported as not comparable, which the caller
++ * treats as a real state change. */
++static BOOL mgs2_p38_op_is_redundant(const struct wined3d_cs *cs,
++        enum wined3d_cs_op opcode, const void *data, BOOL *comparable)
++{
++    const struct wined3d_state *state = &cs->state;
++    unsigned int i;
++
++    *comparable = TRUE;
++    switch (opcode)
++    {
++        case WINED3D_CS_OP_NOP:
++            return TRUE;
++
++        case WINED3D_CS_OP_SET_RENDER_STATE:
++        {
++            const struct wined3d_cs_set_render_state *op = data;
++
++            if (op->state > WINEHIGHEST_RENDER_STATE)
++                break;
++            return state->render_states[op->state] == op->value;
++        }
++
++        case WINED3D_CS_OP_SET_TEXTURE_STATE:
++        {
++            const struct wined3d_cs_set_texture_state *op = data;
++
++            if (op->stage >= WINED3D_MAX_FFP_TEXTURES
++                    || op->state > WINED3D_HIGHEST_TEXTURE_STATE)
++                break;
++            return state->texture_states[op->stage][op->state] == op->value;
++        }
++
++        case WINED3D_CS_OP_SET_TEXTURE:
++        {
++            const struct wined3d_cs_set_texture *op = data;
++
++            if (op->shader_type >= WINED3D_SHADER_TYPE_GRAPHICS_COUNT
++                    || op->bind_index >= MAX_SHADER_RESOURCE_VIEWS)
++                break;
++            return state->shader_resource_view[op->shader_type][op->bind_index] == op->view;
++        }
++
++        case WINED3D_CS_OP_SET_SAMPLERS:
++        {
++            const struct wined3d_cs_set_samplers *op = data;
++
++            if (op->type >= WINED3D_SHADER_TYPE_GRAPHICS_COUNT
++                    || op->start_idx + op->count > MAX_SAMPLER_OBJECTS)
++                break;
++            for (i = 0; i < op->count; ++i)
++                if (state->sampler[op->type][op->start_idx + i] != op->samplers[i])
++                    return FALSE;
++            return TRUE;
++        }
++
++        case WINED3D_CS_OP_SET_SHADER_RESOURCE_VIEWS:
++        {
++            const struct wined3d_cs_set_shader_resource_views *op = data;
++
++            if (op->type >= WINED3D_SHADER_TYPE_GRAPHICS_COUNT
++                    || op->start_idx + op->count > MAX_SHADER_RESOURCE_VIEWS)
++                break;
++            for (i = 0; i < op->count; ++i)
++                if (state->shader_resource_view[op->type][op->start_idx + i] != op->views[i])
++                    return FALSE;
++            return TRUE;
++        }
++
++        case WINED3D_CS_OP_SET_VERTEX_DECLARATION:
++        {
++            const struct wined3d_cs_set_vertex_declaration *op = data;
++
++            return state->vertex_declaration == op->declaration;
++        }
++
++        case WINED3D_CS_OP_SET_STREAM_SOURCES:
++        {
++            const struct wined3d_cs_set_stream_sources *op = data;
++
++            if (op->start_idx + op->count > WINED3D_MAX_STREAMS)
++                break;
++            for (i = 0; i < op->count; ++i)
++            {
++                const struct wined3d_stream_state *old = &state->streams[op->start_idx + i];
++                const struct wined3d_stream_state *new_state = &op->streams[i];
++
++                if (old->buffer != new_state->buffer || old->offset != new_state->offset
++                        || old->stride != new_state->stride
++                        || old->frequency != new_state->frequency
++                        || old->flags != new_state->flags)
++                    return FALSE;
++            }
++            return TRUE;
++        }
++
++        case WINED3D_CS_OP_SET_INDEX_BUFFER:
++        {
++            const struct wined3d_cs_set_index_buffer *op = data;
++
++            return state->index_buffer == op->buffer
++                    && state->index_format == op->format_id
++                    && state->index_offset == op->offset;
++        }
++
++        case WINED3D_CS_OP_SET_SHADER:
++        {
++            const struct wined3d_cs_set_shader *op = data;
++
++            if (op->type >= WINED3D_SHADER_TYPE_GRAPHICS_COUNT)
++                break;
++            return state->shader[op->type] == op->shader;
++        }
++
++        case WINED3D_CS_OP_SET_BLEND_STATE:
++        {
++            const struct wined3d_cs_set_blend_state *op = data;
++
++            return state->blend_state == op->state
++                    && !memcmp(&state->blend_factor, &op->factor, sizeof(op->factor))
++                    && state->sample_mask == op->sample_mask;
++        }
++
++        case WINED3D_CS_OP_SET_DEPTH_STENCIL_STATE:
++        {
++            const struct wined3d_cs_set_depth_stencil_state *op = data;
++
++            return state->depth_stencil_state == op->state
++                    && state->stencil_ref == op->stencil_ref;
++        }
++
++        case WINED3D_CS_OP_SET_RASTERIZER_STATE:
++        {
++            const struct wined3d_cs_set_rasterizer_state *op = data;
++
++            return state->rasterizer_state == op->state;
++        }
++
++        case WINED3D_CS_OP_SET_VIEWPORTS:
++        {
++            const struct wined3d_cs_set_viewports *op = data;
++
++            if (op->viewport_count != state->viewport_count
++                    || op->viewport_count > WINED3D_MAX_VIEWPORTS)
++                return FALSE;
++            return !memcmp(state->viewports, op->viewports,
++                    op->viewport_count * sizeof(*op->viewports));
++        }
++
++        case WINED3D_CS_OP_SET_SCISSOR_RECTS:
++        {
++            const struct wined3d_cs_set_scissor_rects *op = data;
++
++            if (op->rect_count != state->scissor_rect_count
++                    || op->rect_count > WINED3D_MAX_VIEWPORTS)
++                return FALSE;
++            return !memcmp(state->scissor_rects, op->rects,
++                    op->rect_count * sizeof(*op->rects));
++        }
++
++        case WINED3D_CS_OP_SET_LIGHT_ENABLE:
++        {
++            const struct wined3d_cs_set_light_enable *op = data;
++            const struct wined3d_light_info *light;
++
++            if (!(light = wined3d_light_state_get_light(&state->light_state, op->idx)))
++                return !op->enable;
++            return !light->enabled == !op->enable;
++        }
++
++        default:
++            break;
++    }
++
++    *comparable = FALSE;
++    return FALSE;
++}
++
++static void mgs2_p38_take_snapshot(const struct wined3d_cs *cs, struct mgs2_p38_snapshot *s)
++{
++    const struct wined3d_state *state = &cs->state;
++    const struct wined3d_device *device = cs->c.device;
++    unsigned int i, j;
++
++    memset(s, 0, sizeof(*s));
++    memcpy(s->render_states, state->render_states, sizeof(s->render_states));
++    memcpy(s->texture_states, state->texture_states, sizeof(s->texture_states));
++    for (i = 0; i < WINED3D_SHADER_TYPE_GRAPHICS_COUNT; ++i)
++    {
++        for (j = 0; j < MAX_SHADER_RESOURCE_VIEWS; ++j)
++            s->shader_resource_view[i][j] = state->shader_resource_view[i][j];
++        for (j = 0; j < MAX_SAMPLER_OBJECTS; ++j)
++            s->sampler[i][j] = state->sampler[i][j];
++        for (j = 0; j < MAX_CONSTANT_BUFFERS; ++j)
++            s->cb[i][j] = state->cb[i][j].buffer;
++        s->shader[i] = state->shader[i];
++    }
++    memcpy(s->streams, state->streams, sizeof(s->streams));
++    s->vertex_declaration = state->vertex_declaration;
++    s->index_buffer = state->index_buffer;
++    s->index_format = state->index_format;
++    s->index_offset = state->index_offset;
++    s->base_vertex_index = state->base_vertex_index;
++    memcpy(s->viewports, state->viewports, sizeof(s->viewports));
++    s->viewport_count = state->viewport_count;
++    memcpy(s->scissor_rects, state->scissor_rects, sizeof(s->scissor_rects));
++    s->scissor_rect_count = state->scissor_rect_count;
++    for (i = 0; i < WINED3D_MAX_RENDER_TARGETS; ++i)
++        s->render_targets[i] = state->fb.render_targets[i];
++    s->depth_stencil = state->fb.depth_stencil;
++    s->blend_state = state->blend_state;
++    s->blend_factor = state->blend_factor;
++    s->sample_mask = state->sample_mask;
++    s->depth_stencil_state = state->depth_stencil_state;
++    s->stencil_ref = state->stencil_ref;
++    s->rasterizer_state = state->rasterizer_state;
++    s->extra_vs_args = state->extra_vs_args;
++    s->extra_ps_args = state->extra_ps_args;
++    s->depth_bounds_enable = !!state->depth_bounds_enable;
++    s->depth_bounds_min = state->depth_bounds_min;
++    s->depth_bounds_max = state->depth_bounds_max;
++    s->primitive_type = state->primitive_type;
++    s->patch_vertex_count = state->patch_vertex_count;
++
++    /* WORLD/VIEW/PROJECTION, texture transforms, material and lights reach the
++     * generated FFP shader through these two buffers. Comparing their bytes is
++     * what makes the check exact for a fixed-function scene. */
++    s->push_constants_hash_present = 1;
++    for (i = 0; i < 2; ++i)
++    {
++        enum wined3d_push_constants type = i ? WINED3D_PUSH_CONSTANTS_PS_FFP
++                : WINED3D_PUSH_CONSTANTS_VS_FFP;
++        const struct wined3d_buffer *buffer = device->push_constants[type];
++        unsigned int size;
++
++        if (!buffer || !buffer->resource.heap_memory)
++        {
++            s->push_constants_hash_present = 0;
++            continue;
++        }
++        size = min(buffer->resource.size, sizeof(s->push_constants[i]));
++        memcpy(s->push_constants[i], buffer->resource.heap_memory, size);
++        s->push_constants_size[i] = size;
++        if (size < buffer->resource.size)
++            s->push_constants_hash_present = 0;
++    }
++}
++
++/* Called by mgs2_cs_dispatch() for every non-draw opcode, before the pending
++ * batch is closed and before the handler runs. */
++static void mgs2_p38_state_op(const struct wined3d_cs *cs, enum wined3d_cs_op opcode, const void *data)
++{
++    struct mgs2_p38_payload *c = &mgs2_p38.counters;
++    unsigned int slot = opcode < MGS2_P38_OPCODES ? opcode : MGS2_P38_OPCODES - 1;
++    BOOL comparable, redundant;
++
++    if (!mgs2_submit_census_on())
++        return;
++
++    redundant = mgs2_p38_op_is_redundant(cs, opcode, data, &comparable);
++
++    ++c->run_ops;
++    ++c->run_ops_by_opcode[slot];
++    if (comparable)
++        ++c->run_ops_comparable;
++    if (comparable && redundant)
++    {
++        ++c->run_ops_redundant;
++        ++c->run_redundant_by_opcode[slot];
++    }
++    else
++    {
++        mgs2_p38.run_all_redundant = 0;
++    }
++
++    mgs2_p38.hint_reason = MGS2_P38_BRK_CS_BARRIER;
++    mgs2_p38.hint_opcode = slot;
++}
++
++/* Set immediately before a mgs2_batch_flush() that is not caused by a CS
++ * opcode. Consumed by mgs2_p38_close(). */
++void mgs2_p38_hint(unsigned int reason)
++{
++    if (mgs2_submit_census_on())
++    {
++        mgs2_p38.hint_reason = reason;
++        mgs2_p38.hint_opcode = MGS2_P38_OPCODES - 1;
++    }
++}
++
++/* Decompose the dirty graphics-state mask that caused a draw-time closure. */
++void mgs2_p38_hint_dirty(const unsigned int *dirty, unsigned int words)
++{
++    struct mgs2_p38_payload *c = &mgs2_p38.counters;
++    unsigned int seen = 0, i, base = 0;
++
++    if (!mgs2_submit_census_on())
++        return;
++
++    mgs2_p38.hint_reason = MGS2_P38_BRK_STATE_DIRTY;
++    mgs2_p38.hint_opcode = MGS2_P38_OPCODES - 1;
++    ++c->close_dirty_total;
++
++    for (i = 0; i < words; ++i)
++    {
++        uint32_t mask = dirty[i];
++
++        while (mask)
++        {
++            unsigned int id = base + wined3d_bit_scan(&mask);
++            unsigned int cat;
++
++            if (STATE_IS_RENDER(id))                            cat = MGS2_P38_DIRTY_RENDER_STATE;
++            else if (STATE_IS_TEXTURESTAGE(id))                 cat = MGS2_P38_DIRTY_TEXTURE_STAGE;
++            else if (STATE_IS_GRAPHICS_SHADER(id))              cat = MGS2_P38_DIRTY_SHADER;
++            else if (STATE_IS_GRAPHICS_CONSTANT_BUFFER(id))     cat = MGS2_P38_DIRTY_SHADER_CONSTANTS;
++            else if (STATE_IS_GRAPHICS_SHADER_RESOURCE_BINDING(id)) cat = MGS2_P38_DIRTY_TEXTURE;
++            else if (STATE_IS_STREAMSRC(id))                    cat = MGS2_P38_DIRTY_STREAM_VB;
++            else if (STATE_IS_INDEXBUFFER(id))                  cat = MGS2_P38_DIRTY_INDEX_BUFFER;
++            else if (STATE_IS_VDECL(id))                        cat = MGS2_P38_DIRTY_VERTEX_DECL;
++            else if (STATE_IS_VIEWPORT(id) || STATE_IS_SCISSORRECT(id)) cat = MGS2_P38_DIRTY_VIEWPORT_SCISSOR;
++            else if (STATE_IS_FRAMEBUFFER(id))                  cat = MGS2_P38_DIRTY_FRAMEBUFFER;
++            else if (STATE_IS_RASTERIZER(id) || STATE_IS_BLEND(id) || STATE_IS_BLEND_FACTOR(id)
++                    || STATE_IS_SAMPLE_MASK(id) || STATE_IS_DEPTH_STENCIL(id)
++                    || STATE_IS_STENCIL_REF(id) || STATE_IS_DEPTH_BOUNDS(id))
++                                                                cat = MGS2_P38_DIRTY_BLEND_DEPTH_RASTER;
++            else if (STATE_IS_BASEVERTEXINDEX(id))              cat = MGS2_P38_DIRTY_STREAM_VB;
++            else                                                cat = MGS2_P38_DIRTY_OTHER;
++
++            if (!(seen & (1u << cat)))
++            {
++                seen |= 1u << cat;
++                ++c->close_dirty_cat[cat];
++            }
++        }
++        base += sizeof(*dirty) * CHAR_BIT;
++    }
++    /* The sampler-state group has no separate dirty id in this Wine; it reaches
++     * the draw through the shader-resource binding, and is reported there. */
++    if (seen & (seen - 1))
++        ++c->close_dirty_mixed;
++}
++
++/* Called from mgs2_batch_flush() when a batch really closes. len is the number
++ * of source strips the closed batch held; mode_ok says whether the next draw
++ * could in principle have joined it. */
++void mgs2_p38_close(unsigned int len, unsigned int mode_ok)
++{
++    struct mgs2_p38_payload *c = &mgs2_p38.counters;
++    unsigned int reason;
++
++    if (!mgs2_submit_census_on())
++        return;
++
++    reason = mgs2_p38.hint_reason < MGS2_P38_BRK_COUNT
++            ? mgs2_p38.hint_reason : MGS2_P38_BRK_OTHER;
++
++    ++c->close_total;
++    ++c->close_reason[reason];
++    if (reason == MGS2_P38_BRK_CS_BARRIER)
++        ++c->close_cs_opcode[mgs2_p38.hint_opcode];
++    ++c->close_len_hist[mgs2_p38_len_bucket(len)];
++
++    /* A closure that is still waiting for its next draw is resolved as
++     * "no next draw" -- end of frame, or a barrier followed by another. */
++    if (mgs2_p38.pending)
++        ++c->boundary_state_no_next_draw;
++
++    mgs2_p38.pending = 1;
++    mgs2_p38.pending_reason = reason;
++    mgs2_p38.pending_len = len;
++    mgs2_p38.pending_mode_ok = mode_ok;
++    /* The opcode that caused this closure has already been folded into
++     * run_all_redundant by mgs2_p38_state_op(). Structural closures are never
++     * merge candidates. */
++    if (reason != MGS2_P38_BRK_CS_BARRIER && reason != MGS2_P38_BRK_STATE_DIRTY)
++        mgs2_p38.run_all_redundant = 0;
++
++    ++mgs2_p38.boundary_index;
++    if (!(mgs2_p38.boundary_index % MGS2_P38_VERIFY_STRIDE))
++        mgs2_p38.verify_state = 1;
++
++    mgs2_p38.hint_reason = MGS2_P38_BRK_OTHER;
++    mgs2_p38.hint_opcode = MGS2_P38_OPCODES - 1;
++}
++
++/* Called for every source draw the consumer executes, after p37's counters.
++ *
++ * Resolves the verdict for the boundary that separates this draw from the
++ * previous one, and drives the sampled full-snapshot verification. The
++ * snapshot pair always brackets two consecutive real draws, whether or not a
++ * boundary sat between them: two draws that the batcher merged MUST have
++ * identical effective state, so that case is a correctness check on the
++ * existing batcher as well. */
++static void mgs2_p38_source_draw(const struct wined3d_cs *cs,
++        enum wined3d_primitive_type primitive_type,
++        const struct wined3d_draw_parameters *parameters)
++{
++    struct mgs2_p38_payload *c = &mgs2_p38.counters;
++    BOOL expected_equal;
++
++    ++c->source_by_prim[mgs2_p38_prim_bucket(primitive_type)];
++
++    if (mgs2_p38.pending)
++    {
++        expected_equal = mgs2_p38.run_all_redundant != 0;
++
++        if (expected_equal)
++            ++c->boundary_state_equal;
++        else
++            ++c->boundary_state_different;
++
++        if (expected_equal && mgs2_p38.pending_mode_ok && !parameters->indexed
++                && primitive_type == WINED3D_PT_TRIANGLESTRIP
++                && mgs2_p38.pending_len < 256)
++            ++c->boundary_mergeable;
++
++        mgs2_p38.pending = 0;
++    }
++    else
++    {
++        /* No boundary: the batcher kept both draws in one submission, so the
++         * effective state is required to be unchanged. */
++        expected_equal = TRUE;
++    }
++
++    if (mgs2_p38.snap_valid == 2)
++    {
++        BOOL snap_equal;
++
++        mgs2_p38_take_snapshot(cs, &mgs2_p38.snap[1]);
++        snap_equal = !memcmp(&mgs2_p38.snap[0], &mgs2_p38.snap[1], sizeof(mgs2_p38.snap[0]));
++        ++c->verify_checked;
++        if (!mgs2_p38.snap[0].push_constants_hash_present
++                || !mgs2_p38.snap[1].push_constants_hash_present)
++            ++c->verify_unavailable;
++        else if (!snap_equal == !expected_equal)
++            ++c->verify_agree;
++        else
++            ++c->verify_disagree;
++        mgs2_p38.snap_valid = 0;
++    }
++    else if (mgs2_p38.snap_valid == 1)
++    {
++        mgs2_p38.snap_valid = 2;
++    }
++    else if (mgs2_p38.verify_state == 1)
++    {
++        mgs2_p38_take_snapshot(cs, &mgs2_p38.snap[0]);
++        mgs2_p38.snap_valid = 1;
++        mgs2_p38.verify_state = 0;
++    }
++
++    /* A new opcode run starts optimistic and is cleared by the first opcode
++     * that is not provably a no-op. */
++    mgs2_p38.run_all_redundant = 1;
++}
++
++/* Final GL submissions, split by the primitive type actually issued. */
++void mgs2_p38_gl_draw(unsigned int kind, unsigned int count, unsigned int gl_mode)
++{
++    struct mgs2_p38_payload *c = &mgs2_p38.counters;
++    unsigned int bucket;
++
++    if (!mgs2_submit_census_on() || !count)
++        return;
++
++    switch (gl_mode)
++    {
++        case 0x0000: bucket = 0; break; /* GL_POINTS */
++        case 0x0001: bucket = 1; break; /* GL_LINES */
++        case 0x0003: bucket = 2; break; /* GL_LINE_STRIP */
++        case 0x0004: bucket = 3; break; /* GL_TRIANGLES */
++        case 0x0005: bucket = 4; break; /* GL_TRIANGLE_STRIP */
++        case 0x0006: bucket = 5; break; /* GL_TRIANGLE_FAN */
++        default:     bucket = 6; break;
++    }
++
++    switch (kind)
++    {
++        case MGS2_SUBMIT_GL_BATCH_ELEMENTS:
++            c->gl_batch_by_prim[bucket] += count;
++            break;
++        case MGS2_SUBMIT_GL_ARRAYS:
++            c->gl_arrays_by_prim[bucket] += count;
++            break;
++        default:
++            break;
++    }
++}
++
++/* A draw the strip batcher never saw: it is its own GL submission. */
++void mgs2_p38_bypass(unsigned int gl_mode)
++{
++    struct mgs2_p38_payload *c = &mgs2_p38.counters;
++    unsigned int bucket;
++
++    if (!mgs2_submit_census_on())
++        return;
++
++    switch (gl_mode)
++    {
++        case 0x0000: bucket = 0; break;
++        case 0x0001: bucket = 1; break;
++        case 0x0003: bucket = 2; break;
++        case 0x0004: bucket = 3; break;
++        case 0x0005: bucket = 4; break;
++        case 0x0006: bucket = 5; break;
++        default:     bucket = 6; break;
++    }
++    ++c->gl_bypass_by_prim[bucket];
++    ++c->gl_bypass_total;
++}
++
++/* Public p38 snapshot, published beside p37's at Present. A separate symbol so
++ * the existing p37 reader keeps working byte for byte. */
++#define MGS2_P38_CENSUS_MAGIC 0x38335250 /* PR38 */
++
++struct mgs2_p38_public
++{
++    unsigned int magic;
++    unsigned int version;
++    unsigned int size_words;
++    unsigned int signature;
++    unsigned int enabled;
++    LONG publish_sequence;
++    struct mgs2_p38_payload counters;
++};
++
++struct mgs2_p38_public mgs2_reinforcement_break_census =
++{
++    MGS2_P38_CENSUS_MAGIC,
++    1,
++    sizeof(struct mgs2_p38_public) / sizeof(unsigned int),
++    ~MGS2_P38_CENSUS_MAGIC,
++};
++
++static void mgs2_p38_publish(void)
++{
++    if (!mgs2_submit_census_on())
++        return;
++
++    mgs2_reinforcement_break_census.enabled = 1;
++    InterlockedIncrement(&mgs2_reinforcement_break_census.publish_sequence);
++    mgs2_reinforcement_break_census.counters = mgs2_p38.counters;
++    InterlockedIncrement(&mgs2_reinforcement_break_census.publish_sequence);
++}
++
+ static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
+ {
+ }
+@@ -921,6 +1676,7 @@
+      * drawn into the NEXT frame. This is the one flush that is not optional. */
+     mgs2_batch_present();
+     mgs2_submit_census_present();
++    mgs2_p38_publish();
+ 
+     swapchain = op->swapchain;
+     desc = &swapchain->state.desc;
+@@ -1389,6 +2145,8 @@
+     state->patch_vertex_count = patch_vertex_count;
+ 
+     mgs2_submit_census_source_draw(state, primitive_type, parameters);
++    if (mgs2_submit_census_on())
++        mgs2_p38_source_draw(cs, primitive_type, parameters);
+     cs->c.device->adapter->adapter_ops->adapter_draw_primitive(cs->c.device, state, parameters);
+ }
+ 
+@@ -3441,6 +4199,7 @@
+ {
+     if (opcode != WINED3D_CS_OP_DRAW && opcode != WINED3D_CS_OP_DRAW_BATCH)
+     {
++        mgs2_p38_state_op(cs, opcode, data);
+         mgs2_submit_census_barrier();
+         mgs2_batch_flush();
+     }
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4666,11 +4666,14 @@
+     if (!mgs2_batch.n || !context_gl)
+         return;
+     gl_info = context_gl->gl_info;
++    mgs2_p38_close(mgs2_batch.n, 1);
++
+ 
+     /* One draw is not worth an index buffer: issue it the ordinary way. */
+     if (mgs2_batch.n == 1)
+     {
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1);
++        mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1, mgs2_batch.mode);
+         gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                 mgs2_batch.first[0], mgs2_batch.count[0]);
+         mgs2_batch.n = 0;
+@@ -4698,6 +4701,7 @@
+         wined3d_context_gl_bind_bo(context_gl, GL_ELEMENT_ARRAY_BUFFER, entry->bo);
+         mgs2_batch_restart_begin(context_gl, gl_info);
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1);
++        mgs2_p38_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1, entry->mode);
+         gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+                 entry->index_type, (const void *)(ULONG_PTR)entry->offset);
+         mgs2_batch.n = 0;
+@@ -4709,6 +4713,7 @@
+     if (!entry)
+     {
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
++        mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
+         for (i = 0; i < mgs2_batch.n; ++i)
+             gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+@@ -4756,6 +4761,7 @@
+         entry->first = entry->count = NULL;
+         mgs2_batch_cache_cancel(entry);
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
++        mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
+         for (i = 0; i < mgs2_batch.n; ++i)
+             gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+@@ -4773,6 +4779,7 @@
+         entry->first = entry->count = NULL;
+         mgs2_batch_cache_cancel(entry);
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
++        mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
+         for (i = 0; i < mgs2_batch.n; ++i)
+             gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+@@ -4796,6 +4803,7 @@
+ 
+     mgs2_batch_restart_begin(context_gl, gl_info);
+     mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1);
++        mgs2_p38_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1, entry->mode);
+     gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+             entry->index_type, (const void *)(ULONG_PTR)entry->offset);
+     mgs2_batch.n = 0;
+@@ -4804,6 +4812,7 @@
+ 
+ void mgs2_batch_present(void)
+ {
++    mgs2_p38_hint(MGS2_P38_HINT_PRESENT);
+     mgs2_batch_flush();
+ }
+ 
+@@ -4827,6 +4836,8 @@
+     if (mgs2_batch.n
+             && (mgs2_batch.mode != mode || mgs2_batch.context_gl != context_gl))
+     {
++        mgs2_p38_hint(mgs2_batch.mode != mode
++                ? MGS2_P38_HINT_TOPOLOGY : MGS2_P38_HINT_CONTEXT);
+         mgs2_batch_flush();
+     }
+ 
+@@ -4840,6 +4851,7 @@
+ 
+     if (mgs2_batch.n >= 256)
+     {
++        mgs2_p38_hint(MGS2_P38_HINT_LIMIT);
+         mgs2_batch_flush();
+     }
+     return TRUE;
+@@ -4881,6 +4893,7 @@
+                 return;
+ 
+ 
++            mgs2_p38_bypass(mode);
+             mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1);
+             gl_info->gl_ops.gl.p_glDrawArrays(mode, start_idx, count);
+             checkGLcall("glDrawArrays");
+@@ -5158,6 +5171,11 @@
+     if (mgs2_batch.n
+             && (parameters->indexed || mgs2_graphics_state_dirty(context)))
+     {
++        if (parameters->indexed)
++            mgs2_p38_hint(MGS2_P38_HINT_INDEXED);
++        else
++            mgs2_p38_hint_dirty(context->dirty_graphics_states,
++                    ARRAY_SIZE(context->dirty_graphics_states));
+         mgs2_batch_flush();
+     }
+ 
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -5117,4 +5117,19 @@
+ #define MGS2_SUBMIT_GL_OTHER           5
+ void mgs2_submit_census_gl_draw(unsigned int kind, unsigned int count);
+ 
++/* Patch 38: packet-break attribution. Diagnostic only, same env gate. */
++#define MGS2_P38_HINT_CS_BARRIER   0
++#define MGS2_P38_HINT_STATE_DIRTY  1
++#define MGS2_P38_HINT_INDEXED      2
++#define MGS2_P38_HINT_TOPOLOGY     3
++#define MGS2_P38_HINT_CONTEXT      4
++#define MGS2_P38_HINT_LIMIT        5
++#define MGS2_P38_HINT_PRESENT      6
++#define MGS2_P38_HINT_OTHER        7
++void mgs2_p38_hint(unsigned int reason);
++void mgs2_p38_hint_dirty(const unsigned int *dirty, unsigned int words);
++void mgs2_p38_close(unsigned int len, unsigned int mode_ok);
++void mgs2_p38_gl_draw(unsigned int kind, unsigned int count, unsigned int gl_mode);
++void mgs2_p38_bypass(unsigned int gl_mode);
++
+ #endif

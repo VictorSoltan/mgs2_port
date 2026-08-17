@@ -1,0 +1,50 @@
+diff --git a/dlls/wined3d/context_gl.c b/dlls/wined3d/context_gl.c
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4481,7 +4481,7 @@ static BOOL mgs2_graphics_state_dirty(const struct wined3d_context *context)
+ #define MGS2_BATCH_CACHE_ENTRIES (MGS2_BATCH_CACHE_SETS * MGS2_BATCH_CACHE_WAYS)
+ #define MGS2_BATCH_CACHE_BYTES (8 * 1024 * 1024)
+ 
+-static struct
++struct mgs2_batch_state
+ {
+     struct wined3d_context_gl *context_gl;
+     GLenum mode;
+@@ -4492,7 +4492,36 @@ static struct
+     /* Opt-in experiment: keep restart enabled across synthetic batches. */
+     struct wined3d_context_gl *restart_context;
+     BOOL restart_enabled;
+-} mgs2_batch;
++};
++
++/* The ARM island is a second linked copy of WineD3D.  Its file-scope globals
++ * are therefore not the guest DLL's globals.  mgs2_batch_flush() is a valid
++ * native cut only when it consumes the batch accumulated by the guest draw
++ * producer; using the ARM copy makes flush a no-op until the guest array
++ * overruns.  The Box86 entry wrapper resolves the guest state accessor once
++ * and installs that pointer before entering the native body. */
++#ifdef MGS2_ISLAND_ARM
++static struct mgs2_batch_state *mgs2_batch_ptr;
++#define mgs2_batch (*mgs2_batch_ptr)
++
++void mgs2_island_set_batch_state(void *state)
++{
++    mgs2_batch_ptr = state;
++}
++
++void *mgs2_batch_state(void)
++{
++    return mgs2_batch_ptr;
++}
++#else
++static struct mgs2_batch_state mgs2_batch;
++
++void *mgs2_batch_state(void)
++{
++    /* Cold accessor used once by Box86 after its guest-module witnesses agree. */
++    return &mgs2_batch;
++}
++#endif
+ 
+ struct mgs2_batch_cache_entry
+ {

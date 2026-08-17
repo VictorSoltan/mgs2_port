@@ -1,0 +1,196 @@
+Patch 42 -- island target and in-process differential validation.
+
+mgs2_island_ffp_target() is a thin wrapper that Box86 patch 07 replaces with
+native ARM. The renderer keeps calling wined3d_ffp_get_fs_settings() itself,
+so no pixel depends on the island while it is validated. Once per present
+both are run into pre-zeroed buffers and compared byte for byte; the counts
+are published in the bounded PR40 block.
+
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -1832,6 +1832,176 @@
+     InterlockedIncrement(&mgs2_reinforcement_wait_census.publish_sequence);
+ }
+ 
++
++/* ---------------------------------------------------------------------------
++ * Patch 40 -- live ABI proof.
++ *
++ * The offline probe showed i386 and armhf lay the real WineD3D structures out
++ * identically across 175 sizes, alignments and member offsets. That is a
++ * compiler result. This is the live one: it publishes the address of a real
++ * wined3d_state, the byte offsets this build actually uses, and a checksum of
++ * the bytes at those offsets. A native armhf reader on the device recomputes
++ * both from its own ARM-compiled declaration of the same structure and
++ * compares. Agreement means ARM code can read a live WineD3D object through a
++ * raw pointer, which is the last thing standing between the measured layout
++ * result and a native renderer island.
++ *
++ * Memory-only, no allocation, no logging. Published once per present, off
++ * unless MGS2_REINFORCEMENT_CENSUS=1.
++ * --------------------------------------------------------------------------- */
++#define MGS2_P40_CENSUS_MAGIC 0x30345250 /* PR40 */
++#define MGS2_P40_FIELDS 12
++
++struct mgs2_p40_public
++{
++    unsigned int magic;
++    unsigned int version;
++    unsigned int size_words;
++    unsigned int signature;
++    unsigned int enabled;
++    LONG publish_sequence;
++    unsigned int state_address;              /* guest address of the live state */
++    unsigned int state_size;                 /* sizeof(struct wined3d_state) */
++    unsigned int field_count;
++    unsigned int field_offset[MGS2_P40_FIELDS];
++    unsigned int field_size[MGS2_P40_FIELDS];
++    unsigned int checksum;                   /* FNV-1a over those byte ranges */
++    unsigned int samples;
++    /* Differential validation for the native ARM island. The reference result
++     * is produced by the same wined3d_ffp_get_fs_settings() the renderer uses;
++     * the ARM build recomputes it from the raw state and compares these bytes. */
++    unsigned int d3d_info_address;
++    unsigned int ffp_settings_size;
++    unsigned char ffp_settings[160];
++    /* Island differential validation, counted in-process. */
++    unsigned int island_calls;
++    unsigned int island_match;
++    unsigned int island_mismatch;
++    unsigned int island_first_diff_offset;
++    unsigned char island_ref[160];
++    unsigned char island_native[160];
++};
++
++struct mgs2_p40_public mgs2_reinforcement_abi_proof =
++{
++    MGS2_P40_CENSUS_MAGIC,
++    1,
++    sizeof(struct mgs2_p40_public) / sizeof(unsigned int),
++    ~MGS2_P40_CENSUS_MAGIC,
++};
++
++/* The reader must hash exactly these ranges, in this order. */
++#define MGS2_P40_FIELD_LIST(X)                                    \
++    X(render_states)    X(texture_states)  X(streams)             \
++    X(viewports)        X(scissor_rects)   X(blend_factor)        \
++    X(primitive_type)   X(index_offset)    X(base_vertex_index)   \
++    X(viewport_count)   X(scissor_rect_count) X(sample_mask)
++
++static unsigned int mgs2_p40_fnv(const unsigned char *p, unsigned int n, unsigned int h)
++{
++    while (n--)
++    {
++        h ^= *p++;
++        h *= 16777619u;
++    }
++    return h;
++}
++
++static const struct wined3d_d3d_info *cs_d3d_info_for_proof;
++
++/* Patch 42 -- the first native ARM island target.
++ *
++ * Box86 replaces this whole function with an armhf build of the very same
++ * WineD3D source, recognised by its exact prologue. It is deliberately a thin
++ * separate wrapper rather than the real function: the renderer keeps calling
++ * wined3d_ffp_get_fs_settings() as before, so no pixel depends on the island
++ * while it is being validated. mgs2_p40_publish() calls both and compares. */
++__attribute__((noinline, used, optimize("no-optimize-sibling-calls")))
++void mgs2_island_ffp_target(const struct wined3d_state *state,
++        const struct wined3d_d3d_info *d3d_info, struct ffp_frag_settings *settings)
++{
++    /* An eight-byte multi-byte NOP whose displacement spells "MGS2". Box86
++     * matches these exact bytes to find this function, which keeps the
++     * signature independent of the link addresses that a relative jump would
++     * otherwise bake in. It executes as a no-op. */
++    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x32");
++    wined3d_ffp_get_fs_settings(state, d3d_info, settings);
++    __asm__ __volatile__("" ::: "memory");
++}
++
++static void mgs2_p40_publish(const struct wined3d_state *state)
++{
++    static const unsigned int offsets[MGS2_P40_FIELDS] = {
++#define X(f) offsetof(struct wined3d_state, f),
++        MGS2_P40_FIELD_LIST(X)
++#undef X
++    };
++    static const unsigned int sizes[MGS2_P40_FIELDS] = {
++#define X(f) (unsigned int)sizeof(((struct wined3d_state *)0)->f),
++        MGS2_P40_FIELD_LIST(X)
++#undef X
++    };
++    struct mgs2_p40_public *o = &mgs2_reinforcement_abi_proof;
++    unsigned int h = 2166136261u, i;
++
++    if (!mgs2_submit_census_on() || !state)
++        return;
++
++    for (i = 0; i < MGS2_P40_FIELDS; ++i)
++        h = mgs2_p40_fnv((const unsigned char *)state + offsets[i], sizes[i], h);
++
++    InterlockedIncrement(&o->publish_sequence);
++    o->enabled = 1;
++    o->state_address = (unsigned int)(ULONG_PTR)state;
++    o->state_size = (unsigned int)sizeof(struct wined3d_state);
++    o->field_count = MGS2_P40_FIELDS;
++    memcpy(o->field_offset, offsets, sizeof(offsets));
++    memcpy(o->field_size, sizes, sizeof(sizes));
++    o->checksum = h;
++    o->d3d_info_address = (unsigned int)(ULONG_PTR)&cs_d3d_info_for_proof;
++    o->ffp_settings_size = (unsigned int)sizeof(struct ffp_frag_settings);
++    if (sizeof(struct ffp_frag_settings) <= sizeof(o->ffp_settings))
++    {
++        struct ffp_frag_settings settings;
++
++        struct ffp_frag_settings native;
++        unsigned int i;
++
++        /* Both buffers start identical. The struct has alignment holes that
++         * neither implementation is required to write, so comparing them
++         * without this would report stack leftovers as a divergence -- which is
++         * exactly what the first run did, on the padding byte at offset 26. */
++        memset(&settings, 0, sizeof(settings));
++        wined3d_ffp_get_fs_settings(state, cs_d3d_info_for_proof, &settings);
++        memcpy(o->ffp_settings, &settings, sizeof(settings));
++
++        /* Under Box86 with the island enabled this call lands in native ARM
++         * code; otherwise it is the ordinary x86 path and must agree trivially. */
++        memset(&native, 0, sizeof(native));
++        mgs2_island_ffp_target(state, cs_d3d_info_for_proof, &native);
++        ++o->island_calls;
++        if (!memcmp(&settings, &native, sizeof(settings)))
++        {
++            ++o->island_match;
++        }
++        else
++        {
++            ++o->island_mismatch;
++            for (i = 0; i < sizeof(settings); ++i)
++                if (((const unsigned char *)&settings)[i]
++                        != ((const unsigned char *)&native)[i])
++                {
++                    o->island_first_diff_offset = i;
++                    break;
++                }
++            memcpy(o->island_ref, &settings, sizeof(settings));
++            memcpy(o->island_native, &native, sizeof(native));
++        }
++    }
++    ++o->samples;
++    InterlockedIncrement(&o->publish_sequence);
++}
++
+ static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
+ {
+ }
+@@ -1856,6 +2026,8 @@
+     mgs2_batch_present();
+     mgs2_submit_census_present();
+     mgs2_p38_publish();
++    cs_d3d_info_for_proof = &cs->c.device->adapter->d3d_info;
++    mgs2_p40_publish(&cs->state);
+     if (mgs2_p39_on())
+         QueryPerformanceCounter(&mgs2_p39_present_start);
+ 

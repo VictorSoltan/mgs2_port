@@ -6,5 +6,6 @@
 
 int pthread_create(void) { return 0; }
 int pthread_join(void) { return 0; }
+int pthread_kill(void) { return 0; }
 int pthread_mutex_lock(void) { return 0; }
 int pthread_mutex_unlock(void) { return 0; }

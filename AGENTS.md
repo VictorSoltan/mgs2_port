@@ -27,6 +27,21 @@ docs/briefs/MGS2_REINFORCEMENT_ARM_TARGET_2026-08-14.md
                            valid reinforcements profile: 11.9--19.5 fps at
                            fixed 1992 MHz, exact JIT blocks, and why a whole
                            WineD3D/ARM port is not a candidate
+docs/briefs/MGS2_REINFORCEMENT_SUBMIT_CENSUS_2026-08-14.md
+                           bounded p37 source/final-draw census, zero indexed
+                           draws on the automated ALERT route, GPU-link follow-up
+                           and the exact remaining manual capture boundary
+docs/briefs/MGS2_REINFORCEMENT_FRAME_BUDGET_2026-08-14.md
+                           START HERE for the renderer: the whole reinforcement
+                           frame accounted for. Batching, native game code and
+                           the present overlap all closed by measurement; four
+                           corrections to the earlier record, including one
+                           wrong reading retracted in writing
+docs/briefs/MGS2_REINFORCEMENT_MUTEX_DIRECT_2026-08-14.md
+                           current handoff: dense manual census rejects indexed
+                           batching; exact self-owned session-lock freeze,
+                           recovery, direct compatible Box86 mutex production
+                           path, and its no-FPS-win measurement
 docs/briefs/MGS2_DMIME_STATE_CAPTURE_2026-08-10.md
                            current one-reproduction diagnostic: capture point,
                            exact interpretations, build verification and rollback
@@ -247,8 +262,60 @@ validation was normal; intermittent SFX loss remains open until a correlated rep
 the valid 14 August reinforcement profile is 18.3--19.5 fps, later 11.9--14.8,
 with one process, fixed 1992 MHz and 82.777 C: it is real scene cost, not a cap
 wined3d_cs is split 1218 Box86/Wine samples versus 1208 already-native libmali;
-whole-thread WineD3D-to-ARM is therefore rejected, and the next renderer decision
-needs an external, memory-only census of draw paths still reaching the driver
+whole-thread WineD3D-to-ARM is therefore rejected; p37 now provides the external,
+memory-only source/final submission census. The exact dense manual reinforcement
+capture is entirely non-indexed too: 323,788 source draws became 85,966 final
+GL submissions, so the proposed indexed batch is rejected. WineD3D issues two
+CS Present commands per displayed frame on this route; use the external frame
+log as the rate denominator. The 14 August direct-mutex reliability path measured
+15.22 fps here and must not be presented as a renderer improvement.
+the native ARM WineD3D island's illegal instruction is found and fixed: the entry
+marker is an x86 NOP, and the island's own ARM build put those bytes in the ARM
+instruction stream, where 0x474d is `bx r9`. All 37 entries were corrupt at the
+same offset, so the island had never executed one instruction of its own body.
+Patch 48 emits the marker only under __i386__. That exposed three further walls:
+Win32 window/DC stubs, NtCurrentTeb() reading the native ARM thread pointer
+instead of Wine's TEB, and indirect calls through guest-held ops/gl_ops pointers
+that native ARM cannot call. The first two are fixed -- entries 21 and 30 leave
+the cut, patch 49 resolves the guest TEB from Box86's FS base, and six reached
+stubs became real native code -- and 15 of 35 entries then route cleanly. On the
+live reinforcement scene 15 armed, 11 exercised, 2100 frames, zero faults: the
+mechanism works end to end. NO frame-rate effect is measured, in either
+direction, and none is claimed: 13.3--15.0 fps is inside the 11.9--19.5 band this
+scene already had, there was no control arm, and the four entries that carry the
+frame cannot be armed at all. Read sections 17 and 18 before costing the island
+again: the cut analysis counts direct call edges, and WineD3D is built on
+indirect ones
+FINALPLAY5 was the previous production baseline: the native ARM island routed
+15 WineD3D entry points, and the GPU governor was pinned to performance. The island was promoted on the
+owner's judgement that the game plays correctly, NOT on a number -- no frame-rate
+effect is measured for it in either direction. The GPU governor is the one
+measured gain: 15.21 -> 16.85 fps, +10.8%, interleaved arms in one process at one
+spot, CPU cap holding 1992000 throughout. It supersedes a dead-end entry that was
+correct before the cooling was fixed
+FINALPLAY6 is production: island entry 10 remains the measured
+`wined3d_buffer_load` win (-8.87 ms/frame, about +2.1 fps), and entry 4 now
+routes native `mgs2_batch_flush`. Entry 4 uses the authoritative guest batch
+object shared across the cut by the paired island31/p56 binaries; ten stable
+same-process ABBA pairs measured 53.466 routed versus 56.050 guest ms/frame,
+paired median -2.680 ms/frame and +0.899 fps (+4.8%), with zero faults. The
+first duplicate-state implementation crashed and is closed. The production
+allow-list has 17 entries. A real external-launcher smoke loaded the target save
+and completed all 12 walk bursts with one process, 16 entries encountered,
+class-B 1616 armed, byte-identical mount targets and zero island faults. The
+owner explicitly authorised promotion on 2026-08-16; island29+p55 plus the old
+allow-list is the exact rollback
+the Box86 sync-arena freeze is still open and recurred in production. The futex
+words are genuinely zero and stay zero -- but 0x400f012c is the per-thread alert
+futex behind NtWaitForAlertByThreadId, NOT a CS queue word, so that proves only
+"no pending alert" and not a missed publication. A weak-memory explanation was
+asserted and is WITHDRAWN: Wine 11 publishes queue->head with InterlockedExchange
+and guards the wait race with InterlockedCompareExchange, and Box86 barriers
+lock-prefixed ops regardless of STRONGMEM. Read section 24 before theorising
+again; the queue head/tail and waiting_for_event have never been read
+the attract-mode demo is NOT a frame-rate A/B harness: it sits on the 60 Hz cap,
+so four interleaved 240 s arms differed by -0.05%, which measures the display and
+not the change. Its determinism is real but only useful for stall buckets
 ```
 
 ## Before proposing anything

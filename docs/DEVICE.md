@@ -75,7 +75,8 @@ Never trust the filename you passed. Compare the mount target byte for byte:
 
 ```sh
 G=/storage/roms/ports/MGS2-Substance
-cmp -s /usr/lib/wine/i386-windows/wined3d.dll $G/wined3d_p32_ffp_source_dedup.dll && echo ok
+cmp -s /usr/bin/box86 $G/box86-island31 && echo ok
+cmp -s /usr/lib/wine/i386-windows/wined3d.dll $G/wined3d_p56_batch_state.dll && echo ok
 cmp -s /usr/lib/wine/i386-unix/winewayland.so $G/winewayland_stall1.so && echo ok
 ```
 
@@ -92,18 +93,30 @@ c=0; for p in /proc/[0-9]*; do
 ```text
 MGS2_WINED3D_DLL   MGS2_D3D8_DLL   MGS2_DMIME_DLL   MGS2_DMSYNTH_DLL
 MGS2_DSOUND_DLL    MGS2_WAYLAND_SO  MGS2_OPENGL32_SO MGS2_WIN32U_SO
-MGS2_NTDLL_SO      MGS2_USER32_DLL
+MGS2_NTDLL_SO      MGS2_USER32_DLL  MGS2_BOX86_BIN    MGS2_BOX86_ISLAND_ONLY
 ```
 
 Each names a file in the game directory; the launcher bind-mounts it over the
 Wine module of that name and unmounts it on exit. This is how every A/B in this
 project was done — no rebuild, no reinstall.
 
-FINALPLAY4 production defaults are `box86-native-dsound-fir1`,
+FINALPLAY6 production defaults are `box86-island31` and
+`wined3d_p56_batch_state.dll`, with island entries
+`0,1,2,3,4,5,6,9,10,14,18,19,22,28,29,32,33`. Keep those two binaries paired:
+entry 4 obtains the authoritative guest batch state through p56. The exact
+pre-entry-4 rollback is `box86-island29` + `wined3d_p55_glinfo.dll` plus the
+same list without entry 4.
+
+FINALPLAY6 retains the FINALPLAY4 native FIR defaults:
 `dsound_p36_native_fir_target.dll`, `dmsynth_p34_interp_reset.dll`, and
-`MGS2_BOX86_NATIVE_DSOUND_FIR=1`. The native FIR switch is valid only with that
-exact Box86/dsound pair. Set it to `0`, or select the previous FINALPLAY3
-`box86-native-memmove3` + `dsound_se1.dll` pair, for rollback.
+`MGS2_BOX86_NATIVE_DSOUND_FIR=1`. Set the switch to `0` only with a compatible
+older Box86/dsound diagnostic pair.
+
+The launcher also defaults to `BOX86_MUTEX_ALIGNED=1`. This is the direct
+native-mutex path: it bypasses Box86's shadow mutex pool after the 14 August
+live self-owner `session_lock` freeze. ROCKNIX armhf and this Wine i386 build
+were verified to have a compatible 24-byte, 4-byte-aligned mutex layout. Set
+`BOX86_MUTEX_ALIGNED=0` only to diagnose/roll back this reliability change.
 
 ## Measuring
 
@@ -142,6 +155,11 @@ The 14 August valid capture had one process, fixed 1992 MHz and 82.777 C, yet
 showed 18.3--19.5 fps and later 11.9--14.8 fps.  It is the reference control for
 any future combat change; details and the exact external-reader interpretation
 are in `MGS2_REINFORCEMENT_ARM_TARGET_2026-08-14.md`.
+
+The direct-mutex run measured 15.22 fps over 300 reinforcement frames at the
+same 1992 MHz cap. It is a freeze-reliability result, **not** a performance win;
+the exact submission census and freeze artifacts are in
+`MGS2_REINFORCEMENT_MUTEX_DIRECT_2026-08-14.md`.
 
 ## Getting into real gameplay without hands
 

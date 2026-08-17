@@ -1,0 +1,80 @@
+[   10.252588] wlan0: Limiting TX power to 19 (19 - 0) dBm as advertised by 62:53:75:10:48:64
+[   11.676909] mali_kbase: loading out-of-tree module taints kernel.
+[   11.682503] mali fde60000.gpu: Kernel DDK version r54p2-02eac0
+[   11.682723] mali fde60000.gpu: Looking up mali-supply from device node /gpu@fde60000
+[   11.684324] mali fde60000.gpu: Looking up shadercores-supply from device node /gpu@fde60000
+[   11.684361] mali fde60000.gpu: Looking up shadercores-supply property in node /gpu@fde60000 failed
+[   11.684467] mali fde60000.gpu: Looking up mali-supply from device node /gpu@fde60000
+[   11.684979] vdd_gpu: could not add device link fde60000.gpu: -17
+[   11.685462] mali fde60000.gpu: Register LUT 00070200 initialized for GPU arch 0x00070400
+[   11.685494] mali fde60000.gpu: GPU identified as 0x2 arch 7.4.0 r1p0 status 0
+[   11.685666] mali fde60000.gpu: No priority control manager is configured
+[   11.685675] mali fde60000.gpu: Large page support was disabled at compile-time!
+[   11.685920] mali fde60000.gpu: No memory group manager is configured
+[   11.688527] mali fde60000.gpu: Using configured power model mali-g52_r1-power-model, and fallback mali-simple-power-model
+[   11.689247] workqueue: name exceeds WQ_NAME_LEN. Truncating to: kbase_job_fault_resume_work_que
+[   11.690714] mali fde60000.gpu: * MALI kbase_mmap_min_addr compiled to CONFIG_DEFAULT_MMAP_MIN_ADDR, no runtime update possible! *
+[   11.690737] mali fde60000.gpu: Probed as mali0
+[   11.797729] devfreq fde60000.gpu: Couldn't update frequency transition information.
+[   14.045170] Bluetooth: MGMT ver 1.23
+[   15.397879] file system registered
+[   62.448538] cfg80211: failed to load regulatory.db
+[ 1771.941843] input: Fake Keyboard as /devices/virtual/input/input5
+[ 1789.237448] warning: `wine_sechost_se' uses wireless extensions which will stop working for Wi-Fi 7 hardware; use nl80211
+[ 1801.600731] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 1801.647301] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 1818.027115] input: mgsdbg-autoload as /devices/virtual/input/input6
+[ 2048.522878] input: Fake Keyboard as /devices/virtual/input/input7
+[ 2078.769199] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 2078.807423] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 2096.245587] input: mgsdbg-autoload as /devices/virtual/input/input8
+[ 2291.727205] input: Fake Keyboard as /devices/virtual/input/input9
+[ 2320.176577] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 2320.214437] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 2337.550551] input: mgsdbg-autoload as /devices/virtual/input/input10
+[ 2781.574839] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2783.591247] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2785.607442] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2791.591450] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2793.607504] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2795.626209] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2797.643580] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2805.608052] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2807.625701] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2809.640284] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2811.655442] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 2865.436031] input: Fake Keyboard as /devices/virtual/input/input11
+[ 2893.604478] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 2893.641838] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 2911.352077] input: mgsdbg-autoload as /devices/virtual/input/input12
+[ 2915.854514] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 3408.079804] input: Fake Keyboard as /devices/virtual/input/input13
+[ 3436.313689] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 3436.352448] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 3454.124526] input: mgsdbg-autoload as /devices/virtual/input/input14
+[ 4002.445168] input: Fake Keyboard as /devices/virtual/input/input15
+[ 4031.639804] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 4031.678708] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 4048.735952] input: mgsdbg-autoload as /devices/virtual/input/input16
+[ 4833.779140] udc fcc00000.usb: soft-connect without a gadget driver
+[ 4904.057406] input: Fake Keyboard as /devices/virtual/input/input17
+[ 4932.270228] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 4932.309109] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 4949.967004] input: mgsdbg-autoload as /devices/virtual/input/input18
+[ 5020.031560] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 5022.045401] systemd-journald[226]: Under memory pressure, flushing caches.
+[ 5183.498279] input: Fake Keyboard as /devices/virtual/input/input19
+[ 5214.223213] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 5214.266907] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 5235.431303] input: mgsdbg-autoload as /devices/virtual/input/input20
+[ 5433.823873] perf: interrupt took too long (2578 > 2500), lowering kernel.perf_event_max_sample_rate to 77500
+[ 5433.840156] perf: interrupt took too long (3256 > 3222), lowering kernel.perf_event_max_sample_rate to 61250
+[ 5433.867065] perf: interrupt took too long (4091 > 4070), lowering kernel.perf_event_max_sample_rate to 48750
+[ 5433.893469] perf: interrupt took too long (5202 > 5113), lowering kernel.perf_event_max_sample_rate to 38250
+[ 5433.950562] perf: interrupt took too long (6511 > 6502), lowering kernel.perf_event_max_sample_rate to 30500
+[ 5434.034519] perf: interrupt took too long (8231 > 8138), lowering kernel.perf_event_max_sample_rate to 24250
+[ 5434.235046] perf: interrupt took too long (10298 > 10288), lowering kernel.perf_event_max_sample_rate to 19250
+[ 5435.034742] perf: interrupt took too long (12893 > 12872), lowering kernel.perf_event_max_sample_rate to 15500
+[ 5766.822450] input: Fake Keyboard as /devices/virtual/input/input21
+[ 5794.700462] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0
+[ 5794.740904] hdmi-audio-codec hdmi-audio-codec.10.auto: HDMI: Unknown ELD version 0

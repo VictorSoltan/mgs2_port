@@ -1,0 +1,236 @@
+Patch 52 -- CS deadlock census, and a tunable CS spin count.
+
+The freeze leaves wined3d_cs asleep and the main thread on a timed wait. Two
+different faults look identical there, and nothing captured so far separated
+them:
+
+  A  work is published and the consumer is not running it
+  B  the queues are empty and the consumer is asleep correctly, so the fault is
+     elsewhere -- most likely whatever the main thread waits for in ntsync
+
+Reading cs->queue[].head/tail decides it, and that had never been done: a
+weak-memory explanation was asserted instead and withdrawn (brief section 24).
+
+The census is memory only and never logs. It records the sync events -- SUBMIT,
+ALERT, WAIT_PREPARE, WAIT_ABORT_NONEMPTY, WAIT_ENTER, WAIT_RETURN -- in a
+64-entry ring, and counts executes WITHOUT ringing them, because thousands a
+frame would flush exactly the history that matters. It also publishes the live
+`cs` pointer and the FIELD_OFFSET of each field it needs, so the external reader
+follows them through /proc/pid/mem with no debug info at all.
+
+MGS2_CS_SPIN_COUNT lowers WINED3D_CS_SPIN_COUNT from 2000, so a soak crosses the
+queue-empty -> waiting_for_event -> alert wait boundary on nearly every drain
+instead of rarely. Unset, it is the stock value and nothing changes.
+
+Both are gated: MGS2_CS_DEADLOCK_CENSUS=1 arms the census, and the cost is a
+handful of counter writes per sync event -- about 12,600 alerts against 1.5M
+executes on a live run, so it is not on the draw path.
+
+Verified live on a running game:
+
+  submits 1508295  alerts 12598  executes 1508159
+  wait: prepare 12605  enter 12598  return 12598  abort-nonempty 7
+  DEFAULT head 0x59cbca0 tail 0x59c99e4  NOT EMPTY   waiting_for_event 0
+
+That last line is also the reason the READER must not decide on head != tail
+alone: this is a healthy process. A stuck consumer has to show a stable
+non-empty queue, waiting_for_event set, the CS thread blocked in futex, and the
+execute counter frozen, across several samples. See harness/cs_deadlock_census.py.
+
+diff -ruN old/dlls/wined3d/cs.c new/dlls/wined3d/cs.c
+--- old/dlls/wined3d/cs.c	2026-08-16 12:55:32.481700939 +0300
++++ new/dlls/wined3d/cs.c	2026-08-16 12:55:32.448351745 +0300
+@@ -2281,6 +2281,138 @@
+     InterlockedIncrement(&mgs2_island_icall_census.publish_sequence);
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * Patch 52: CS deadlock census.
++ *
++ * The freeze leaves wined3d_cs asleep for ever and the main thread spinning on a
++ * timed wait. Two very different faults produce that, and nothing collected so
++ * far separates them:
++ *
++ *   A  a command is published and the consumer is asleep anyway -- the
++ *      submit/alert handshake is broken
++ *   B  both queues are empty and the CS is behaving correctly -- the main
++ *      thread is stuck on something else entirely
++ *
++ * Reading cs->queue[].head/tail settles it. A weak-memory story was asserted
++ * before this was measured, and withdrawn; see section 24 of the brief.
++ *
++ * This is memory only and never logs. The live cs pointer and the field offsets
++ * are published here too, so an external reader can follow them through
++ * /proc/pid/mem without needing debug info. The ring records the SYNC events
++ * only -- executes are counted, not ringed, because there are thousands a frame
++ * and they would flush the history that matters.
++ */
++#define MGS2_P52_MAGIC 0x32355250 /* PR52 */
++#define MGS2_P52_RING 64
++
++enum mgs2_p52_event
++{
++    MGS2_P52_SUBMIT = 1,
++    MGS2_P52_ALERT,
++    MGS2_P52_WAIT_PREPARE,
++    MGS2_P52_WAIT_ABORT_NONEMPTY,
++    MGS2_P52_WAIT_ENTER,
++    MGS2_P52_WAIT_RETURN,
++};
++
++struct mgs2_p52_entry
++{
++    unsigned int event;
++    unsigned int thread;
++    unsigned int executes;
++    unsigned int default_head, default_tail;
++    unsigned int map_head, map_tail;
++    unsigned int waiting_for_event;
++};
++
++struct mgs2_p52_public
++{
++    unsigned int magic, version, size_words, signature, enabled;
++    unsigned int cs_pointer;
++    unsigned int off_queue_default_head, off_queue_default_tail;
++    unsigned int off_queue_map_head, off_queue_map_tail;
++    unsigned int off_waiting_for_event, off_thread_id;
++    unsigned int submits, alerts, executes;
++    unsigned int wait_prepares, wait_enters, wait_returns, wait_aborts;
++    unsigned int ring_write;
++    struct mgs2_p52_entry ring[MGS2_P52_RING];
++};
++
++struct mgs2_p52_public mgs2_cs_deadlock_census =
++{
++    MGS2_P52_MAGIC, 1,
++    sizeof(struct mgs2_p52_public) / sizeof(unsigned int),
++    ~MGS2_P52_MAGIC,
++};
++
++static int mgs2_p52_on(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        const char *value = getenv("MGS2_CS_DEADLOCK_CENSUS");
++        enabled = value && strcmp(value, "0");
++        mgs2_cs_deadlock_census.enabled = enabled;
++    }
++    return enabled;
++}
++
++static void mgs2_p52_note(struct wined3d_cs *cs, unsigned int event)
++{
++    struct mgs2_p52_public *c = &mgs2_cs_deadlock_census;
++    struct mgs2_p52_entry *e;
++
++    if (!mgs2_p52_on())
++        return;
++    if (!c->cs_pointer)
++    {
++        c->cs_pointer = (unsigned int)(ULONG_PTR)cs;
++        c->off_queue_default_head = FIELD_OFFSET(struct wined3d_cs, queue[WINED3D_CS_QUEUE_DEFAULT].head);
++        c->off_queue_default_tail = FIELD_OFFSET(struct wined3d_cs, queue[WINED3D_CS_QUEUE_DEFAULT].tail);
++        c->off_queue_map_head = FIELD_OFFSET(struct wined3d_cs, queue[WINED3D_CS_QUEUE_MAP].head);
++        c->off_queue_map_tail = FIELD_OFFSET(struct wined3d_cs, queue[WINED3D_CS_QUEUE_MAP].tail);
++        c->off_waiting_for_event = FIELD_OFFSET(struct wined3d_cs, waiting_for_event);
++        c->off_thread_id = FIELD_OFFSET(struct wined3d_cs, thread_id);
++    }
++    switch (event)
++    {
++        case MGS2_P52_SUBMIT: ++c->submits; break;
++        case MGS2_P52_ALERT: ++c->alerts; break;
++        case MGS2_P52_WAIT_PREPARE: ++c->wait_prepares; break;
++        case MGS2_P52_WAIT_ABORT_NONEMPTY: ++c->wait_aborts; break;
++        case MGS2_P52_WAIT_ENTER: ++c->wait_enters; break;
++        case MGS2_P52_WAIT_RETURN: ++c->wait_returns; break;
++    }
++    e = &c->ring[c->ring_write % MGS2_P52_RING];
++    e->event = event;
++    e->thread = GetCurrentThreadId();
++    e->executes = c->executes;
++    e->default_head = cs->queue[WINED3D_CS_QUEUE_DEFAULT].head;
++    e->default_tail = cs->queue[WINED3D_CS_QUEUE_DEFAULT].tail;
++    e->map_head = cs->queue[WINED3D_CS_QUEUE_MAP].head;
++    e->map_tail = cs->queue[WINED3D_CS_QUEUE_MAP].tail;
++    e->waiting_for_event = cs->waiting_for_event;
++    ++c->ring_write;
++}
++
++/* The wait path is entered only after WINED3D_CS_SPIN_COUNT (2000) idle spins,
++ * which makes the suspected submit/alert boundary rare. MGS2_CS_SPIN_COUNT
++ * lowers it so a soak exercises that boundary orders of magnitude more often;
++ * unset, it is the stock value and nothing changes. */
++static unsigned int mgs2_cs_spin_count(void)
++{
++    static unsigned int value;
++
++    if (!value)
++    {
++        const char *env = getenv("MGS2_CS_SPIN_COUNT");
++        int n = env ? atoi(env) : 0;
++        value = (n > 0) ? (unsigned int)n : WINED3D_CS_SPIN_COUNT;
++    }
++    return value;
++}
++
+ static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
+ {
+ }
+@@ -5055,9 +5187,11 @@
+     TRACE("Queuing op %s at %p.\n", debug_cs_op(*(const enum wined3d_cs_op *)packet->data), packet);
+     packet_size = FIELD_OFFSET(struct wined3d_cs_packet, data[packet->size]);
+     InterlockedExchange((LONG *)&queue->head, queue->head + packet_size);
++    mgs2_p52_note(cs, MGS2_P52_SUBMIT);
+ 
+     if (InterlockedCompareExchange(&cs->waiting_for_event, FALSE, TRUE))
+     {
++        mgs2_p52_note(cs, MGS2_P52_ALERT);
+         if (pNtAlertThreadByThreadId)
+             pNtAlertThreadByThreadId((HANDLE)(ULONG_PTR)cs->thread_id);
+         else
+@@ -5199,6 +5333,7 @@
+         timeout = &query_timeout;
+ 
+     InterlockedExchange(&cs->waiting_for_event, TRUE);
++    mgs2_p52_note(cs, MGS2_P52_WAIT_PREPARE);
+ 
+     /* The main thread might have enqueued a command and blocked on it after
+      * the CS thread decided to enter wined3d_cs_wait_event(), but before
+@@ -5210,12 +5345,17 @@
+     if (!(wined3d_cs_queue_is_empty(cs, &cs->queue[WINED3D_CS_QUEUE_DEFAULT])
+             && wined3d_cs_queue_is_empty(cs, &cs->queue[WINED3D_CS_QUEUE_MAP]))
+             && InterlockedCompareExchange(&cs->waiting_for_event, FALSE, TRUE))
++    {
++        mgs2_p52_note(cs, MGS2_P52_WAIT_ABORT_NONEMPTY);
+         return;
++    }
+ 
++    mgs2_p52_note(cs, MGS2_P52_WAIT_ENTER);
+     if (pNtWaitForAlertByThreadId)
+         pNtWaitForAlertByThreadId(NULL, timeout);
+     else
+         NtWaitForSingleObject(cs->event, FALSE, timeout);
++    mgs2_p52_note(cs, MGS2_P52_WAIT_RETURN);
+ }
+ 
+ static void wined3d_cs_command_lock(const struct wined3d_cs *cs)
+@@ -5326,7 +5466,7 @@
+             {
+                 mgs2_p39_spin();
+                 YieldProcessor();
+-                if (++spin_count >= WINED3D_CS_SPIN_COUNT)
++                if (++spin_count >= mgs2_cs_spin_count())
+                 {
+                     if (poll)
+                         poll = WINED3D_CS_QUERY_POLL_INTERVAL - 1;
+@@ -5343,6 +5483,7 @@
+         mgs2_p39_busy();
+         mgs2_p39_packet();
+ 
++        ++mgs2_cs_deadlock_census.executes;   /* counted, never ringed */
+         run = wined3d_cs_execute_next(cs, queue);
+     }
+ 

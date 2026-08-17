@@ -1,0 +1,1026 @@
+{
+  "rows": [
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 17.8,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 14.09,
+      "t": 1.0,
+      "threads": {
+        "mali-cmar-backe:32599": 0.02,
+        "mgs2_sse_rg353v:31918": 0.06,
+        "mgs2_sse_rg353v:32591": 0.2,
+        "mgs2_sse_rg353v:32638": 0.07,
+        "mgs2_sse_rg353v:32641": 0.5999,
+        "wine_dmsynth_si:32629": 0.21,
+        "wine_dsound_mix:32625": 0.09,
+        "wined3d_cs:32609": 0.6599
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 10.2,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 26.49,
+      "t": 2.008,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0397,
+        "mgs2_sse_rg353v:31918": 0.0694,
+        "mgs2_sse_rg353v:32591": 0.1686,
+        "mgs2_sse_rg353v:32638": 0.0595,
+        "mgs2_sse_rg353v:32641": 0.873,
+        "wine_dmsynth_si:32629": 0.2183,
+        "wine_dsound_mix:32625": 0.1091,
+        "wined3d_cs:32609": 0.6151
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82777,
+      "fps": 10.2,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 26.49,
+      "t": 3.021,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0296,
+        "mgs2_sse_rg353v:31918": 0.0592,
+        "mgs2_sse_rg353v:32591": 0.2074,
+        "mgs2_sse_rg353v:32638": 0.0691,
+        "mgs2_sse_rg353v:32641": 0.6616,
+        "wine_dmsynth_si:32629": 0.2962,
+        "wine_dsound_mix:32625": 0.0987,
+        "wined3d_cs:32609": 0.6517
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 10.2,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 26.49,
+      "t": 4.039,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0295,
+        "mgs2_sse_rg353v:31918": 0.0589,
+        "mgs2_sse_rg353v:32591": 0.2259,
+        "mgs2_sse_rg353v:32638": 0.0589,
+        "mgs2_sse_rg353v:32641": 0.5894,
+        "wine_dmsynth_si:32629": 0.2358,
+        "wine_dsound_mix:32625": 0.0884,
+        "wined3d_cs:32609": 0.6876
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 10.2,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 26.49,
+      "t": 5.05,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0593,
+        "mgs2_sse_rg353v:32591": 0.2077,
+        "mgs2_sse_rg353v:32638": 0.0593,
+        "mgs2_sse_rg353v:32641": 0.6329,
+        "wine_dmsynth_si:32629": 0.2472,
+        "wine_dsound_mix:32625": 0.0989,
+        "wined3d_cs:32609": 0.712
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.8,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 17.36,
+      "t": 6.06,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0297,
+        "mgs2_sse_rg353v:31918": 0.0594,
+        "mgs2_sse_rg353v:32591": 0.198,
+        "mgs2_sse_rg353v:32638": 0.0594,
+        "mgs2_sse_rg353v:32641": 0.594,
+        "wine_dmsynth_si:32629": 0.2376,
+        "wine_dsound_mix:32625": 0.0891,
+        "wined3d_cs:32609": 0.6435
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.8,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 17.36,
+      "t": 7.067,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0298,
+        "mgs2_sse_rg353v:31918": 0.0596,
+        "mgs2_sse_rg353v:32591": 0.1886,
+        "mgs2_sse_rg353v:32638": 0.0496,
+        "mgs2_sse_rg353v:32641": 0.5262,
+        "wine_dmsynth_si:32629": 0.1886,
+        "wine_dsound_mix:32625": 0.0794,
+        "wined3d_cs:32609": 0.6553
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.8,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 17.36,
+      "t": 8.074,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0298,
+        "mgs2_sse_rg353v:31918": 0.0596,
+        "mgs2_sse_rg353v:32591": 0.1986,
+        "mgs2_sse_rg353v:32638": 0.0695,
+        "mgs2_sse_rg353v:32641": 0.6455,
+        "wine_dmsynth_si:32629": 0.2185,
+        "wine_dsound_mix:32625": 0.0894,
+        "wined3d_cs:32609": 0.6752
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82777,
+      "fps": 13.8,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 17.36,
+      "t": 9.087,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0296,
+        "mgs2_sse_rg353v:31918": 0.0691,
+        "mgs2_sse_rg353v:32591": 0.2272,
+        "mgs2_sse_rg353v:32638": 0.0593,
+        "mgs2_sse_rg353v:32641": 0.6125,
+        "wine_dmsynth_si:32629": 0.2272,
+        "wine_dsound_mix:32625": 0.0988,
+        "wined3d_cs:32609": 0.6717
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 13.8,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 17.36,
+      "t": 10.095,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0298,
+        "mgs2_sse_rg353v:31918": 0.0496,
+        "mgs2_sse_rg353v:32591": 0.2282,
+        "mgs2_sse_rg353v:32638": 0.0695,
+        "mgs2_sse_rg353v:32641": 0.6052,
+        "wine_dmsynth_si:32629": 0.258,
+        "wine_dsound_mix:32625": 0.0893,
+        "wined3d_cs:32609": 0.6846
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 12.4,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 22.2,
+      "t": 11.107,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0198,
+        "mgs2_sse_rg353v:31918": 0.0593,
+        "mgs2_sse_rg353v:32591": 0.2075,
+        "mgs2_sse_rg353v:32638": 0.0593,
+        "mgs2_sse_rg353v:32641": 0.573,
+        "wine_dmsynth_si:32629": 0.326,
+        "wine_dsound_mix:32625": 0.0889,
+        "wined3d_cs:32609": 0.6718
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 12.4,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 22.2,
+      "t": 12.117,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0594,
+        "mgs2_sse_rg353v:32591": 0.2177,
+        "mgs2_sse_rg353v:32638": 0.0594,
+        "mgs2_sse_rg353v:32641": 0.6828,
+        "wine_dmsynth_si:32629": 0.3068,
+        "wine_dsound_mix:32625": 0.0792,
+        "wined3d_cs:32609": 0.7026
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 12.4,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 22.2,
+      "t": 13.13,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0296,
+        "mgs2_sse_rg353v:31918": 0.0494,
+        "mgs2_sse_rg353v:32591": 0.2173,
+        "mgs2_sse_rg353v:32638": 0.0692,
+        "mgs2_sse_rg353v:32641": 0.6817,
+        "wine_dmsynth_si:32629": 0.2667,
+        "wine_dsound_mix:32625": 0.0889,
+        "wined3d_cs:32609": 0.6817
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82777,
+      "fps": 12.4,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 22.2,
+      "t": 14.141,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0594,
+        "mgs2_sse_rg353v:32591": 0.2077,
+        "mgs2_sse_rg353v:32638": 0.0594,
+        "mgs2_sse_rg353v:32641": 0.643,
+        "wine_dmsynth_si:32629": 0.2473,
+        "wine_dsound_mix:32625": 0.089,
+        "wined3d_cs:32609": 0.6826
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 13.1,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 19.69,
+      "t": 15.15,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0297,
+        "mgs2_sse_rg353v:31918": 0.0693,
+        "mgs2_sse_rg353v:32591": 0.2278,
+        "mgs2_sse_rg353v:32638": 0.0495,
+        "mgs2_sse_rg353v:32641": 0.6338,
+        "wine_dmsynth_si:32629": 0.2278,
+        "wine_dsound_mix:32625": 0.0891,
+        "wined3d_cs:32609": 0.6635
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 13.1,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 19.69,
+      "t": 16.157,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0298,
+        "mgs2_sse_rg353v:31918": 0.0497,
+        "mgs2_sse_rg353v:32591": 0.2284,
+        "mgs2_sse_rg353v:32638": 0.0596,
+        "mgs2_sse_rg353v:32641": 0.5263,
+        "wine_dmsynth_si:32629": 0.2185,
+        "wine_dsound_mix:32625": 0.0894,
+        "wined3d_cs:32609": 0.6653
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 13.1,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 19.69,
+      "t": 17.169,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0296,
+        "mgs2_sse_rg353v:31918": 0.0692,
+        "mgs2_sse_rg353v:32591": 0.1877,
+        "mgs2_sse_rg353v:32638": 0.0692,
+        "mgs2_sse_rg353v:32641": 0.5632,
+        "wine_dmsynth_si:32629": 0.247,
+        "wine_dsound_mix:32625": 0.0889,
+        "wined3d_cs:32609": 0.662
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.1,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 19.69,
+      "t": 18.178,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0298,
+        "mgs2_sse_rg353v:31918": 0.0496,
+        "mgs2_sse_rg353v:32591": 0.2083,
+        "mgs2_sse_rg353v:32638": 0.0595,
+        "mgs2_sse_rg353v:32641": 0.6249,
+        "wine_dmsynth_si:32629": 0.1984,
+        "wine_dsound_mix:32625": 0.0893,
+        "wined3d_cs:32609": 0.6646
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.1,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 19.69,
+      "t": 19.188,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0693,
+        "mgs2_sse_rg353v:32591": 0.198,
+        "mgs2_sse_rg353v:32638": 0.0495,
+        "mgs2_sse_rg353v:32641": 0.604,
+        "wine_dmsynth_si:32629": 0.2574,
+        "wine_dsound_mix:32625": 0.0891,
+        "wined3d_cs:32609": 0.6832
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 81666,
+      "fps": 11.9,
+      "gpu_cur_hz": 200000000,
+      "gpu_target_hz": 200000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 22.61,
+      "t": 20.203,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0295,
+        "mgs2_sse_rg353v:31918": 0.0492,
+        "mgs2_sse_rg353v:32591": 0.2068,
+        "mgs2_sse_rg353v:32638": 0.0689,
+        "mgs2_sse_rg353v:32641": 0.6501,
+        "wine_dmsynth_si:32629": 0.2265,
+        "wine_dsound_mix:32625": 0.0886,
+        "wined3d_cs:32609": 0.6796
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82777,
+      "fps": 11.9,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 22.61,
+      "t": 21.22,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0295,
+        "mgs2_sse_rg353v:31918": 0.059,
+        "mgs2_sse_rg353v:32591": 0.1966,
+        "mgs2_sse_rg353v:32638": 0.059,
+        "mgs2_sse_rg353v:32641": 0.629,
+        "wine_dmsynth_si:32629": 0.2359,
+        "wine_dsound_mix:32625": 0.0885,
+        "wined3d_cs:32609": 0.6388
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 11.9,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 22.61,
+      "t": 22.227,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0298,
+        "mgs2_sse_rg353v:31918": 0.0596,
+        "mgs2_sse_rg353v:32591": 0.2085,
+        "mgs2_sse_rg353v:32638": 0.0496,
+        "mgs2_sse_rg353v:32641": 0.6553,
+        "wine_dmsynth_si:32629": 0.2284,
+        "wine_dsound_mix:32625": 0.0993,
+        "wined3d_cs:32609": 0.6454
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 11.9,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 22.61,
+      "t": 23.235,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0397,
+        "mgs2_sse_rg353v:31918": 0.0596,
+        "mgs2_sse_rg353v:32591": 0.2085,
+        "mgs2_sse_rg353v:32638": 0.0596,
+        "mgs2_sse_rg353v:32641": 0.685,
+        "wine_dmsynth_si:32629": 0.2184,
+        "wine_dsound_mix:32625": 0.0893,
+        "wined3d_cs:32609": 0.6651
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 81666,
+      "fps": 11.9,
+      "gpu_cur_hz": 200000000,
+      "gpu_target_hz": 200000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 22.61,
+      "t": 24.245,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0198,
+        "mgs2_sse_rg353v:31918": 0.0594,
+        "mgs2_sse_rg353v:32591": 0.198,
+        "mgs2_sse_rg353v:32638": 0.0594,
+        "mgs2_sse_rg353v:32641": 0.6137,
+        "wine_dmsynth_si:32629": 0.2277,
+        "wine_dsound_mix:32625": 0.0891,
+        "wined3d_cs:32609": 0.6533
+      }
+    },
+    {
+      "cpu_cur_khz": 1416000,
+      "cpu_max_khz": 1416000,
+      "cpu_temp_mc": 81666,
+      "fps": 12.6,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 23.94,
+      "t": 25.254,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0595,
+        "mgs2_sse_rg353v:32591": 0.2081,
+        "mgs2_sse_rg353v:32638": 0.0595,
+        "mgs2_sse_rg353v:32641": 0.6342,
+        "wine_dmsynth_si:32629": 0.218,
+        "wine_dsound_mix:32625": 0.0991,
+        "wined3d_cs:32609": 0.6639
+      }
+    },
+    {
+      "cpu_cur_khz": 1416000,
+      "cpu_max_khz": 1416000,
+      "cpu_temp_mc": 81111,
+      "fps": 12.6,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 23.94,
+      "t": 26.274,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0294,
+        "mgs2_sse_rg353v:31918": 0.0686,
+        "mgs2_sse_rg353v:32591": 0.2058,
+        "mgs2_sse_rg353v:32638": 0.049,
+        "mgs2_sse_rg353v:32641": 0.6077,
+        "wine_dmsynth_si:32629": 0.0784,
+        "wine_dsound_mix:32625": 0.1078,
+        "wined3d_cs:32609": 0.6763
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 81111,
+      "fps": 12.6,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 23.94,
+      "t": 27.285,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0594,
+        "mgs2_sse_rg353v:32591": 0.2177,
+        "mgs2_sse_rg353v:32638": 0.0495,
+        "mgs2_sse_rg353v:32641": 0.6432,
+        "wine_dmsynth_si:32629": 0.0099,
+        "wine_dsound_mix:32625": 0.1088,
+        "wined3d_cs:32609": 0.6828
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 81111,
+      "fps": 12.6,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 23.94,
+      "t": 28.299,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0493,
+        "mgs2_sse_rg353v:31918": 0.0591,
+        "mgs2_sse_rg353v:32591": 0.2169,
+        "mgs2_sse_rg353v:32638": 0.0296,
+        "mgs2_sse_rg353v:32641": 0.6013,
+        "wine_dmsynth_si:32629": 0.0197,
+        "wine_dsound_mix:32625": 0.0887,
+        "wined3d_cs:32609": 0.7196
+      }
+    },
+    {
+      "cpu_cur_khz": 1416000,
+      "cpu_max_khz": 1416000,
+      "cpu_temp_mc": 81111,
+      "fps": 12.6,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 23.94,
+      "t": 29.306,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0397,
+        "mgs2_sse_rg353v:31918": 0.0795,
+        "mgs2_sse_rg353v:32591": 0.2185,
+        "mgs2_sse_rg353v:32638": 0.0397,
+        "mgs2_sse_rg353v:32641": 0.596,
+        "wine_dmsynth_si:32629": 0.0199,
+        "wine_dsound_mix:32625": 0.1093,
+        "wined3d_cs:32609": 0.7251
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 81666,
+      "fps": 13.5,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 18.96,
+      "t": 30.325,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0294,
+        "mgs2_sse_rg353v:31918": 0.0589,
+        "mgs2_sse_rg353v:32591": 0.216,
+        "mgs2_sse_rg353v:32638": 0.0589,
+        "mgs2_sse_rg353v:32641": 0.6381,
+        "wine_dmsynth_si:32629": 0.0785,
+        "wine_dsound_mix:32625": 0.108,
+        "wined3d_cs:32609": 0.7362
+      }
+    },
+    {
+      "cpu_cur_khz": 1416000,
+      "cpu_max_khz": 1416000,
+      "cpu_temp_mc": 81666,
+      "fps": 13.5,
+      "gpu_cur_hz": 600000000,
+      "gpu_target_hz": 600000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 18.96,
+      "t": 31.334,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0397,
+        "mgs2_sse_rg353v:31918": 0.0694,
+        "mgs2_sse_rg353v:32591": 0.2181,
+        "mgs2_sse_rg353v:32638": 0.0397,
+        "mgs2_sse_rg353v:32641": 0.6345,
+        "wine_dmsynth_si:32629": 0.0694,
+        "wine_dsound_mix:32625": 0.109,
+        "wined3d_cs:32609": 0.7039
+      }
+    },
+    {
+      "cpu_cur_khz": 1992000,
+      "cpu_max_khz": 1992000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.5,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 18.96,
+      "t": 32.348,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0394,
+        "mgs2_sse_rg353v:31918": 0.0592,
+        "mgs2_sse_rg353v:32591": 0.2169,
+        "mgs2_sse_rg353v:32638": 0.0394,
+        "mgs2_sse_rg353v:32641": 0.6114,
+        "wine_dmsynth_si:32629": 0.0296,
+        "wine_dsound_mix:32625": 0.0986,
+        "wined3d_cs:32609": 0.6902
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82777,
+      "fps": 13.5,
+      "gpu_cur_hz": 600000000,
+      "gpu_target_hz": 600000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 18.96,
+      "t": 33.362,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0296,
+        "mgs2_sse_rg353v:31918": 0.0591,
+        "mgs2_sse_rg353v:32591": 0.1873,
+        "mgs2_sse_rg353v:32638": 0.0394,
+        "mgs2_sse_rg353v:32641": 0.5717,
+        "wine_dmsynth_si:32629": 0.0197,
+        "wine_dsound_mix:32625": 0.0887,
+        "wined3d_cs:32609": 0.6309
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 81666,
+      "fps": 13.6,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 17.58,
+      "t": 34.371,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0396,
+        "mgs2_sse_rg353v:31918": 0.0396,
+        "mgs2_sse_rg353v:32591": 0.218,
+        "mgs2_sse_rg353v:32638": 0.0297,
+        "mgs2_sse_rg353v:32641": 0.6837,
+        "wine_dmsynth_si:32629": 0.0297,
+        "wine_dsound_mix:32625": 0.0892,
+        "wined3d_cs:32609": 0.7233
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.6,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 17.58,
+      "t": 35.38,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0496,
+        "mgs2_sse_rg353v:31918": 0.0595,
+        "mgs2_sse_rg353v:32591": 0.228,
+        "mgs2_sse_rg353v:32638": 0.0297,
+        "mgs2_sse_rg353v:32641": 0.6345,
+        "wine_dmsynth_si:32629": 0.0099,
+        "wine_dsound_mix:32625": 0.0694,
+        "wined3d_cs:32609": 0.7138
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 13.6,
+      "gpu_cur_hz": 200000000,
+      "gpu_target_hz": 200000000,
+      "gpu_temp_mc": 76250,
+      "readback_ms": 17.58,
+      "t": 36.389,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0198,
+        "mgs2_sse_rg353v:31918": 0.0595,
+        "mgs2_sse_rg353v:32591": 0.1487,
+        "mgs2_sse_rg353v:32638": 0.0297,
+        "mgs2_sse_rg353v:32641": 0.704,
+        "wine_dmsynth_si:32629": 0.0198,
+        "wine_dsound_mix:32625": 0.0694,
+        "wined3d_cs:32609": 0.4859
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 81666,
+      "fps": 13.6,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 17.58,
+      "t": 37.397,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0496,
+        "mgs2_sse_rg353v:31918": 0.0694,
+        "mgs2_sse_rg353v:32591": 0.2181,
+        "mgs2_sse_rg353v:32638": 0.0496,
+        "mgs2_sse_rg353v:32641": 0.8922,
+        "wine_dmsynth_si:32629": 0.1388,
+        "wine_dsound_mix:32625": 0.0892,
+        "wined3d_cs:32609": 0.4758
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 16.3,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 10.46,
+      "t": 38.423,
+      "threads": {
+        "mali-cmar-backe:32599": 0.039,
+        "mgs2_sse_rg353v:31918": 0.0585,
+        "mgs2_sse_rg353v:32591": 0.2437,
+        "mgs2_sse_rg353v:32638": 0.0585,
+        "mgs2_sse_rg353v:32641": 0.5752,
+        "wine_dmsynth_si:32629": 0.2145,
+        "wine_dsound_mix:32625": 0.0877,
+        "wined3d_cs:32609": 0.6727
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 16.3,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 10.46,
+      "t": 39.441,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0491,
+        "mgs2_sse_rg353v:31918": 0.0688,
+        "mgs2_sse_rg353v:32591": 0.2358,
+        "mgs2_sse_rg353v:32638": 0.0589,
+        "mgs2_sse_rg353v:32641": 0.6386,
+        "wine_dmsynth_si:32629": 0.2161,
+        "wine_dsound_mix:32625": 0.0982,
+        "wined3d_cs:32609": 0.7171
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 16.3,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 10.46,
+      "t": 40.458,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0393,
+        "mgs2_sse_rg353v:31918": 0.0689,
+        "mgs2_sse_rg353v:32591": 0.2262,
+        "mgs2_sse_rg353v:32638": 0.0492,
+        "mgs2_sse_rg353v:32641": 0.6492,
+        "wine_dmsynth_si:32629": 0.2558,
+        "wine_dsound_mix:32625": 0.0885,
+        "wined3d_cs:32609": 0.6886
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 18.3,
+      "gpu_cur_hz": 600000000,
+      "gpu_target_hz": 600000000,
+      "gpu_temp_mc": 77500,
+      "readback_ms": 13.4,
+      "t": 41.475,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0492,
+        "mgs2_sse_rg353v:31918": 0.0492,
+        "mgs2_sse_rg353v:32591": 0.2065,
+        "mgs2_sse_rg353v:32638": 0.0688,
+        "mgs2_sse_rg353v:32641": 0.6589,
+        "wine_dmsynth_si:32629": 0.2262,
+        "wine_dsound_mix:32625": 0.0885,
+        "wined3d_cs:32609": 0.6884
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82777,
+      "fps": 18.3,
+      "gpu_cur_hz": 800000000,
+      "gpu_target_hz": 800000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 13.4,
+      "t": 42.491,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0492,
+        "mgs2_sse_rg353v:31918": 0.0787,
+        "mgs2_sse_rg353v:32591": 0.2164,
+        "mgs2_sse_rg353v:32638": 0.059,
+        "mgs2_sse_rg353v:32641": 0.5705,
+        "wine_dmsynth_si:32629": 0.2459,
+        "wine_dsound_mix:32625": 0.0885,
+        "wined3d_cs:32609": 0.6786
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82777,
+      "fps": 18.3,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 13.4,
+      "t": 43.508,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0393,
+        "mgs2_sse_rg353v:31918": 0.0492,
+        "mgs2_sse_rg353v:32591": 0.2459,
+        "mgs2_sse_rg353v:32638": 0.0492,
+        "mgs2_sse_rg353v:32641": 0.6788,
+        "wine_dmsynth_si:32629": 0.2459,
+        "wine_dsound_mix:32625": 0.0885,
+        "wined3d_cs:32609": 0.7476
+      }
+    },
+    {
+      "cpu_cur_khz": 1800000,
+      "cpu_max_khz": 1800000,
+      "cpu_temp_mc": 82222,
+      "fps": 18.2,
+      "gpu_cur_hz": 400000000,
+      "gpu_target_hz": 400000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 12.42,
+      "t": 44.524,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0492,
+        "mgs2_sse_rg353v:31918": 0.0591,
+        "mgs2_sse_rg353v:32591": 0.2067,
+        "mgs2_sse_rg353v:32638": 0.0591,
+        "mgs2_sse_rg353v:32641": 0.6398,
+        "wine_dmsynth_si:32629": 0.2461,
+        "wine_dsound_mix:32625": 0.0984,
+        "wined3d_cs:32609": 0.6988
+      }
+    },
+    {
+      "cpu_cur_khz": 1608000,
+      "cpu_max_khz": 1608000,
+      "cpu_temp_mc": 82222,
+      "fps": 18.2,
+      "gpu_cur_hz": 300000000,
+      "gpu_target_hz": 300000000,
+      "gpu_temp_mc": 76875,
+      "readback_ms": 12.42,
+      "t": 45.531,
+      "threads": {
+        "mali-cmar-backe:32599": 0.0397,
+        "mgs2_sse_rg353v:31918": 0.0497,
+        "mgs2_sse_rg353v:32591": 0.2384,
+        "mgs2_sse_rg353v:32638": 0.0596,
+        "mgs2_sse_rg353v:32641": 0.6257,
+        "wine_dmsynth_si:32629": 0.1589,
+        "wine_dsound_mix:32625": 0.0993,
+        "wined3d_cs:32609": 0.6754
+      }
+    }
+  ],
+  "summary": {
+    "busiest_thread_cores": 0.671,
+    "cpu_cur_khz_mean": 1676266.67,
+    "cpu_max_khz_mean": 1676266.67,
+    "cpu_max_khz_min": 1416000,
+    "cpu_temp_c_mean": 82.22,
+    "fps_mean": 13.64,
+    "gpu_freq_max_hz": 800000000,
+    "gpu_freq_residency": {
+      "200000000": {
+        "ms": 2392,
+        "share": 0.0525
+      },
+      "300000000": {
+        "ms": 19940,
+        "share": 0.4378
+      },
+      "400000000": {
+        "ms": 10304,
+        "share": 0.2262
+      },
+      "600000000": {
+        "ms": 4132,
+        "share": 0.0907
+      },
+      "800000000": {
+        "ms": 8780,
+        "share": 0.1928
+      }
+    },
+    "gpu_temp_c_mean": 77.12,
+    "gpu_time_at_max_share": 0.1928,
+    "gpu_top_freq_hz": 300000000,
+    "pid": 31918,
+    "readback_ms_mean": 19.32,
+    "samples": 45,
+    "seconds": 45,
+    "thread_occupancy_cores": {
+      "mali-cmar-backe:32599": {
+        "mean_core": 0.035,
+        "peak_core": 0.05
+      },
+      "mgs2_sse_rg353v:31918": {
+        "mean_core": 0.06,
+        "peak_core": 0.08
+      },
+      "mgs2_sse_rg353v:32591": {
+        "mean_core": 0.211,
+        "peak_core": 0.246
+      },
+      "mgs2_sse_rg353v:32638": {
+        "mean_core": 0.055,
+        "peak_core": 0.07
+      },
+      "mgs2_sse_rg353v:32641": {
+        "mean_core": 0.635,
+        "peak_core": 0.892
+      },
+      "wine_dmsynth_si:32629": {
+        "mean_core": 0.185,
+        "peak_core": 0.326
+      },
+      "wine_dsound_mix:32625": {
+        "mean_core": 0.092,
+        "peak_core": 0.109
+      },
+      "wined3d_cs:32609": {
+        "mean_core": 0.671,
+        "peak_core": 0.748
+      }
+    },
+    "total_cores_busy": 1.944,
+    "verdict": [
+      "THERMAL: the CPU cap fell to 1416000 kHz during the fight, so it was NOT pinned at 1992000. Every per-core figure derived from an assumed 1992 MHz, including the 0.65-core reading, is invalid and must be recomputed at the measured clock.",
+      "NEITHER: the busiest thread ran 0.67 of a core and the GPU did not sit at its maximum. The frame is lost to waiting or serialisation, not to raw CPU or GPU throughput. Do not write any optimisation yet."
+    ]
+  }
+}

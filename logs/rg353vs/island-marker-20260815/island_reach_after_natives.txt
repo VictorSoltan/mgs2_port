@@ -1,0 +1,45 @@
+149 abort stubs, 35 island entries
+
+entries that reach an abort stub -- arming any of these aborts the run
+  15 wined3d_device_context_blt                    closure=18   indirect=8    teb=0   _recalloc
+  31 wined3d_texture_add_dirty_region              closure=15   indirect=3    teb=0   _recalloc
+
+entries with no reachable abort stub
+   0 context_invalidate_compute_state              closure=2    indirect=0    teb=0
+   1 context_invalidate_state                      closure=7    indirect=0    teb=0
+   2 debug_d3dformat                               closure=2    indirect=0    teb=0
+   3 device_invalidate_state                       closure=20   indirect=0    teb=0
+   4 mgs2_batch_flush                              closure=933  indirect=29   teb=0
+   5 mgs2_submit_census_gl_draw                    closure=2    indirect=0    teb=0
+   6 multiply_matrix                               closure=2    indirect=0    teb=0
+   7 wined3d_buffer_acquire_bo_for_write           closure=3    indirect=3    teb=0
+   8 wined3d_buffer_get_memory                     closure=933  indirect=20   teb=0
+   9 wined3d_buffer_invalidate_location            closure=7    indirect=0    teb=0
+  10 wined3d_buffer_load                           closure=933  indirect=21   teb=0
+  11 wined3d_buffer_load_location                  closure=932  indirect=20   teb=0
+  12 wined3d_buffer_load_sysmem                    closure=933  indirect=20   teb=0
+  13 wined3d_context_gl_enable_clip_distances      closure=2    indirect=2    teb=0
+  14 wined3d_debug_location                        closure=7    indirect=0    teb=0
+  16 wined3d_device_context_emit_blt_sub_resource  closure=2    indirect=5    teb=0
+  17 wined3d_ffp_get_fs_settings                   closure=4    indirect=1    teb=0
+  18 wined3d_format_calculate_pitch                closure=4    indirect=0    teb=0
+  19 wined3d_format_convert_from_float             closure=9    indirect=0    teb=0
+  20 wined3d_light_state_get_light                 closure=2    indirect=1    teb=0
+  22 wined3d_rendertarget_view_invalidate_location closure=10   indirect=0    teb=0
+  23 wined3d_rendertarget_view_load_location       closure=945  indirect=25   teb=0
+  24 wined3d_rendertarget_view_prepare_location    closure=3    indirect=1    teb=0
+  25 wined3d_rendertarget_view_validate_location   closure=927  indirect=16   teb=0
+  26 wined3d_resource_check_box_dimensions         closure=2    indirect=1    teb=0
+  27 wined3d_resource_free_sysmem                  closure=920  indirect=16   teb=0
+  28 wined3d_resource_memory_colour_fill           closure=12   indirect=0    teb=0
+  29 wined3d_stream_info_from_declaration          closure=3    indirect=0    teb=0
+  32 wined3d_texture_from_resource                 closure=2    indirect=0    teb=0
+  33 wined3d_texture_invalidate_location           closure=7    indirect=0    teb=0
+  34 wined3d_texture_load_location                 closure=937  indirect=21   teb=0
+  35 wined3d_texture_prepare_location              closure=2    indirect=1    teb=0
+  36 wined3d_texture_validate_location             closure=926  indirect=16   teb=0
+
+no stub, no TEB read, no indirect call -- 15 of 35 entries
+MGS2_BOX86_ISLAND_ONLY=0,1,2,3,5,6,9,14,18,19,22,28,29,32,33
+
+control check (wined3d_release_dc reaches WindowFromDC and ReleaseDC): PASS

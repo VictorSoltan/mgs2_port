@@ -1,0 +1,40 @@
+[New LWP 53492]
+[New LWP 53491]
+[New LWP 53490]
+[New LWP 53489]
+[New LWP 53488]
+[New LWP 53469]
+[New LWP 53468]
+[New LWP 53467]
+[New LWP 53466]
+[New LWP 53461]
+[New LWP 53460]
+[New LWP 53459]
+[New LWP 53458]
+[New LWP 53440]
+[New LWP 53439]
+[New LWP 53438]
+[New LWP 53437]
+[New LWP 53436]
+[New LWP 53435]
+[New LWP 53434]
+[New LWP 53433]
+[New LWP 53431]
+[New LWP 53430]
+[New LWP 53418]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+0xf7b53c6c in ?? () from /usr/lib32/libc.so.6
+$1 = (mutexes_block_t *) 0x63c7a838
+$2 = {mutexes = {{__data = {__lock = 0, __count = 0, __owner = 0, __kind = 1, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 12 times>, "\001\000\000\000\000\000\000\000\000\000\000", __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 2, __count = 0, __owner = 53492, __kind = 0, __nusers = 1, {__spins = 0, __list = {__next = 0x0}}}, __size = "\002\000\000\000\000\000\000\000\364\320\000\000\000\000\000\000\001\000\000\000\000\000\000", __align = 2}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 1, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 12 times>, "\001\000\000\000\000\000\000\000\000\000\000", __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 1, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 12 times>, "\001\000\000\000\000\000\000\000\000\000\000", __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0} <repeats 15 times>, {__data = {__lock = 1, __count = 0, __owner = 53440, __kind = 0, __nusers = 1, {__spins = 0, __list = {__next = 0x0}}}, __size = "\001\000\000\000\000\000\000\000\300\320\000\000\000\000\000\000\001\000\000\000\000\000\000", __align = 1}, {__data = {__lock = 1, __count = 0, __owner = 53440, __kind = 0, __nusers = 1, {__spins = 0, __list = {__next = 0x0}}}, __size = "\001\000\000\000\000\000\000\000\300\320\000\000\000\000\000\000\001\000\000\000\000\000\000", __align = 1}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 1, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 16 times>, "\001\000\000\000\000\000\000", __align = 0}, {__data = {__lock = 0, __count = 0, __owner = 0, __kind = 0, __nusers = 0, {__spins = 0, __list = {__next = 0x0}}}, __size = '\000' <repeats 23 times>, __align = 0} <repeats 32 times>}, taken = '\001' <repeats 35 times>, '\000' <repeats 28 times>, next = 0x0, n_free = 29}
+$3 = 1 '\001'
+$4 = 29
+0x63c7ae38:	1	1	1	1	1	1	1	1
+0x63c7ae40:	1	1	1	1	1	1	1	1
+0x63c7ae48:	1	1	1	1	1	1	1	1
+0x63c7ae50:	1	1	1	1	1	1	1	1
+0x63c7ae58:	1	1	1	0	0	0	0	0
+0x63c7ae60:	0	0	0	0	0	0	0	0
+0x63c7ae68:	0	0	0	0	0	0	0	0
+0x63c7ae70:	0	0	0	0	0	0	0	0
+[Inferior 1 (process 52726) detached]

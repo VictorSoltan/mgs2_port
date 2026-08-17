@@ -1,0 +1,465 @@
+Patch 48 -- the island entry marker is an x86 instruction, so emit it only for x86.
+
+The marker Box86 matches in the guest prologue is an eight-byte multi-byte NOP
+whose displacement spells "MGS" plus the entry id. It was written as a bare
+`.byte` directive. The same WineD3D sources are also compiled for armhf to build
+the native island, and there those eight bytes land in the ARM instruction
+stream, immediately after the prologue of every one of the 37 marked functions.
+
+As Thumb they decode as:
+
+    1f0f    subs r7, r1, #4
+    0084    lsls r4, r0, #2
+    474d    bx   r9          <- branches to whatever r9 holds
+    1553    never reached
+
+So every marked function in the ARM build branched to a garbage address before
+executing any of its own body. Measured on the device on 2026-08-15: the first
+island call, wined3d_release_dc, faulted at native PC 0x195f6fc -- a guest stack
+address -- and Box86 reported the guest EIP it had stored before entering the
+wrapper, the island bridge's own post-wrapper byte. That is the whole of
+"wine: Unhandled illegal instruction at 4002017B". No abort stub was reached
+because no function body ever ran.
+
+MGS2_ISLAND_MARK() emits the bytes under #ifdef __i386__ and nothing otherwise.
+
+The i386 code is semantically unchanged, but NOT byte-identical, and the
+difference is worth stating exactly because an earlier version of this header
+claimed it was. Rebuilding wined3d.dll from the documented recipe and comparing
+against the deployed wined3d_p47_island_markers.dll:
+
+  same size, same section sizes, 39 markers with the same ids
+  67 differing bytes in 2,917,716
+    3   the PE checksum field
+   64   all in .text, every one immediately after a `mov [esp+N], imm32`,
+        every one with a delta of exactly +24
+
+Those 64 are __LINE__ constants from assert() and the debug macros in static
+inline functions in wined3d_private.h. This patch adds exactly 24 lines to that
+header -- its own explanatory comment -- so every line number below it moves by
+24. No instruction changes, no control flow changes, no marker changes.
+
+p47 therefore stays valid and is not rebuilt; only the ARM objects change.
+
+After this patch the same run reaches "MGS2 island: forbidden call to
+WindowFromDC" -- an abort stub firing by name, which is the designed behaviour
+and the first time native island code executed its own body on this device.
+
+diff -ruN old/dlls/wined3d/buffer.c new/dlls/wined3d/buffer.c
+--- old/dlls/wined3d/buffer.c	2026-08-15 14:52:46.818838704 +0300
++++ new/dlls/wined3d/buffer.c	2026-08-15 14:52:46.780776018 +0300
+@@ -134,7 +134,7 @@
+ void wined3d_buffer_invalidate_location(struct wined3d_buffer *buffer, uint32_t location)
+ {
+     /* island entry 9: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x09");
++    MGS2_ISLAND_MARK(0x09);
+     mgs2_p46_count(9);
+     wined3d_buffer_invalidate_range(buffer, location, 0, 0);
+ }
+@@ -276,7 +276,7 @@
+         struct wined3d_context *context, uint32_t location)
+ {
+     /* island entry 11: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x0b");
++    MGS2_ISLAND_MARK(0x0b);
+     mgs2_p46_count(11);
+     struct wined3d_bo_address src, dst;
+     struct wined3d_range range;
+@@ -371,7 +371,7 @@
+ void *wined3d_buffer_load_sysmem(struct wined3d_buffer *buffer, struct wined3d_context *context)
+ {
+     /* island entry 12: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x0c");
++    MGS2_ISLAND_MARK(0x0c);
+     mgs2_p46_count(12);
+     if (wined3d_buffer_load_location(buffer, context, WINED3D_LOCATION_SYSMEM))
+         buffer->resource.pin_sysmem = 1;
+@@ -382,7 +382,7 @@
+         struct wined3d_bo_address *data)
+ {
+     /* island entry 8: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x08");
++    MGS2_ISLAND_MARK(0x08);
+     mgs2_p46_count(8);
+     unsigned int locations = buffer->locations;
+ 
+@@ -500,7 +500,7 @@
+         const struct wined3d_state *state)
+ {
+     /* island entry 10: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x0a");
++    MGS2_ISLAND_MARK(0x0a);
+     mgs2_p46_count(10);
+     TRACE("buffer %p.\n", buffer);
+ 
+@@ -773,7 +773,7 @@
+ void wined3d_buffer_acquire_bo_for_write(struct wined3d_buffer *buffer, struct wined3d_context *context)
+ {
+     /* island entry 7: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x07");
++    MGS2_ISLAND_MARK(0x07);
+     mgs2_p46_count(7);
+     const struct wined3d_range range = {.size = buffer->resource.size};
+     struct wined3d_bo_address dst, src;
+diff -ruN old/dlls/wined3d/context.c new/dlls/wined3d/context.c
+--- old/dlls/wined3d/context.c	2026-08-15 14:52:46.817170464 +0300
++++ new/dlls/wined3d/context.c	2026-08-15 14:52:46.777558353 +0300
+@@ -66,7 +66,7 @@
+ void context_invalidate_compute_state(struct wined3d_context *context, DWORD state_id)
+ {
+     /* island entry 0: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x00");
++    MGS2_ISLAND_MARK(0x00);
+     mgs2_p46_count(0);
+     DWORD representative = context->state_table[state_id].representative - STATE_COMPUTE_OFFSET;
+     unsigned int index, shift;
+@@ -79,7 +79,7 @@
+ void context_invalidate_state(struct wined3d_context *context, unsigned int state_id)
+ {
+     /* island entry 1: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x01");
++    MGS2_ISLAND_MARK(0x01);
+     mgs2_p46_count(1);
+     unsigned int representative = context->state_table[state_id].representative;
+     unsigned int index, shift;
+@@ -167,7 +167,7 @@
+         const struct wined3d_state *state, const struct wined3d_d3d_info *d3d_info)
+ {
+     /* island entry 29: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x1d");
++    MGS2_ISLAND_MARK(0x1d);
+     mgs2_p46_count(29);
+     /* We need to deal with frequency data! */
+     BOOL use_vshader = use_vs(state) || (d3d_info->ffp_hlsl && state->shader[WINED3D_SHADER_TYPE_VERTEX]);
+diff -ruN old/dlls/wined3d/context_gl.c new/dlls/wined3d/context_gl.c
+--- old/dlls/wined3d/context_gl.c	2026-08-15 14:52:46.829265389 +0300
++++ new/dlls/wined3d/context_gl.c	2026-08-15 14:52:46.793593583 +0300
+@@ -2371,7 +2371,7 @@
+ void wined3d_context_gl_enable_clip_distances(struct wined3d_context_gl *context_gl, uint32_t enable_mask)
+ {
+     /* island entry 13: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x0d");
++    MGS2_ISLAND_MARK(0x0d);
+     mgs2_p46_count(13);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     unsigned int clip_distance_count, i;
+@@ -4659,7 +4659,7 @@
+ void mgs2_batch_flush(void)
+ {
+     /* island entry 4: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x04");
++    MGS2_ISLAND_MARK(0x04);
+     mgs2_p46_count(4);
+     static void *buf;
+     static unsigned int buf_size;
+diff -ruN old/dlls/wined3d/cs.c new/dlls/wined3d/cs.c
+--- old/dlls/wined3d/cs.c	2026-08-15 14:52:46.823265372 +0300
++++ new/dlls/wined3d/cs.c	2026-08-15 14:52:46.786941456 +0300
+@@ -873,7 +873,7 @@
+ void mgs2_submit_census_gl_draw(unsigned int kind, unsigned int count)
+ {
+     /* island entry 5: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x05");
++    MGS2_ISLAND_MARK(0x05);
+     mgs2_p46_count(5);
+     struct mgs2_submit_census_payload *c;
+ 
+@@ -1941,7 +1941,7 @@
+ __attribute__((noinline, used, optimize("no-optimize-sibling-calls")))
+ void mgs2_island_gl_probe_target(unsigned int *out)
+ {
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x33");
++    MGS2_ISLAND_MARK(0x33);
+     /* Without the Box86 bridge this stays zero, which the reader reports as
+      * "native unavailable" rather than as a disagreement. */
+     if (out)
+@@ -1970,7 +1970,7 @@
+      * matches these exact bytes to find this function, which keeps the
+      * signature independent of the link addresses that a relative jump would
+      * otherwise bake in. It executes as a no-op. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x32");
++    MGS2_ISLAND_MARK(0x32);
+     wined3d_ffp_get_fs_settings(state, d3d_info, settings);
+     __asm__ __volatile__("" ::: "memory");
+ }
+@@ -4290,7 +4290,7 @@
+         unsigned int flags, const struct wined3d_blt_fx *fx, enum wined3d_texture_filter_type filter)
+ {
+     /* island entry 16: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x10");
++    MGS2_ISLAND_MARK(0x10);
+     mgs2_p46_count(16);
+     struct wined3d_cs_blt_sub_resource *op;
+ 
+diff -ruN old/dlls/wined3d/device.c new/dlls/wined3d/device.c
+--- old/dlls/wined3d/device.c	2026-08-15 14:52:46.834265403 +0300
++++ new/dlls/wined3d/device.c	2026-08-15 14:52:46.800265307 +0300
+@@ -5594,7 +5594,7 @@
+ void device_invalidate_state(const struct wined3d_device *device, unsigned int state_id)
+ {
+     /* island entry 3: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x03");
++    MGS2_ISLAND_MARK(0x03);
+     mgs2_p46_count(3);
+     unsigned int representative, i, idx, shift;
+     struct wined3d_context *context;
+diff -ruN old/dlls/wined3d/resource.c new/dlls/wined3d/resource.c
+--- old/dlls/wined3d/resource.c	2026-08-15 14:52:46.820810055 +0300
++++ new/dlls/wined3d/resource.c	2026-08-15 14:52:46.783874775 +0300
+@@ -363,7 +363,7 @@
+ void wined3d_resource_free_sysmem(struct wined3d_resource *resource)
+ {
+     /* island entry 27: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x1b");
++    MGS2_ISLAND_MARK(0x1b);
+     mgs2_p46_count(27);
+     if (!resource->heap_memory)
+         return;
+@@ -510,7 +510,7 @@
+         unsigned int sub_resource_idx, const struct wined3d_box *box)
+ {
+     /* island entry 26: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x1a");
++    MGS2_ISLAND_MARK(0x1a);
+     mgs2_p46_count(26);
+     const struct wined3d_format *format = resource->format;
+     struct wined3d_sub_resource_desc desc;
+@@ -635,7 +635,7 @@
+         const struct wined3d_box *box, bool full_subresource)
+ {
+     /* island entry 28: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x1c");
++    MGS2_ISLAND_MARK(0x1c);
+     mgs2_p46_count(28);
+     const struct wined3d_format *format = resource->format;
+     unsigned int w, h, d, x, y, z, bpp;
+diff -ruN old/dlls/wined3d/stateblock.c new/dlls/wined3d/stateblock.c
+--- old/dlls/wined3d/stateblock.c	2026-08-15 14:52:46.826265380 +0300
++++ new/dlls/wined3d/stateblock.c	2026-08-15 14:52:46.790240197 +0300
+@@ -697,7 +697,7 @@
+ struct wined3d_light_info *wined3d_light_state_get_light(const struct wined3d_light_state *state, unsigned int idx)
+ {
+     /* island entry 20: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x14");
++    MGS2_ISLAND_MARK(0x14);
+     mgs2_p46_count(20);
+     struct rb_entry *entry;
+ 
+diff -ruN old/dlls/wined3d/swapchain.c new/dlls/wined3d/swapchain.c
+--- old/dlls/wined3d/swapchain.c	2026-08-15 14:52:46.836265409 +0300
++++ new/dlls/wined3d/swapchain.c	2026-08-15 14:52:46.803773977 +0300
+@@ -193,7 +193,7 @@
+ void CDECL wined3d_swapchain_set_window(struct wined3d_swapchain *swapchain, HWND window)
+ {
+     /* island entry 30: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x1e");
++    MGS2_ISLAND_MARK(0x1e);
+     mgs2_p46_count(30);
+     if (!window)
+         window = swapchain->state.device_window;
+diff -ruN old/dlls/wined3d/texture.c new/dlls/wined3d/texture.c
+--- old/dlls/wined3d/texture.c	2026-08-15 14:52:46.841265423 +0300
++++ new/dlls/wined3d/texture.c	2026-08-15 14:52:46.810558188 +0300
+@@ -154,7 +154,7 @@
+         unsigned int sub_resource_idx, uint32_t location)
+ {
+     /* island entry 36: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x24");
++    MGS2_ISLAND_MARK(0x24);
+     mgs2_p46_count(36);
+     struct wined3d_texture_sub_resource *sub_resource;
+     DWORD previous_locations;
+@@ -176,7 +176,7 @@
+         unsigned int sub_resource_idx, uint32_t location)
+ {
+     /* island entry 33: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x21");
++    MGS2_ISLAND_MARK(0x21);
+     mgs2_p46_count(33);
+     struct wined3d_texture_sub_resource *sub_resource;
+     DWORD previous_locations;
+@@ -247,7 +247,7 @@
+         unsigned int sub_resource_idx, struct wined3d_context *context, uint32_t location)
+ {
+     /* island entry 34: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x22");
++    MGS2_ISLAND_MARK(0x22);
+     mgs2_p46_count(34);
+     DWORD current = texture->sub_resources[sub_resource_idx].locations;
+     BOOL ret;
+@@ -1017,7 +1017,7 @@
+         unsigned int sub_resource_idx, struct wined3d_context *context, unsigned int location)
+ {
+     /* island entry 35: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x23");
++    MGS2_ISLAND_MARK(0x23);
+     mgs2_p46_count(35);
+     return texture->texture_ops->texture_prepare_location(texture, sub_resource_idx, context, location);
+ }
+@@ -1036,7 +1036,7 @@
+         UINT layer, const struct wined3d_box *dirty_region)
+ {
+     /* island entry 31: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x1f");
++    MGS2_ISLAND_MARK(0x1f);
+     mgs2_p46_count(31);
+     TRACE("texture %p, layer %u, dirty_region %s.\n", texture, layer, debug_box(dirty_region));
+ 
+@@ -1061,7 +1061,7 @@
+ struct wined3d_texture * __cdecl wined3d_texture_from_resource(struct wined3d_resource *resource)
+ {
+     /* island entry 32: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x20");
++    MGS2_ISLAND_MARK(0x20);
+     mgs2_p46_count(32);
+     return texture_from_resource(resource);
+ }
+@@ -1600,7 +1600,7 @@
+         unsigned int flags, const struct wined3d_blt_fx *fx, enum wined3d_texture_filter_type filter)
+ {
+     /* island entry 15: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x0f");
++    MGS2_ISLAND_MARK(0x0f);
+     mgs2_p46_count(15);
+     struct wined3d_box src_box = {src_rect->left, src_rect->top, src_rect->right, src_rect->bottom, 0, 1};
+     struct wined3d_box dst_box = {dst_rect->left, dst_rect->top, dst_rect->right, dst_rect->bottom, 0, 1};
+diff -ruN old/dlls/wined3d/utils.c new/dlls/wined3d/utils.c
+--- old/dlls/wined3d/utils.c	2026-08-15 14:52:46.839265417 +0300
++++ new/dlls/wined3d/utils.c	2026-08-15 14:52:46.807125945 +0300
+@@ -4769,7 +4769,7 @@
+         unsigned int width, unsigned int height, unsigned int *row_pitch, unsigned int *slice_pitch)
+ {
+     /* island entry 18: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x12");
++    MGS2_ISLAND_MARK(0x12);
+     mgs2_p46_count(18);
+     /* For block based formats, pitch means the amount of bytes to the next
+      * row of blocks rather than the next row of pixels. */
+@@ -4890,7 +4890,7 @@
+ const char *debug_d3dformat(enum wined3d_format_id format_id)
+ {
+     /* island entry 2: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x02");
++    MGS2_ISLAND_MARK(0x02);
+     mgs2_p46_count(2);
+     switch (format_id)
+     {
+@@ -6083,7 +6083,7 @@
+         const struct wined3d_color *color, void *ret)
+ {
+     /* island entry 19: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x13");
++    MGS2_ISLAND_MARK(0x13);
+     mgs2_p46_count(19);
+     static const struct
+     {
+@@ -6380,7 +6380,7 @@
+ void multiply_matrix(struct wined3d_matrix *dst, const struct wined3d_matrix *src1, const struct wined3d_matrix *src2)
+ {
+     /* island entry 6: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x06");
++    MGS2_ISLAND_MARK(0x06);
+     mgs2_p46_count(6);
+     struct wined3d_matrix tmp;
+ 
+@@ -6413,7 +6413,7 @@
+         const struct wined3d_d3d_info *d3d_info, struct ffp_frag_settings *settings)
+ {
+     /* island entry 17: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x11");
++    MGS2_ISLAND_MARK(0x11);
+     mgs2_p46_count(17);
+ #define ARG1 0x01
+ #define ARG2 0x02
+@@ -6819,7 +6819,7 @@
+ const char *wined3d_debug_location(uint32_t location)
+ {
+     /* island entry 14: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x0e");
++    MGS2_ISLAND_MARK(0x0e);
+     mgs2_p46_count(14);
+     struct debug_buffer buffer;
+     const char *prefix = "";
+@@ -6892,7 +6892,7 @@
+ void wined3d_release_dc(HWND window, HDC dc)
+ {
+     /* island entry 21: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x15");
++    MGS2_ISLAND_MARK(0x15);
+     mgs2_p46_count(21);
+     /* You'd figure ReleaseDC() would fail if the DC doesn't match the window.
+      * However, that's not what actually happens, and there are user32 tests
+diff -ruN old/dlls/wined3d/view.c new/dlls/wined3d/view.c
+--- old/dlls/wined3d/view.c	2026-08-15 14:52:46.831265395 +0300
++++ new/dlls/wined3d/view.c	2026-08-15 14:52:46.797032680 +0300
+@@ -502,7 +502,7 @@
+         struct wined3d_context *context, uint32_t location)
+ {
+     /* island entry 24: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x18");
++    MGS2_ISLAND_MARK(0x18);
+     mgs2_p46_count(24);
+     struct wined3d_resource *resource = view->resource;
+     unsigned int i, sub_resource_idx, layer_count;
+@@ -525,7 +525,7 @@
+         struct wined3d_context *context, uint32_t location)
+ {
+     /* island entry 23: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x17");
++    MGS2_ISLAND_MARK(0x17);
+     mgs2_p46_count(23);
+     wined3d_view_load_location(view->resource, &view->desc, context, location);
+ }
+@@ -533,7 +533,7 @@
+ void wined3d_rendertarget_view_validate_location(struct wined3d_rendertarget_view *view, uint32_t location)
+ {
+     /* island entry 25: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x19");
++    MGS2_ISLAND_MARK(0x19);
+     mgs2_p46_count(25);
+     struct wined3d_resource *resource = view->resource;
+     unsigned int i, sub_resource_idx, layer_count;
+@@ -555,7 +555,7 @@
+ void wined3d_rendertarget_view_invalidate_location(struct wined3d_rendertarget_view *view, uint32_t location)
+ {
+     /* island entry 22: Box86 matches these bytes and reads the id. */
+-    __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53,0x16");
++    MGS2_ISLAND_MARK(0x16);
+     mgs2_p46_count(22);
+     wined3d_view_invalidate_location(view->resource, &view->desc, location);
+ }
+diff -ruN old/dlls/wined3d/wined3d_private.h new/dlls/wined3d/wined3d_private.h
+--- old/dlls/wined3d/wined3d_private.h	2026-08-15 14:52:46.868779127 +0300
++++ new/dlls/wined3d/wined3d_private.h	2026-08-15 14:52:46.813692954 +0300
+@@ -2688,6 +2688,30 @@
+ 
+ extern const struct wined3d_parent_ops wined3d_null_parent_ops;
+ 
++/* Patch 48: the island entry marker, and why it has to be target-conditional.
++ *
++ * The marker is an x86 instruction -- an eight-byte multi-byte NOP whose
++ * displacement spells "MGS" plus the entry id -- that Box86 matches in the
++ * guest prologue to route the call to the native ARM implementation.
++ *
++ * These same sources are also compiled for armhf to build that native island.
++ * There a bare `.byte` directive emits the eight bytes straight into the ARM
++ * instruction stream, right after the prologue. As Thumb they decode as
++ * `subs r7, r1, #4` / `lsls r4, r0, #2` / `bx r9`: the third halfword, 0x474d,
++ * is a branch to whatever r9 happens to hold. Every marked function in the ARM
++ * build therefore branched to a garbage address before executing any of its own
++ * body. Measured on the device as an unhandled illegal instruction at the
++ * island bridge's own post-wrapper address, with no abort stub ever reached.
++ *
++ * Emit the marker only for the i386 target, which is the only place it is an
++ * instruction at all. The i386 output is unchanged from the previous
++ * unconditional form. */
++#ifdef __i386__
++#define MGS2_ISLAND_MARK(id) __asm__ __volatile__(".byte 0x0f,0x1f,0x84,0x00,0x4d,0x47,0x53," #id)
++#else
++#define MGS2_ISLAND_MARK(id) ((void)0)
++#endif
++
+ /* Patch 43: the island entry point. Box86 replaces this with native ARM when
+  * MGS2_BOX86_ISLAND_FFP=1; otherwise it is an ordinary call to the function
+  * below, so selecting the island can never change behaviour on its own. */

@@ -22,6 +22,9 @@ wine-11.0/
 __pycache__/
 /handoff
 
+# Local owner-provided GitHub credentials for this checkout. Never stage.
+.github-token.local
+
 # Collector output: machine-specific, and a PC-run copy once got mistaken for
 # the console. Send the tarball, never commit it.
 mgs2-perf-context-*/

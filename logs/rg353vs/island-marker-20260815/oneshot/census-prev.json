@@ -1,0 +1,190 @@
+{
+  "enabled": 1,
+  "presents": 4268,
+  "sequence": 8536,
+  "module_base": 2071396352,
+  "module_end": 2074562560,
+  "sites": [
+    {
+      "id": 0,
+      "name": "buffer_ops->buffer_prepare_location",
+      "calls": 20048616,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2072947248,
+          "cls": 2,
+          "calls": 20048616
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "buffer_ops->buffer_unload_location",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 2,
+      "name": "texture_ops->texture_load_location",
+      "calls": 51,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2073241552,
+          "cls": 2,
+          "calls": 51
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "texture_ops->texture_unload_location",
+      "calls": 1090,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2073247616,
+          "cls": 2,
+          "calls": 1090
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "texture_ops->texture_prepare_location",
+      "calls": 17300,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2073244800,
+          "cls": 2,
+          "calls": 17300
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "texture_ops->texture_upload_data (blt)",
+      "calls": 1,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2073249728,
+          "cls": 2,
+          "calls": 1
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "texture_ops->texture_download_data (blt)",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 7,
+      "name": "texture_ops->texture_upload_data (bo)",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 8,
+      "name": "resource_ops->resource_get_sub_resource_count",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 9,
+      "name": "resource_ops->resource_sub_resource_get_desc",
+      "calls": 5194,
+      "distinct": 2,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2072606272,
+          "cls": 2,
+          "calls": 345
+        },
+        {
+          "addr": 2071486688,
+          "cls": 2,
+          "calls": 4849
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "name": "resource_ops->resource_unload",
+      "calls": 218,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2072608048,
+          "cls": 2,
+          "calls": 218
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "name": "parent_ops->wined3d_object_destroyed",
+      "calls": 109,
+      "distinct": 1,
+      "overflow": 0,
+      "targets": [
+        {
+          "addr": 2075840624,
+          "cls": 3,
+          "calls": 109
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "name": "unused 12",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 13,
+      "name": "unused 13",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 14,
+      "name": "unused 14",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    },
+    {
+      "id": 15,
+      "name": "unused 15",
+      "calls": 0,
+      "distinct": 0,
+      "overflow": 0,
+      "targets": []
+    }
+  ]
+}

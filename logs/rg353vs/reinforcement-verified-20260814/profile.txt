@@ -1,0 +1,132 @@
+records=16523/262144 overflow=0 jit_samples=5331 unresolved=6
+
+Guest modules:
+   1713  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+   1109  /usr/lib/wine/i386-windows/wined3d.dll
+    648  /usr/lib/wine/i386-windows/dmsynth.dll
+    430  /usr/lib/wine/i386-windows/d3d8.dll
+    355  /usr/lib/wine/i386-unix/ntdll.so
+    185  /usr/lib/wine/i386-windows/ntdll.dll
+    153  /usr/lib/wine/i386-windows/ucrtbase.dll
+    148  /usr/lib/wine/i386-windows/dsound.dll
+    123  /usr/lib/wine/i386-unix/opengl32.so
+    122  [anonymous]
+     89  /usr/lib/wine/i386-unix/win32u.so
+     76  /usr/lib/wine/i386-windows/opengl32.dll
+     49  /usr/lib/wine/i386-windows/kernel32.dll
+     33  /usr/lib/wine/i386-unix/winealsa.so
+     25  /usr/lib/wine/i386-windows/kernelbase.dll
+     20  /usr/lib/wine/i386-windows/dmime.dll
+     11  /storage/roms/ports/MGS2-Substance/x86libs/libwayland-client.so.0
+      9  /usr/lib/wine/i386-windows/msadp32.acm
+      9  /usr/lib/wine/i386-windows/dinput8.dll
+      6  /usr/lib/wine/i386-windows/user32.dll
+      5  /usr/lib/wine/i386-unix/winewayland.so
+      4  /usr/lib/wine/i386-windows/winmm.dll
+      4  /usr/lib/wine/i386-windows/dmusic.dll
+      2  /usr/lib/wine/i386-windows/win32u.dll
+      1  /usr/lib/wine/i386-windows/mmdevapi.dll
+      1  /usr/lib/wine/i386-windows/dsdmo.dll
+      1  /usr/lib/wine/i386-windows/imm32.dll
+
+Guest blocks:
+    272  x86=0x7bba4011+0x36f rva=0x4011  thread=mgs2_sse_rg353v:7525:272  /usr/lib/wine/i386-windows/d3d8.dll
+    156  x86=0x1fc715a0+0x42c rva=0x115a0  thread=wine_dmsynth_si:7565:156  /usr/lib/wine/i386-windows/dmsynth.dll
+    156  x86=0x7b79c760+0x1750 rva=0x5c760  thread=wined3d_cs:7543:156  /usr/lib/wine/i386-windows/wined3d.dll
+    124  x86=0x1fc68640+0x86 rva=0x8640  thread=wine_dmsynth_si:7565:124  /usr/lib/wine/i386-windows/dmsynth.dll
+    112  x86=0x008b9d30+0x127f rva=0x4b9d30  thread=mgs2_sse_rg353v:7596:112  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     85  x86=0x7bab6000+0x47 rva=0x26000  thread=mgs2_sse_rg353v:7525:80  /usr/lib/wine/i386-windows/ucrtbase.dll
+     81  x86=0x1fc68700+0x244 rva=0x8700  thread=wine_dmsynth_si:7565:81  /usr/lib/wine/i386-windows/dmsynth.dll
+     71  x86=0x1fc68838+0x36 rva=0x8838  thread=wine_dmsynth_si:7565:71  /usr/lib/wine/i386-windows/dmsynth.dll
+     64  x86=0x600399d0+0x64 rva=0x399d0  thread=wined3d_cs:7543:63  /usr/lib/wine/i386-unix/ntdll.so
+     56  x86=0x008b62d0+0x329 rva=0x4b62d0  thread=mgs2_sse_rg353v:7596:56  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     49  x86=0x60039798+0xd6 rva=0x39798  thread=mgs2_sse_rg353v:7596:42  /usr/lib/wine/i386-unix/ntdll.so
+     48  x86=0x7b81d1a0+0x15a2 rva=0xdd1a0  thread=wined3d_cs:7543:48  /usr/lib/wine/i386-windows/wined3d.dll
+     48  x86=0x1fc686e0+0x13 rva=0x86e0  thread=wine_dmsynth_si:7565:48  /usr/lib/wine/i386-windows/dmsynth.dll
+     45  x86=0x60039877+0x47 rva=0x39877  thread=mgs2_sse_rg353v:7596:39  /usr/lib/wine/i386-unix/ntdll.so
+     42  x86=0x40040350+0xc rva=0x350  thread=mgs2_sse_rg353v:7593:9  [anonymous]
+     41  x86=0x1fc6f230+0x16d rva=0xf230  thread=wine_dmsynth_si:7565:41  /usr/lib/wine/i386-windows/dmsynth.dll
+     38  x86=0x008be790+0xfc rva=0x4be790  thread=mgs2_sse_rg353v:7596:38  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     37  x86=0x7ace4960+0x13ee rva=0x4960  thread=wine_dsound_mix:7556:37  /usr/lib/wine/i386-windows/dsound.dll
+     35  x86=0x008c40d0+0x52 rva=0x4c40d0  thread=mgs2_sse_rg353v:7596:35  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     32  x86=0x00749150+0x27a3 rva=0x349150  thread=mgs2_sse_rg353v:7596:32  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     31  x86=0x008b2850+0xd1b rva=0x4b2850  thread=mgs2_sse_rg353v:7596:31  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     31  x86=0x008bb2e0+0xe2 rva=0x4bb2e0  thread=mgs2_sse_rg353v:7596:31  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     30  x86=0x00918bc0+0x146 rva=0x518bc0  thread=mgs2_sse_rg353v:7596:30  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     30  x86=0x7b8db55a+0x22d rva=0x19b55a  thread=wined3d_cs:7543:30  /usr/lib/wine/i386-windows/wined3d.dll
+     29  x86=0x6065d580+0x14f rva=0x5d580  thread=wined3d_cs:7543:29  /usr/lib/wine/i386-unix/opengl32.so
+     28  x86=0x7b8c2720+0x10d rva=0x182720  thread=wined3d_cs:7543:28  /usr/lib/wine/i386-windows/wined3d.dll
+     28  x86=0x008a51c0+0x13d rva=0x4a51c0  thread=mgs2_sse_rg353v:7596:28  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     28  x86=0x7b810730+0x4b0 rva=0xd0730  thread=wined3d_cs:7543:28  /usr/lib/wine/i386-windows/wined3d.dll
+     27  x86=0x7b916500+0x571 rva=0x1d6500  thread=wined3d_cs:7543:27  /usr/lib/wine/i386-windows/wined3d.dll
+     27  x86=0x008ce6d0+0x11 rva=0x4ce6d0  thread=mgs2_sse_rg353v:7596:27  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     25  x86=0x7b8cbe60+0x319 rva=0x18be60  thread=wined3d_cs:7543:25  /usr/lib/wine/i386-windows/wined3d.dll
+     25  x86=0x7b75f110+0x2f6 rva=0x1f110  thread=wined3d_cs:7543:25  /usr/lib/wine/i386-windows/wined3d.dll
+     24  x86=0x008cc9e0+0x1e6 rva=0x4cc9e0  thread=mgs2_sse_rg353v:7596:24  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     23  x86=0x7be9e628+0xc rva=0xe628  thread=mgs2_sse_rg353v:7596:21  /usr/lib/wine/i386-windows/kernel32.dll
+     23  x86=0x008bb140+0x98 rva=0x4bb140  thread=mgs2_sse_rg353v:7596:23  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     23  x86=0x7b7f14d0+0x885 rva=0xb14d0  thread=wined3d_cs:7543:23  /usr/lib/wine/i386-windows/wined3d.dll
+     22  x86=0x7bba3c96+0x29d rva=0x3c96  thread=mgs2_sse_rg353v:7525:22  /usr/lib/wine/i386-windows/d3d8.dll
+     22  x86=0x008394f0+0x362 rva=0x4394f0  thread=mgs2_sse_rg353v:7596:22  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     21  x86=0x00918b00+0xbb rva=0x518b00  thread=mgs2_sse_rg353v:7596:21  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     21  x86=0x7b8c57f0+0x1cc rva=0x1857f0  thread=wined3d_cs:7543:21  /usr/lib/wine/i386-windows/wined3d.dll
+     20  x86=0x00924f64+0x27 rva=0x524f64  thread=mgs2_sse_rg353v:7596:19  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     20  x86=0x7b873750+0xb3 rva=0x133750  thread=wined3d_cs:7543:20  /usr/lib/wine/i386-windows/wined3d.dll
+     20  x86=0x008bb1e0+0xb2 rva=0x4bb1e0  thread=mgs2_sse_rg353v:7596:20  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     20  x86=0x008a1eaf+0x64 rva=0x4a1eaf  thread=mgs2_sse_rg353v:7596:20  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     20  x86=0x7b75f990+0x28a rva=0x1f990  thread=wined3d_cs:7543:20  /usr/lib/wine/i386-windows/wined3d.dll
+     19  x86=0x7bf41c50+0xaf rva=0x21c50  thread=mgs2_sse_rg353v:7525:11  /usr/lib/wine/i386-windows/ntdll.dll
+     19  x86=0x7acfb790+0x14 rva=0x1b790  thread=wine_dsound_mix:7556:19  /usr/lib/wine/i386-windows/dsound.dll
+     19  x86=0x7ace20c0+0x202a rva=0x20c0  thread=mgs2_sse_rg353v:7593:19  /usr/lib/wine/i386-windows/dsound.dll
+     18  x86=0x600398cd+0x9e rva=0x398cd  thread=mgs2_sse_rg353v:7596:9  /usr/lib/wine/i386-unix/ntdll.so
+     18  x86=0x1fc68866+0x8 rva=0x8866  thread=wine_dmsynth_si:7565:18  /usr/lib/wine/i386-windows/dmsynth.dll
+     17  x86=0x7b8e3423+0xbae rva=0x1a3423  thread=mgs2_sse_rg353v:7525:17  /usr/lib/wine/i386-windows/wined3d.dll
+     17  x86=0x7bf38e70+0xc0a rva=0x18e70  thread=mgs2_sse_rg353v:7525:13  /usr/lib/wine/i386-windows/ntdll.dll
+     17  x86=0x7bf8e800+0x24 rva=0x6e800  thread=wine_dmsynth_si:7565:9  /usr/lib/wine/i386-windows/ntdll.dll
+     16  x86=0x008c0f50+0x3a8 rva=0x4c0f50  thread=mgs2_sse_rg353v:7596:16  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     16  x86=0x60048260+0xe3 rva=0x48260  thread=mgs2_sse_rg353v:7596:14  /usr/lib/wine/i386-unix/ntdll.so
+     16  x86=0x7bba6e00+0xc0 rva=0x6e00  thread=mgs2_sse_rg353v:7525:16  /usr/lib/wine/i386-windows/d3d8.dll
+     16  x86=0x7b8c56b0+0x13f rva=0x1856b0  thread=wined3d_cs:7543:16  /usr/lib/wine/i386-windows/wined3d.dll
+     16  x86=0x008da100+0x2e4 rva=0x4da100  thread=mgs2_sse_rg353v:7596:16  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     16  x86=0x0089c9f0+0x147 rva=0x49c9f0  thread=mgs2_sse_rg353v:7596:16  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     15  x86=0x008a1de1+0x9d rva=0x4a1de1  thread=mgs2_sse_rg353v:7596:15  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     15  x86=0x7baefb20+0x154 rva=0x5fb20  thread=mgs2_sse_rg353v:7525:10  /usr/lib/wine/i386-windows/ucrtbase.dll
+     15  x86=0x7b7f82d0+0x2d2 rva=0xb82d0  thread=mgs2_sse_rg353v:7525:10  /usr/lib/wine/i386-windows/wined3d.dll
+     15  x86=0x6064c890+0x50 rva=0x4c890  thread=wined3d_cs:7543:15  /usr/lib/wine/i386-unix/opengl32.so
+     14  x86=0x7b758e00+0x2cf rva=0x18e00  thread=wined3d_cs:7543:14  /usr/lib/wine/i386-windows/wined3d.dll
+     14  x86=0x60043150+0x2da rva=0x43150  thread=mgs2_sse_rg353v:7593:3  /usr/lib/wine/i386-unix/ntdll.so
+     14  x86=0x7b8d8930+0x206 rva=0x198930  thread=wined3d_cs:7543:14  /usr/lib/wine/i386-windows/wined3d.dll
+     14  x86=0x40070000+0xc rva=0x0  thread=mgs2_sse_rg353v:7596:12  [anonymous]
+     14  x86=0x0089d450+0x98d rva=0x49d450  thread=mgs2_sse_rg353v:7596:14  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     14  x86=0x00918d10+0xc6 rva=0x518d10  thread=mgs2_sse_rg353v:7596:14  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     14  x86=0x0089cb40+0x7e rva=0x49cb40  thread=mgs2_sse_rg353v:7596:14  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     14  x86=0x7bba3cae+0xc5 rva=0x3cae  thread=mgs2_sse_rg353v:7525:14  /usr/lib/wine/i386-windows/d3d8.dll
+     13  x86=0x008cc8b0+0x12d rva=0x4cc8b0  thread=mgs2_sse_rg353v:7596:13  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     13  x86=0x008a7a10+0x14e rva=0x4a7a10  thread=mgs2_sse_rg353v:7596:13  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     13  x86=0x7b8076d0+0x2116 rva=0xc76d0  thread=wined3d_cs:7543:13  /usr/lib/wine/i386-windows/wined3d.dll
+     13  x86=0x1fc852a7+0x234 rva=0x252a7  thread=wine_dmsynth_si:7565:13  /usr/lib/wine/i386-windows/dmsynth.dll
+     13  x86=0x7b8e0f20+0xce4 rva=0x1a0f20  thread=mgs2_sse_rg353v:7525:13  /usr/lib/wine/i386-windows/wined3d.dll
+     13  x86=0x7bf4ba20+0xa2 rva=0x2ba20  thread=mgs2_sse_rg353v:7525:10  /usr/lib/wine/i386-windows/ntdll.dll
+     13  x86=0x7b8c1fb0+0x1c9 rva=0x181fb0  thread=wined3d_cs:7543:13  /usr/lib/wine/i386-windows/wined3d.dll
+     13  x86=0x60006f70+0x6 rva=0x6f70  thread=mgs2_sse_rg353v:7596:8  /usr/lib/wine/i386-unix/ntdll.so
+     12  x86=0x7bf4ff70+0x27 rva=0x2ff70  thread=mgs2_sse_rg353v:7596:12  /usr/lib/wine/i386-windows/ntdll.dll
+     12  x86=0x60043d30+0x2c3 rva=0x43d30  thread=mgs2_sse_rg353v:7596:3  /usr/lib/wine/i386-unix/ntdll.so
+     12  x86=0x008a7b60+0x14e rva=0x4a7b60  thread=mgs2_sse_rg353v:7596:12  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     12  x86=0x7ae854b0+0xbc rva=0x54b0  thread=wined3d_cs:7543:12  /usr/lib/wine/i386-windows/opengl32.dll
+     12  x86=0x1fc739d0+0xa4d rva=0x139d0  thread=wine_dmsynth_si:7565:12  /usr/lib/wine/i386-windows/dmsynth.dll
+     11  x86=0x7b90a540+0xbc rva=0x1ca540  thread=wined3d_cs:7543:11  /usr/lib/wine/i386-windows/wined3d.dll
+     11  x86=0x7b7f21b0+0x323 rva=0xb21b0  thread=wined3d_cs:7543:11  /usr/lib/wine/i386-windows/wined3d.dll
+     11  x86=0x7b8fb530+0x535 rva=0x1bb530  thread=wined3d_cs:7543:11  /usr/lib/wine/i386-windows/wined3d.dll
+     11  x86=0x008ccdd0+0x2b7 rva=0x4ccdd0  thread=mgs2_sse_rg353v:7596:11  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     11  x86=0x0089dde0+0x299 rva=0x49dde0  thread=mgs2_sse_rg353v:7596:11  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     11  x86=0x7ace6060+0x4e3 rva=0x6060  thread=mgs2_sse_rg353v:7593:11  /usr/lib/wine/i386-windows/dsound.dll
+     10  x86=0x008cb5e0+0x34d rva=0x4cb5e0  thread=mgs2_sse_rg353v:7596:10  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     10  x86=0x7bf6feb0+0x31d rva=0x4feb0  thread=wined3d_cs:7543:8  /usr/lib/wine/i386-windows/ntdll.dll
+     10  x86=0x008a7cb0+0x14e rva=0x4a7cb0  thread=mgs2_sse_rg353v:7596:10  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     10  x86=0x7bba77a0+0x2c9 rva=0x77a0  thread=mgs2_sse_rg353v:7525:10  /usr/lib/wine/i386-windows/d3d8.dll
+     10  x86=0x7bf44d60+0x426 rva=0x24d60  thread=wined3d_cs:7543:9  /usr/lib/wine/i386-windows/ntdll.dll
+     10  x86=0x7b922560+0x3f8 rva=0x1e2560  thread=wined3d_cs:7543:10  /usr/lib/wine/i386-windows/wined3d.dll
+     10  x86=0x7b805250+0x128 rva=0xc5250  thread=mgs2_sse_rg353v:7525:10  /usr/lib/wine/i386-windows/wined3d.dll
+     10  x86=0x008c3eb0+0x102 rva=0x4c3eb0  thread=mgs2_sse_rg353v:7596:10  /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe
+     10  x86=0x7be9f4ec+0xc rva=0xf4ec  thread=wined3d_cs:7543:10  /usr/lib/wine/i386-windows/kernel32.dll
+     10  x86=0x7bf2e0c4+0x6 rva=0xe0c4  thread=mgs2_sse_rg353v:7596:8  /usr/lib/wine/i386-windows/ntdll.dll

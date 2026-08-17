@@ -1,0 +1,99 @@
+Patch 53 -- resolve the island's GL slots by name, not by address.
+
+The ARM island calls GL through gl_info->gl_ops, which holds guest x86 pointers.
+Patch 51 translated that table once by matching each pointer's address against
+opengl32.dll's export table. That approach cannot work, and failed twice:
+
+  * the RVA table was generated from the reference wineprefix's opengl32.dll
+    rather than the one MOUNTED on the device. Same ImageBase, different build
+    -- 1.8 MB vs 4.9 MB, 380 vs 391 exports. 3 of 493 slots resolved.
+  * regenerating from the device's own DLL raised that to 88, and 88 is the
+    ceiling: the extension entry points are not exports at all. They are
+    internal thunks Wine's opengl32 builds for wglGetProcAddress, so no export
+    table can ever name them.
+
+Unresolved slots were written back as NULL, so the first genuine GL_EXTCALL
+through one dereferenced NULL -- in-game, minutes after load, far from the cause.
+
+The address was the wrong key. gl_ops is generated on both sides from the same
+macro lists (ALL_WGL_FUNCS, ALL_GL_FUNCS, ALL_WGL_EXT_FUNCS, ALL_GL_EXT_FUNCS),
+so a slot's POSITION already carries its name, by construction, with nothing to
+look up and nothing to go stale. This patch expands those lists in declaration
+order into mgs2_gl_slot_name[] and resolves each live slot by name against the
+already-loaded driver (box86's mgs2_island_gl_by_name: dlsym, then
+eglGetProcAddress). The address path stays as a fallback.
+
+A C_ASSERT ties the array length to sizeof(struct wined3d_gl_funcs) /
+sizeof(void *). If the names ever shift against the slots, every GL call would
+go to the wrong function -- the same silent mis-aim as a stale class-B table --
+so that has to fail the build, not the run.
+
+Measured on the device: 3 -> 88 -> 233 of 493 non-null slots resolved, and the
+routed island reaches in-game frames with zero faults. The remaining 260 are not
+reached on this path and stay NULL with a report.
+
+--- a/dlls/wined3d/utils.c
++++ b/dlls/wined3d/utils.c
+@@ -7538,10 +7538,36 @@
+  * one adapter; a second would simply re-translate, which is correct if slower.
+  */
+ void *mgs2_island_try_resolve(void *fp);
++void *mgs2_island_gl_by_name(const char *name);
+ void mgs2_island_report_unresolved(unsigned int slot, void *fp);
+ void mgs2_island_report_gl_info(unsigned int total, unsigned int null_in,
+         unsigned int resolved, unsigned int failed);
+ 
++/*
++ * Slot index -> GL function name, in the exact order gl_ops declares them.
++ *
++ * The first attempt matched each pointer's address against opengl32.dll's
++ * export table. That was wrong twice over. It resolved 3 of 493 while the table
++ * came from the reference wineprefix rather than the DLL actually mounted, and
++ * even against the right DLL it only reached 88: the extension entries are not
++ * exports at all, they are internal thunks Wine's opengl32 builds for
++ * wglGetProcAddress, so no export table can ever name them.
++ *
++ * Addresses were the wrong key. The struct is generated from these same macro
++ * lists on both sides, so the slot's POSITION already carries its name -- by
++ * construction, with no table to go stale and nothing to match against. Expand
++ * the lists in declaration order and the index is the name.
++ */
++static const char *const mgs2_gl_slot_name[] =
++{
++#define USE_GL_FUNC(x) #x,
++    ALL_WGL_FUNCS
++    ALL_GL_FUNCS
++    ALL_WGL_EXT_FUNCS
++    ALL_GL_EXT_FUNCS
++#undef USE_GL_FUNC
++};
++
+ const struct wined3d_gl_info *mgs2_island_gl_info(const struct wined3d_gl_info *guest)
+ {
+     static struct wined3d_gl_info translated;
+@@ -7557,6 +7583,11 @@
+     translated = *guest;
+     slot = (void **)&translated.gl_ops;
+     count = sizeof(translated.gl_ops) / sizeof(void *);
++    /* If these ever disagree the names have silently shifted against the slots,
++     * and every GL call would go to the wrong function -- the same silent
++     * mis-aim as the stale class-B table. Fail the build, not the run. */
++    C_ASSERT(sizeof(mgs2_gl_slot_name) / sizeof(mgs2_gl_slot_name[0])
++            == sizeof(struct wined3d_gl_funcs) / sizeof(void *));
+     {
+         /* Report the whole table at once. Chasing one unresolved pointer per
+          * device run costs ten minutes each; this names every gap in a single
+@@ -7568,7 +7599,12 @@
+             void *before = slot[i];
+ 
+             if (!before) { ++null_in; continue; }
+-            slot[i] = mgs2_island_try_resolve(before);
++            /* By name first: it is the key that cannot go stale. The address
++             * path stays as a fallback for anything the driver exposes under a
++             * different name than wined3d's slot. */
++            slot[i] = mgs2_island_gl_by_name(mgs2_gl_slot_name[i]);
++            if (!slot[i])
++                slot[i] = mgs2_island_try_resolve(before);
+             if (slot[i]) ++ok;
+             else { ++failed; mgs2_island_report_unresolved((unsigned int)i, before); }
+         }

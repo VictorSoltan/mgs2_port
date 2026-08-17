@@ -1,0 +1,346 @@
+Patch 50 -- indirect-call target census: where the hot dispatch actually goes.
+
+The island cannot yet take the four functions that carry the frame because their
+closures dispatch through function pointers held in WineD3D objects, and a static
+analysis cannot say what those pointers hold. Concluding "cannot be armed" from
+not knowing was withdrawn; this measures it.
+
+It lives in the GUEST DLL deliberately. The hot roots are not armed, so in the
+island they never execute and there is nothing there to observe; in the x86 build
+they run every frame, against the same objects and the same pointer values the
+island would see.
+
+Twelve ops-dispatch sites on the hot paths are wrapped so the pointer is recorded
+and then called, argument list and return value untouched:
+
+    #define MGS2_P50_CALL(site, fp) (mgs2_p50_icall((site), (const void *)(fp)), (fp))
+
+Bounded, memory-only, published at present like every other census here; read by
+harness/island_icall_census.py. Each distinct target is classified once, in the
+guest -- Box86 bridge (a CC 'S' 'C' thunk), inside wined3d.dll, or another module
+-- and counted thereafter, so the hot path is a short scan and an increment.
+
+Measured on the owner's heavy save through a real reinforcement encounter:
+
+  buffer_ops->buffer_prepare_location   21,433,464 calls   4821.9/frame
+                                        ONE distinct target, inside wined3d.dll
+  parent_ops->wined3d_object_destroyed         117 calls      0.0/frame
+                                        the only cross-module target, into d3d8
+
+  wined3d-self  100.0%      other-module  0.0%
+
+Every hot indirect call resolves to a function the island already compiles for
+ARM. The reverse bridge layer that was priced as the blocking cost is, on this
+path, essentially absent. The attract demo gives the same shape independently.
+
+Not instrumented: the 694 gl_info->gl_ops sites, expected to be Box86 bridges to
+the already-native driver, but expected is not measured.
+
+diff -ruN old/dlls/wined3d/buffer.c new/dlls/wined3d/buffer.c
+--- old/dlls/wined3d/buffer.c	2026-08-15 20:37:32.937586256 +0300
++++ new/dlls/wined3d/buffer.c	2026-08-15 20:37:32.900668278 +0300
+@@ -263,13 +263,13 @@
+ BOOL wined3d_buffer_prepare_location(struct wined3d_buffer *buffer,
+         struct wined3d_context *context, unsigned int location)
+ {
+-    return buffer->buffer_ops->buffer_prepare_location(buffer, context, location);
++    return MGS2_P50_CALL(MGS2_P50_BUFFER_PREPARE, buffer->buffer_ops->buffer_prepare_location)(buffer, context, location);
+ }
+ 
+ static void wined3d_buffer_unload_location(struct wined3d_buffer *buffer,
+         struct wined3d_context *context, unsigned int location)
+ {
+-    buffer->buffer_ops->buffer_unload_location(buffer, context, location);
++    MGS2_P50_CALL(MGS2_P50_BUFFER_UNLOAD, buffer->buffer_ops->buffer_unload_location)(buffer, context, location);
+ }
+ 
+ BOOL wined3d_buffer_load_location(struct wined3d_buffer *buffer,
+diff -ruN old/dlls/wined3d/cs.c new/dlls/wined3d/cs.c
+--- old/dlls/wined3d/cs.c	2026-08-15 20:37:32.936075693 +0300
++++ new/dlls/wined3d/cs.c	2026-08-15 20:37:32.896566536 +0300
+@@ -2138,6 +2138,148 @@
+     InterlockedIncrement(&mgs2_island_entry_census.publish_sequence);
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * Patch 50: indirect-call target census.
++ *
++ * The native ARM island cannot yet take the four functions that carry the frame
++ * -- wined3d_buffer_load, wined3d_texture_load_location,
++ * wined3d_rendertarget_view_load_location, mgs2_batch_flush -- because their
++ * closures dispatch through function pointers held in WineD3D objects, and a
++ * static analysis cannot say what those pointers hold. "Cannot be armed" was
++ * concluded from that and was withdrawn; this measures it instead.
++ *
++ * It runs in the GUEST DLL on purpose. The hot roots are not armed, so in the
++ * island they never execute and there is nothing to observe; in the x86 build
++ * they run every frame, against the same objects and therefore the same pointer
++ * values the island would see.
++ *
++ * Memory only, bounded, published at present like every other census here.
++ * Each site keeps a handful of distinct targets, classified once on first sight
++ * and counted thereafter, so the hot path is a short scan and an increment.
++ *
++ * Classes: 1 Box86 bridge (a CC 'S' 'C' thunk -- native code the island can
++ * reach by unwrapping), 2 inside wined3d.dll itself (the island has its own ARM
++ * copy of that function), 3 some other module (needs identifying), 0 unknown.
++ * Only class 3 can turn out to require calling back into the emulator.
++ */
++#define MGS2_P50_MAGIC 0x30355250 /* PR50 */
++#define MGS2_P50_SITES 16
++#define MGS2_P50_TARGETS 8
++
++struct mgs2_p50_target
++{
++    unsigned int addr;
++    unsigned int cls;
++    unsigned int calls;
++};
++
++struct mgs2_p50_site
++{
++    unsigned int calls;
++    unsigned int distinct;
++    unsigned int overflow;
++    struct mgs2_p50_target targets[MGS2_P50_TARGETS];
++};
++
++struct mgs2_p50_public
++{
++    unsigned int magic, version, size_words, signature, enabled;
++    LONG publish_sequence;
++    unsigned int presents;
++    unsigned int module_base, module_end;
++    struct mgs2_p50_site sites[MGS2_P50_SITES];
++};
++
++struct mgs2_p50_public mgs2_island_icall_census =
++{
++    MGS2_P50_MAGIC, 1,
++    sizeof(struct mgs2_p50_public) / sizeof(unsigned int),
++    ~MGS2_P50_MAGIC,
++};
++
++static struct mgs2_p50_site mgs2_p50_live[MGS2_P50_SITES];
++static unsigned int mgs2_p50_base, mgs2_p50_end;
++
++static void mgs2_p50_init_range(void)
++{
++    MEMORY_BASIC_INFORMATION mbi;
++    IMAGE_DOS_HEADER *dos;
++    IMAGE_NT_HEADERS *nt;
++
++    if (mgs2_p50_base)
++        return;
++    if (!VirtualQuery((const void *)(ULONG_PTR)mgs2_p50_init_range, &mbi, sizeof(mbi)))
++        return;
++    dos = mbi.AllocationBase;
++    if (!dos || dos->e_magic != IMAGE_DOS_SIGNATURE)
++        return;
++    nt = (IMAGE_NT_HEADERS *)((char *)dos + dos->e_lfanew);
++    if (nt->Signature != IMAGE_NT_SIGNATURE)
++        return;
++    mgs2_p50_base = (unsigned int)(ULONG_PTR)dos;
++    mgs2_p50_end = mgs2_p50_base + nt->OptionalHeader.SizeOfImage;
++}
++
++/* One classification per distinct target, never per call. A Box86 bridge is a
++ * 0xCC 'S' 'C' thunk whose body holds the native function; that byte pattern is
++ * Box86's own signature and cannot be the prologue of real i386 code here. */
++static unsigned int mgs2_p50_classify(const void *target)
++{
++    const unsigned char *p = target;
++
++    if (!p)
++        return 0;
++    if (p[0] == 0xcc && p[1] == 'S' && p[2] == 'C')
++        return 1;
++    if ((unsigned int)(ULONG_PTR)p >= mgs2_p50_base
++            && (unsigned int)(ULONG_PTR)p < mgs2_p50_end)
++        return 2;
++    return 3;
++}
++
++void mgs2_p50_icall(unsigned int site, const void *target)
++{
++    struct mgs2_p50_site *s;
++    unsigned int i, addr;
++
++    if (site >= MGS2_P50_SITES || !mgs2_submit_census_on())
++        return;
++    mgs2_p50_init_range();
++    s = &mgs2_p50_live[site];
++    ++s->calls;
++    addr = (unsigned int)(ULONG_PTR)target;
++    for (i = 0; i < s->distinct; ++i)
++    {
++        if (s->targets[i].addr == addr)
++        {
++            ++s->targets[i].calls;
++            return;
++        }
++    }
++    if (s->distinct == MGS2_P50_TARGETS)
++    {
++        ++s->overflow;
++        return;
++    }
++    i = s->distinct++;
++    s->targets[i].addr = addr;
++    s->targets[i].cls = mgs2_p50_classify(target);
++    s->targets[i].calls = 1;
++}
++
++static void mgs2_p50_publish(void)
++{
++    if (!mgs2_submit_census_on())
++        return;
++    ++mgs2_island_icall_census.presents;
++    mgs2_island_icall_census.enabled = 1;
++    mgs2_island_icall_census.module_base = mgs2_p50_base;
++    mgs2_island_icall_census.module_end = mgs2_p50_end;
++    InterlockedIncrement(&mgs2_island_icall_census.publish_sequence);
++    memcpy(mgs2_island_icall_census.sites, mgs2_p50_live, sizeof(mgs2_p50_live));
++    InterlockedIncrement(&mgs2_island_icall_census.publish_sequence);
++}
++
+ static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
+ {
+ }
+@@ -2166,6 +2308,7 @@
+     cs_gl_info_for_proof = &wined3d_adapter_gl_const(cs->c.device->adapter)->gl_info;
+     mgs2_p40_publish(&cs->state);
+     mgs2_p46_publish();
++    mgs2_p50_publish();
+     if (mgs2_p39_on())
+         QueryPerformanceCounter(&mgs2_p39_present_start);
+ 
+diff -ruN old/dlls/wined3d/resource.c new/dlls/wined3d/resource.c
+--- old/dlls/wined3d/resource.c	2026-08-15 20:37:32.937979276 +0300
++++ new/dlls/wined3d/resource.c	2026-08-15 20:37:32.906470681 +0300
+@@ -270,7 +270,7 @@
+ {
+     TRACE("resource %p.\n", resource);
+ 
+-    return resource->resource_ops->resource_get_sub_resource_count(resource);
++    return MGS2_P50_CALL(MGS2_P50_RESOURCE_SUBRES_COUNT, resource->resource_ops->resource_get_sub_resource_count)(resource);
+ }
+ 
+ HRESULT CDECL wined3d_resource_get_sub_resource_desc(struct wined3d_resource *resource,
+@@ -278,7 +278,7 @@
+ {
+     TRACE("resource %p, sub_resource_idx %u, desc %p.\n", resource, sub_resource_idx, desc);
+ 
+-    return resource->resource_ops->resource_sub_resource_get_desc(resource, sub_resource_idx, desc);
++    return MGS2_P50_CALL(MGS2_P50_RESOURCE_SUBRES_DESC, resource->resource_ops->resource_sub_resource_get_desc)(resource, sub_resource_idx, desc);
+ }
+ 
+ void * CDECL wined3d_resource_get_parent(const struct wined3d_resource *resource)
+diff -ruN old/dlls/wined3d/texture.c new/dlls/wined3d/texture.c
+--- old/dlls/wined3d/texture.c	2026-08-15 20:37:32.937862600 +0300
++++ new/dlls/wined3d/texture.c	2026-08-15 20:37:32.903551293 +0300
+@@ -343,7 +343,7 @@
+     }
+     else
+     {
+-        ret = texture->texture_ops->texture_load_location(texture, sub_resource_idx, context, location);
++        ret = MGS2_P50_CALL(MGS2_P50_TEXTURE_LOAD, texture->texture_ops->texture_load_location)(texture, sub_resource_idx, context, location);
+     }
+ 
+     if (ret)
+@@ -391,7 +391,7 @@
+ static void wined3d_texture_unload_location(struct wined3d_texture *texture,
+         struct wined3d_context *context, unsigned int location)
+ {
+-    texture->texture_ops->texture_unload_location(texture, context, location);
++    MGS2_P50_CALL(MGS2_P50_TEXTURE_UNLOAD, texture->texture_ops->texture_unload_location)(texture, context, location);
+ }
+ 
+ static void wined3d_texture_update_map_binding(struct wined3d_texture *texture)
+@@ -463,7 +463,7 @@
+         if (sub_resource->parent)
+         {
+             TRACE("sub-resource %u.\n", i);
+-            sub_resource->parent_ops->wined3d_object_destroyed(sub_resource->parent);
++            MGS2_P50_CALL(MGS2_P50_PARENT_DESTROYED, sub_resource->parent_ops->wined3d_object_destroyed)(sub_resource->parent);
+             sub_resource->parent = NULL;
+         }
+     }
+@@ -683,7 +683,7 @@
+             wined3d_texture_invalidate_location(texture, i, ~WINED3D_LOCATION_DISCARDED);
+         }
+     }
+-    resource->resource_ops->resource_unload(resource);
++    MGS2_P50_CALL(MGS2_P50_RESOURCE_UNLOAD, resource->resource_ops->resource_unload)(resource);
+ }
+ 
+ void wined3d_texture_cleanup(struct wined3d_texture *texture)
+@@ -1019,7 +1019,7 @@
+     /* island entry 35: Box86 matches these bytes and reads the id. */
+     MGS2_ISLAND_MARK(0x23);
+     mgs2_p46_count(35);
+-    return texture->texture_ops->texture_prepare_location(texture, sub_resource_idx, context, location);
++    return MGS2_P50_CALL(MGS2_P50_TEXTURE_PREPARE, texture->texture_ops->texture_prepare_location)(texture, sub_resource_idx, context, location);
+ }
+ 
+ static struct wined3d_texture_sub_resource *wined3d_texture_get_sub_resource(struct wined3d_texture *texture,
+@@ -2038,7 +2038,7 @@
+     wined3d_texture_get_memory(src_texture, src_sub_resource_idx, context, &data);
+     wined3d_texture_get_pitch(src_texture, src_level, &src_row_pitch, &src_slice_pitch);
+ 
+-    dst_texture->texture_ops->texture_upload_data(context, wined3d_const_bo_address(&data),
++    MGS2_P50_CALL(MGS2_P50_TEXTURE_UPLOAD_BLT, dst_texture->texture_ops->texture_upload_data)(context, wined3d_const_bo_address(&data),
+             src_texture->resource.format, src_box, src_row_pitch, src_slice_pitch, dst_texture,
+             dst_sub_resource_idx, WINED3D_LOCATION_TEXTURE_RGB, dst_x, dst_y, dst_z);
+ 
+@@ -2074,7 +2074,7 @@
+     dst_level = dst_sub_resource_idx % dst_texture->level_count;
+     wined3d_texture_get_pitch(dst_texture, dst_level, &dst_row_pitch, &dst_slice_pitch);
+ 
+-    src_texture->texture_ops->texture_download_data(context, src_texture, src_sub_resource_idx, src_location,
++    MGS2_P50_CALL(MGS2_P50_TEXTURE_DOWNLOAD_BLT, src_texture->texture_ops->texture_download_data)(context, src_texture, src_sub_resource_idx, src_location,
+             &src_box, &data, dst_texture->resource.format, 0, 0, 0, dst_row_pitch, dst_slice_pitch);
+ 
+     context_release(context);
+@@ -2136,7 +2136,7 @@
+         wined3d_texture_load_location(texture, sub_resource_idx, context, WINED3D_LOCATION_TEXTURE_RGB);
+ 
+     wined3d_box_set(&src_box, 0, 0, box->right - box->left, box->bottom - box->top, 0, box->back - box->front);
+-    texture->texture_ops->texture_upload_data(context, &upload_bo->addr, texture->resource.format,
++    MGS2_P50_CALL(MGS2_P50_TEXTURE_UPLOAD_BO, texture->texture_ops->texture_upload_data)(context, &upload_bo->addr, texture->resource.format,
+             &src_box, row_pitch, slice_pitch, texture, sub_resource_idx,
+             WINED3D_LOCATION_TEXTURE_RGB, box->left, box->top, box->front);
+ 
+diff -ruN old/dlls/wined3d/wined3d_private.h new/dlls/wined3d/wined3d_private.h
+--- old/dlls/wined3d/wined3d_private.h	2026-08-15 20:37:32.937013508 +0300
++++ new/dlls/wined3d/wined3d_private.h	2026-08-15 20:37:32.909770323 +0300
+@@ -5159,6 +5159,29 @@
+ #define MGS2_P38_HINT_OTHER        7
+ void mgs2_p38_hint(unsigned int reason);
+ void mgs2_p46_count(unsigned int slot);
++
++/* Patch 50: record where one indirect dispatch actually went, then call it.
++ * Wraps the function-pointer expression, not the call, so the argument list and
++ * the return value are untouched:
++ *     MGS2_P50_CALL(3, tex->texture_ops->texture_load_location)(tex, ...)
++ * Sites are numbered in one list; see the census core in cs.c. */
++void mgs2_p50_icall(unsigned int site, const void *target);
++#define MGS2_P50_CALL(site, fp) (mgs2_p50_icall((site), (const void *)(fp)), (fp))
++
++/* The instrumented sites, on the paths of the four entries that carry the
++ * frame. Keep in step with MGS2_P50_SITES. */
++#define MGS2_P50_BUFFER_PREPARE          0
++#define MGS2_P50_BUFFER_UNLOAD           1
++#define MGS2_P50_TEXTURE_LOAD            2
++#define MGS2_P50_TEXTURE_UNLOAD          3
++#define MGS2_P50_TEXTURE_PREPARE         4
++#define MGS2_P50_TEXTURE_UPLOAD_BLT      5
++#define MGS2_P50_TEXTURE_DOWNLOAD_BLT    6
++#define MGS2_P50_TEXTURE_UPLOAD_BO       7
++#define MGS2_P50_RESOURCE_SUBRES_COUNT   8
++#define MGS2_P50_RESOURCE_SUBRES_DESC    9
++#define MGS2_P50_RESOURCE_UNLOAD        10
++#define MGS2_P50_PARENT_DESTROYED       11
+ void mgs2_p38_hint_dirty(const unsigned int *dirty, unsigned int words);
+ void mgs2_p38_close(unsigned int len, unsigned int mode_ok);
+ void mgs2_p38_gl_draw(unsigned int kind, unsigned int count, unsigned int gl_mode);

@@ -1,0 +1,47 @@
+156 abort stubs, 37 island entries
+
+entries that reach an abort stub -- arming any of these aborts the run
+   1 context_invalidate_state                      closure=8    indirect=32   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+   3 device_invalidate_state                       closure=6    indirect=1    teb=1   _assert
+   4 mgs2_batch_flush                              closure=934  indirect=209  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output _assert
+   7 wined3d_buffer_acquire_bo_for_write           closure=4    indirect=4    teb=0   _assert
+   8 wined3d_buffer_get_memory                     closure=934  indirect=204  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output __wine_dbg_strdup
+   9 wined3d_buffer_invalidate_location            closure=8    indirect=32   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+  10 wined3d_buffer_load                           closure=934  indirect=205  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output __wine_dbg_strdup
+  11 wined3d_buffer_load_location                  closure=933  indirect=204  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output __wine_dbg_strdup
+  12 wined3d_buffer_load_sysmem                    closure=934  indirect=204  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output __wine_dbg_strdup
+  14 wined3d_debug_location                        closure=8    indirect=6    teb=0   __stdio_common_vsprintf __wine_dbg_strdup
+  15 wined3d_device_context_blt                    closure=18   indirect=44   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output _recalloc
+  17 wined3d_ffp_get_fs_settings                   closure=5    indirect=3    teb=0   _assert
+  19 wined3d_format_convert_from_float             closure=10   indirect=32   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output _fdclass
+  21 wined3d_release_dc                            closure=10   indirect=32   teb=1   ReleaseDC WindowFromDC __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+  22 wined3d_rendertarget_view_invalidate_location closure=11   indirect=32   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+  23 wined3d_rendertarget_view_load_location       closure=946  indirect=213  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output __wine_dbg_strdup _assert ...
+  25 wined3d_rendertarget_view_validate_location   closure=928  indirect=195  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+  28 wined3d_resource_memory_colour_fill           closure=13   indirect=35   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output _fdclass
+  30 wined3d_swapchain_set_window                  closure=12   indirect=33   teb=1   GetDCEx ReleaseDC WindowFromDC __stdio_common_vsprintf __wine_dbg_header ...
+  31 wined3d_texture_add_dirty_region              closure=15   indirect=39   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output _recalloc
+  33 wined3d_texture_invalidate_location           closure=8    indirect=32   teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+  34 wined3d_texture_load_location                 closure=938  indirect=204  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output _assert _fdclass
+  36 wined3d_texture_validate_location             closure=927  indirect=195  teb=0   __stdio_common_vsprintf __wine_dbg_header __wine_dbg_output
+
+entries with no reachable abort stub
+   0 context_invalidate_compute_state              closure=2    indirect=1    teb=0
+   2 debug_d3dformat                               closure=2    indirect=1    teb=0
+   5 mgs2_submit_census_gl_draw                    closure=2    indirect=0    teb=0
+   6 multiply_matrix                               closure=2    indirect=1    teb=0
+  13 wined3d_context_gl_enable_clip_distances      closure=2    indirect=3    teb=0
+  16 wined3d_device_context_emit_blt_sub_resource  closure=2    indirect=5    teb=0
+  18 wined3d_format_calculate_pitch                closure=4    indirect=4    teb=0
+  20 wined3d_light_state_get_light                 closure=2    indirect=2    teb=0
+  24 wined3d_rendertarget_view_prepare_location    closure=3    indirect=2    teb=0
+  26 wined3d_resource_check_box_dimensions         closure=2    indirect=2    teb=0
+  27 wined3d_resource_free_sysmem                  closure=920  indirect=164  teb=0
+  29 wined3d_stream_info_from_declaration          closure=3    indirect=2    teb=0
+  32 wined3d_texture_from_resource                 closure=2    indirect=1    teb=0
+  35 wined3d_texture_prepare_location              closure=2    indirect=2    teb=0
+
+no stub, no TEB read, no indirect call -- 1 of 37 entries
+MGS2_BOX86_ISLAND_ONLY=5
+
+control check (wined3d_release_dc reaches WindowFromDC and ReleaseDC): PASS

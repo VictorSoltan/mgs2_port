@@ -1,0 +1,60 @@
+Patch 49 -- NtCurrentTeb() for the native ARM island must return the GUEST TEB.
+
+On i386, NtCurrentTeb() is `mov fs:0x18` -- Wine's TEB self-pointer, in a segment
+Box86 maintains per guest thread. The island compiles the same WineD3D sources
+for armhf, where winnt.h's ARM branch reads the coprocessor thread pointer:
+
+    ee1d 2f50   mrc 15, 0, r2, cr13, cr0, {2}
+    6a53        ldr r3, [r2, #36]
+
+That is the HOST thread's pointer, which has nothing to do with Wine's TEB.
+wined3d_from_cs() identifies the calling thread this way, so every island
+function that checks which thread it is on read arbitrary memory.
+
+Measured on the device on 2026-08-15: with the entry marker fixed (patch 48) and
+the two window/DC entries dropped, island entry 3, device_invalidate_state,
+faulted reading address 0x24 -- the Win32 thread id at TEB+0x24 -- while its
+arguments were entirely valid (device=0x02b766d8, state=0x171, read off the
+guest stack by the wrapper exactly as intended).
+
+This adds an MGS2_ISLAND_ARM branch that calls mgs2_island_teb(), implemented in
+Box86 (src/mgs2_island_natives.c) as the FS base of the current thread's emu
+plus 0x18. MGS2_ISLAND_ARM is defined only by
+harness/island/full/build_island_objects.sh; the branch is unreachable for the
+i386 DLL build, which is not rebuilt.
+
+After this patch the whole binary contains zero `mrc ..., cr13, cr0, {2}`
+instructions, and entry 3 runs for a full window without faulting.
+
+diff -ruN old/include/winnt.h new/include/winnt.h
+--- old/include/winnt.h	2026-08-15 17:10:22.206704939 +0300
++++ new/include/winnt.h	2026-08-15 17:10:22.179659578 +0300
+@@ -2521,12 +2521,28 @@
+     return (struct _TEB *)__readgsqword(FIELD_OFFSET(NT_TIB, Self));
+ }
+ #elif defined(__arm__) && defined(__GNUC__)
++#ifdef MGS2_ISLAND_ARM
++/* Patch 49. The native ARM WineD3D island runs inside Box86, on a host thread,
++ * against a guest process. `mrc p15,0,rX,c13,c0,2` reads the HOST thread
++ * pointer, which has nothing to do with Wine's TEB -- so wined3d_from_cs() and
++ * every other caller that identifies the thread reads arbitrary memory.
++ * Measured: island entry 3 faulted reading TEB+0x24, the Win32 thread id.
++ * Box86 keeps the guest FS base per thread and resolves the TEB from it.
++ * This branch is unreachable for the i386 DLL build, and MGS2_ISLAND_ARM is
++ * defined only by harness/island/full/build_island_objects.sh. */
++struct _TEB * mgs2_island_teb(void);
++static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)
++{
++    return mgs2_island_teb();
++}
++#else
+ static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)
+ {
+     struct _TEB *teb;
+     __asm__("mrc p15, 0, %0, c13, c0, 2" : "=r" (teb));
+     return teb;
+ }
++#endif
+ #elif defined(__arm__) && defined(_MSC_VER)
+ #pragma intrinsic(_MoveFromCoprocessor)
+ static FORCEINLINE struct _TEB * WINAPI NtCurrentTeb(void)

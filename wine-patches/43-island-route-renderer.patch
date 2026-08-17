@@ -1,0 +1,47 @@
+Patch 43 -- route the renderer through the native ARM island.
+
+glsl_shader.c's fixed-function path calls mgs2_island_ffp_target() instead of
+wined3d_ffp_get_fs_settings() when MGS2_ISLAND_FFP=1. With the switch off, or
+with the Box86 bridge absent, the target is an ordinary call to the same
+function, so selecting the island cannot change behaviour by itself.
+
+Measured A/B, one scene, one build, only the switch changed:
+  island off  wined3d_ffp_get_fs_settings  63 samples  0.35% of translated work
+  island on                                 0 samples  0.00%
+Neighbouring functions unchanged within noise. This removes work; it is far
+too small to appear as frame rate, and none is claimed.
+
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -11334,7 +11334,14 @@
+     {
+         struct ffp_frag_settings settings;
+ 
+-        wined3d_ffp_get_fs_settings(state, d3d_info, &settings);
++        /* Patch 43: with the island selected this call lands in native ARM
++         * code compiled from this same function's source. With it off, or with
++         * the Box86 bridge absent, the target is a plain call to the function
++         * below, so the rendering path is identical either way. */
++        if (mgs2_island_ffp_enabled())
++            mgs2_island_ffp_target(state, d3d_info, &settings);
++        else
++            wined3d_ffp_get_fs_settings(state, d3d_info, &settings);
+         ffp_ps = shader_glsl_find_ffp_fragment_shader(priv, &settings, context_gl);
+         ps_id = ffp_ps->id;
+         ps_list = &ffp_ps->linked_programs;
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -2688,6 +2688,13 @@
+ 
+ extern const struct wined3d_parent_ops wined3d_null_parent_ops;
+ 
++/* Patch 43: the island entry point. Box86 replaces this with native ARM when
++ * MGS2_BOX86_ISLAND_FFP=1; otherwise it is an ordinary call to the function
++ * below, so selecting the island can never change behaviour on its own. */
++void mgs2_island_ffp_target(const struct wined3d_state *state,
++        const struct wined3d_d3d_info *d3d_info, struct ffp_frag_settings *settings);
++BOOL mgs2_island_ffp_enabled(void);
++
+ void wined3d_ffp_get_fs_settings(const struct wined3d_state *state,
+         const struct wined3d_d3d_info *d3d_info, struct ffp_frag_settings *settings);
+ const struct ffp_frag_desc *find_ffp_frag_shader(const struct wine_rb_tree *fragment_shaders,

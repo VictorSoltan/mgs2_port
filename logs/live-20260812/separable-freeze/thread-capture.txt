@@ -1,0 +1,94 @@
+MGS2 RG353VS — живой захват полного фриза, 2026-08-12
+pid 24615 (comm mgs2_sse_rg353v), patch 27 смонтирован, MGS2_GPU_PROBE не задан.
+Игра запущена на 11407.77 s boottime, захват на 12981 s => фриз внутри ~26 минут.
+
+=== все потоки: tid state [comm] wchan utime stime ===
+24615 S [mgs2_sse_rg353v] wchan=ntsync_schedule.isra.0 times=3863 3182
+25235 S [mgs2_sse_rg353v] wchan=do_sys_poll times=250 216
+25241 S [mgs2_sse_rg353v] wchan=ntsync_schedule.isra.0 times=2 8
+25242 S [mgs2_sse_rg353v] wchan=ntsync_schedule.isra.0 times=26706 3805
+25255 S [mali-mem-purge] wchan=__futex_wait times=3 20
+25256 S [mali-utility-wo] wchan=__futex_wait times=0 0
+25257 S [mali-utility-wo] wchan=__futex_wait times=0 0
+25258 S [mali-utility-wo] wchan=__futex_wait times=0 0
+25259 S [mali-utility-wo] wchan=__futex_wait times=0 0
+25260 S [mali-cmar-backe] wchan=do_sys_poll times=3345 1885
+25261 S [mali-compiler] wchan=__futex_wait times=18 14
+25267 S [wined3d_cs] wchan=__futex_wait times=67111 4544
+25274 S [alsa-pipewire] wchan=do_epoll_wait times=0 0
+25275 S [data-loop.0] wchan=do_epoll_wait times=3342 229
+25276 S [audio_client_ti] wchan=do_select times=451 858
+25277 S [wine_dsound_mix] wchan=ntsync_schedule.isra.0 times=18242 291
+25278 S [mmdevapi_midi_n] wchan=__futex_wait times=0 0
+25279 S [wine_dmime_mess] wchan=__futex_wait times=359 74
+25280 S [wine_dmsynth_si] wchan=ntsync_schedule.isra.0 times=29 18
+25281 S [wine_dmsynth_si] wchan=ntsync_schedule.isra.0 times=7286 364
+25287 S [mgs2_sse_rg353v] wchan=ntsync_schedule.isra.0 times=4301 689
+25288 S [mgs2_sse_rg353v] wchan=__futex_wait times=1009 669
+25289 S [mgs2_sse_rg353v] wchan=ntsync_schedule.isra.0 times=911 75
+25290 S [mgs2_sse_rg353v] wchan=__futex_wait times=82679 9646
+25291 S [wine_dinput_wor] wchan=anon_pipe_read times=727 424
+
+Ни одного потока в R. Все спят.
+
+=== /proc/<tid>/syscall, два снимка с интервалом 6 s ===
+формат: nr arg0..arg5 sp pc
+A 24615 running
+A 25267 240 0x400f012c 0x80 0x0 0x0 0x0 0x0 0x730fe6d8 0xf7ef1d10
+A 25242  54 0xd 0xc0284e82 0x565f508 0x7a1fe700 0x7dc561c8 0xf7eef3f0 ...
+A 25290 240 0x400f0158 0x80 0x0 0x97dfcc8 0x0 0x0 0x6fafe6d8 0xf7ef1d10
+A 25261 422 0x79d8495c 0x189 0xd 0x0 0x0 0xffffffff 0x73daa9d4 0xf7e66938
+
+B 24615  54 0xd 0xc0284e82 0x22f388 0xffd460f8 0x63781c30 0xf7eef3f0 ...
+B 25267 240 0x400f012c 0x80 0x0 0x0 0x0 0x0 0x730fe6d8 0xf7ef1d10
+B 25242  54 ... (без изменений)
+B 25290 240 0x400f0158 0x80 0x0 0x97dfcc8 0x0 0x0 0x6fafe6d8 0xf7ef1d10
+B 25261 422 ... (без изменений)
+
+nr 240 = futex, nr 54 = ioctl, nr 422 = futex_time64.
+op 0x80 = FUTEX_WAIT_PRIVATE, timeout=NULL => ожидание без таймаута.
+val=0 => спать пока слово равно нулю, то есть ждать ненулевого.
+ioctl cmd 0xc0284e82 = _IOWR('N', 0x82, 40) = NTSYNC_IOC_WAIT_ANY.
+
+=== прогресс: utime запаркованных потоков, три чтения за ~10 минут ===
+tid 25267  67111  67111  67111
+tid 25242  26706  26706  26706
+tid 25290  82679  82679  82679
+tid 24615   3863 -> 3895 -> 3903   (главный поток жив, ~13% CPU)
+
+=== слова futex, прочитанные из /proc/24615/mem ===
+0x400f0120 +48 байт: всё нули  (futex 0x400f012c == 0)
+0x400f0150 +48 байт: всё нули  (futex 0x400f0158 == 0)
+=> условие ожидания выполняется, будить некому: потерянный wakeup.
+
+=== kernel stacks ===
+25267 / 25261 / 25290:
+  __futex_wait -> futex_wait -> do_futex -> __arm64_sys_futex[_time32]
+  -> el0_svc_common -> do_el0_svc_compat -> el0_svc_compat
+  -> el0t_32_sync_handler -> el0t_32_sync
+PC всех трёх — обёртки в /usr/lib32/libc.so.6.
+
+=== принадлежность адресов (см. frozen-proc-maps.txt) ===
+0x400f0000-0x40100000 rw-p anon          <- оба futex, пул синхронизации Box86
+0x40010000..0x400e1000 rwxp anon         <- bridge/thunk страницы Box86
+                                            (mgsdbg.log: glLinkProgram -> 0x40020bb0)
+0x79d5d000-0x79da5000 rw-p anon          <- futex mali-compiler, данные libmali
+/usr/lib32/libmali.so.1.10.0             <- сегменты вокруг него
+
+=== сверка смонтированного, побайтово ===
+/usr/lib/wine/i386-windows/wined3d.dll == wined3d_finalplay_separable.dll  OK
+/usr/lib/wine/i386-unix/opengl32.so    == opengl32_finalplay_sso.so        OK
+/usr/bin/box86  sha256 35da697774f627cd0d4272328aa21ae094620d683458b1d0b35fd8e8b0a6e98c
+                == box86-native-memmove3, как в binaries/SHA256SUMS        OK
+
+=== что исключено ===
+dmesg                нет ни одной ошибки mali за всю загрузку
+suspend/resume       циклы на 33 s и 3065 s boottime, игра стартовала на 11408 s
+память               MemTotal 999244 kB, MemFree 66868 kB, MemAvailable 152812 kB
+                     SwapTotal 1048572 kB, SwapFree 1032040 kB (занято ~16 MB)
+                     игра VmRSS 499520 kB, VmSwap 0, OOM-kill нет
+инстансы             ровно один процесс с точным comm
+клок/темп            policy0 cpuinfo_max 1992000, запись 1992000 проходит,
+                     thermal_zone0 57222, thermal_zone1 55000
+GPU                  devfreq cur_freq 800000000, mali0 gpu_memory 31786 страниц,
+                     busy_time 1005800799 / idle_time 3049279631 (кумулятивные)
