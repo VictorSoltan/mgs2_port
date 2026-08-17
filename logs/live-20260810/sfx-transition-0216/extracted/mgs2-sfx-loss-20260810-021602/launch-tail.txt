@@ -1,2 +1,0 @@
-tail: can't open '/storage/roms/ports/run-mgs2.log': No such file or directory
-tail: no files

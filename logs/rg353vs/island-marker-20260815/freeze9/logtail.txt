@@ -1,4 +1,0 @@
-0130:err:waylanddrv:mgs_report_stats MGS2 frame time: worst 5838 ms | over 50/100/200/500 ms: 32/13/0/2 | compositor wait 0.00 ms/f, worst 0 ms
-0130:err:waylanddrv:wayland_drawable_swap MGS2 STALL tick=1145783 frame took 896 ms
-0130:err:waylanddrv:mgs_report_stats MGS2 present stats: tick=1155628 300 frames in 17565 ms = 17.1 fps | readback 10.84 ms/f | copy 0.00 ms/f
-0130:err:waylanddrv:mgs_report_stats MGS2 frame time: worst 896 ms | over 50/100/200/500 ms: 173/0/3/1 | compositor wait 0.00 ms/f, worst 0 ms

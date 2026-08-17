@@ -1,3 +1,0 @@
-297f70675defe2c1573ca40277dfc5907ca68f6ddbce38b2e0a2fc1e4e0bd45a  device/launch-play.sh
-89ca26c512489ed18b3605ca195fa7dd45d3a9f8cc3fefafac8b1ebd9b86a252  binaries/box86-native-dsound-fir1
-fb1554e0dd01f276192a23810ed60e9c4be0c6ab1703825caceaacf04161c17d  binaries/wined3d_p32_ffp_source_dedup.dll

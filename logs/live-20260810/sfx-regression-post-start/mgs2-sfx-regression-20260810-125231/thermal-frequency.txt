@@ -1,4 +1,0 @@
-/sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq 1992000
-/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq 1992000
-/sys/class/thermal/thermal_zone0/temp 65000
-/sys/class/thermal/thermal_zone1/temp 59444

@@ -29,3 +29,26 @@ __pycache__/
 # the console. Send the tarball, never commit it.
 mgs2-perf-context-*/
 mgs2-perf-context-*.tar.gz
+
+# Local captures / profiling output
+/logs/
+*.perf
+*.prof
+*.trace
+core
+core.*
+
+# Python caches / local environments
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editor / local junk
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

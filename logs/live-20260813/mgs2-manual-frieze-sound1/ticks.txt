@@ -1,3 +1,0 @@
-start_tick=9487797
-report_tick=9710398
-capture_stopped_tick=9712554
