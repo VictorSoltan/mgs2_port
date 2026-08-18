@@ -9,20 +9,8 @@ shader and separable-stage owner canonical by source.
 The 64-bit FNV-1a hash is only a rejection filter. Equality requires matching
 length and a full memcmp, so a hash collision cannot merge different shaders.
 The shared owner is destroyed after both settings trees, avoiding double
-deletion and keeping all program/pipeline users alive through teardown.
-
-MGS2_GL_SOURCE_DEDUP=0 disables reuse for a device A/B. The bounded GPU probe
-also records source hash and size in compile_shader events; it performs no I/O.
-
-Measured 2026-08-13, fixed 1,992 MHz, one instance, corrected autoload route
-(default walk direction down):
-  cache off: 36 compile/stage events; 17 exact duplicates; duplicate links
-             2,036,500 us (4 vertex / 13 fragment)
-  cache on:  22 compile/stage events; 0 exact duplicates
-Both post-load screenshots were correct and contained the first guard.
-
---- a/dlls/wined3d/glsl_shader.c
-+++ b/dlls/wined3d/glsl_shader.c
+--- a/dlls/wined3d/glsl_shader.c	2026-08-18 00:19:13.765480277 +0300
++++ b/dlls/wined3d/glsl_shader.c	2026-08-18 00:19:31.638639075 +0300
 @@ -134,7 +134,10 @@
      BOOL mgs2_separable_enabled;
      BOOL mgs2_separable_validate;
@@ -31,13 +19,13 @@ Both post-load screenshots were correct and contained the first guard.
      struct mgs2_vs_stage_cache *mgs2_vs_stages;
 +    struct list mgs2_ffp_vs_sources;
 +    struct list mgs2_ffp_ps_sources;
-
+ 
      struct wined3d_string_buffer shader_buffer;
      struct wined3d_string_buffer_list string_buffers;
 @@ -345,22 +348,52 @@
      unsigned int num_gl_shaders, shader_array_size;
  };
-
+ 
 +struct mgs2_ffp_vs_source;
 +struct mgs2_ffp_ps_source;
 +
@@ -50,7 +38,7 @@ Both post-load screenshots were correct and contained the first guard.
      struct list linked_programs;
 +    struct mgs2_ffp_vs_source *source;
  };
-
+ 
  struct glsl_ffp_fragment_shader
  {
      struct ffp_frag_desc entry;
@@ -88,7 +76,7 @@ Both post-load screenshots were correct and contained the first guard.
      struct glsl_ps_program stage;
 -    struct list linked_programs;
  };
-
+ 
  struct glsl_ffp_destroy_ctx
 @@ -719,6 +752,8 @@
  static void shader_glsl_compile(const struct wined3d_gl_info *gl_info, GLuint shader, const char *src)
@@ -97,7 +85,7 @@ Both post-load screenshots were correct and contained the first guard.
 +    uint64_t source_hash = 14695981039346656037ull;
 +    unsigned int source_size = 0;
      LONGLONG probe_start;
-
+ 
      TRACE("Compiling shader object %u.\n", shader);
 @@ -738,7 +773,19 @@
      probe_start = mgs2_probe_now();
@@ -118,12 +106,12 @@ Both post-load screenshots were correct and contained the first guard.
 +    mgs2_probe_record(MGS2_PROBE_OP_COMPILE_SHADER, probe_start,
 +            (unsigned int)source_hash, (unsigned int)(source_hash >> 32), source_size, 0, shader);
      print_glsl_info_log(gl_info, shader, FALSE);
-
+ 
  }
 @@ -9421,8 +9468,55 @@
          shader_addline(buffer, "ffp_varying_specular = ffp_attrib_specular;\n");
  }
-
+ 
 +static uint64_t mgs2_glsl_source_hash(const char *text, size_t *size)
 +{
 +    uint64_t hash = 14695981039346656037ull;
@@ -183,24 +171,24 @@ Both post-load screenshots were correct and contained the first guard.
      BOOL legacy_lighting = priv->legacy_lighting;
 -    GLuint shader_obj;
      unsigned int i;
-
+ 
      string_buffer_clear(buffer);
 @@ -9717,10 +9810,7 @@
-
+ 
      shader_addline(buffer, "}\n");
-
+ 
 -    shader_obj = GL_EXTCALL(glCreateShader(GL_VERTEX_SHADER));
 -    shader_glsl_compile(gl_info, shader_obj, buffer->buffer);
 -
 -    return shader_obj;
 +    return mgs2_get_ffp_vs_source(priv, gl_info, buffer->buffer);
  }
-
+ 
  static const char *shader_glsl_get_ffp_fragment_op_arg(struct wined3d_string_buffer *buffer,
 @@ -9963,8 +10053,41 @@
-
+ 
  }
-
+ 
 +static struct mgs2_ffp_ps_source *mgs2_get_ffp_ps_source(struct shader_glsl_priv *priv,
 +        const struct wined3d_gl_info *gl_info, const char *text)
 +{
@@ -247,11 +235,11 @@ Both post-load screenshots were correct and contained the first guard.
 -    GLuint shader_id;
      DWORD arg0, arg1, arg2;
      unsigned int stage;
-
+ 
 @@ -10325,11 +10447,8 @@
-
+ 
      shader_addline(buffer, "}\n");
-
+ 
 -    shader_id = GL_EXTCALL(glCreateShader(GL_FRAGMENT_SHADER));
 -    shader_glsl_compile(gl_info, shader_id, buffer->buffer);
 -
@@ -259,12 +247,12 @@ Both post-load screenshots were correct and contained the first guard.
 -    return shader_id;
 +    return mgs2_get_ffp_ps_source(priv, gl_info, buffer->buffer);
  }
-
+ 
  static struct glsl_ffp_vertex_shader *shader_glsl_find_ffp_vertex_shader(struct shader_glsl_priv *priv,
 @@ -10341,16 +10460,17 @@
      if ((entry = wine_rb_get(&priv->ffp_vertex_shaders, settings)))
          return WINE_RB_ENTRY_VALUE(entry, struct glsl_ffp_vertex_shader, desc.entry);
-
+ 
 -    /* calloc, not malloc: the separable candidate adds stage_program and the
 -     * stage uniform locations to this structure, and every other field is
 -     * assigned below.  With malloc, stage_program started as garbage, so
@@ -273,7 +261,7 @@ Both post-load screenshots were correct and contained the first guard.
 +    /* calloc keeps any future cache-owned fields safely initialised. */
      if (!(shader = calloc(1, sizeof(*shader))))
          return NULL;
-
+ 
      shader->desc.settings = *settings;
 -    shader->id = shader_glsl_generate_ffp_vertex_shader(priv, settings, gl_info);
 +    if (!(shader->source = shader_glsl_generate_ffp_vertex_shader(priv, settings, gl_info)))
@@ -287,7 +275,7 @@ Both post-load screenshots were correct and contained the first guard.
          ERR("Failed to insert ffp vertex shader.\n");
 @@ -10372,7 +10492,12 @@
          return NULL;
-
+ 
      glsl_desc->entry.settings = *args;
 -    glsl_desc->id = shader_glsl_generate_ffp_fragment_shader(priv, args, context_gl);
 +    if (!(glsl_desc->source = shader_glsl_generate_ffp_fragment_shader(priv, args, context_gl)))
@@ -298,8 +286,8 @@ Both post-load screenshots were correct and contained the first guard.
 +    glsl_desc->id = glsl_desc->source->shader_id;
      list_init(&glsl_desc->linked_programs);
      add_ffp_frag_shader(&priv->ffp_fragment_shaders, &glsl_desc->entry);
-
-@@ -10747,24 +10872,26 @@
+ 
+@@ -10747,22 +10872,24 @@
          struct shader_glsl_priv *priv, struct glsl_ffp_vertex_shader *vs,
          struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
  {
@@ -308,9 +296,7 @@ Both post-load screenshots were correct and contained the first guard.
      LONGLONG probe_start;
      GLint valid = GL_FALSE;
      GLuint pipeline;
-
-     /* The fixed-function pair keeps exactly the arguments it had before patch 30
-      * generalised this: the whole FFP attribute set, and no vs_c[]/ps_c[] array. */
+ 
 -    if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs->id, GL_VERTEX_SHADER_BIT,
 -            &vs->stage_program, &vs->stage, (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1, 0)
 -            || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
@@ -320,7 +306,7 @@ Both post-load screenshots were correct and contained the first guard.
 +            || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps_source->shader_id, GL_FRAGMENT_SHADER_BIT,
 +                    &ps_source->stage_program, &ps_source->stage, 0, 0))
          return FALSE;
-
+ 
      probe_start = mgs2_probe_now();
      mgs2_glGenProgramPipelines(1, &pipeline);
      if (!pipeline)
@@ -332,7 +318,7 @@ Both post-load screenshots were correct and contained the first guard.
      if (priv->mgs2_separable_validate)
      {
          mgs2_glValidateProgramPipeline(pipeline);
-@@ -10776,7 +10903,7 @@
+@@ -10774,7 +10901,7 @@
               * MGS2_GL_SEPARABLE=2 keeps the pipeline anyway, for one run that
               * can tell the two apart. */
              ERR("Program pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
@@ -341,7 +327,7 @@ Both post-load screenshots were correct and contained the first guard.
              if (mgs2_glGetProgramPipelineInfoLog)
              {
                  char log[1024];
-@@ -10787,13 +10914,13 @@
+@@ -10785,13 +10912,13 @@
                      ERR("Pipeline info log: %s\n", debugstr_a(log));
              }
              mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
@@ -354,10 +340,10 @@ Both post-load screenshots were correct and contained the first guard.
      mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
 -            vs->stage_program, ps->stage_program, 1, 0, pipeline);
 +            vs_source->stage_program, ps_source->stage_program, 1, 0, pipeline);
-
+ 
      /* A pipeline name is not a program name: the two live in separate object
       * namespaces, so entry->id must stay a program name.  The first candidate
-@@ -10803,8 +10930,8 @@
+@@ -10801,8 +10928,8 @@
       * transitions are detected on the entry pointer instead. */
      entry->id = 0;
      entry->pipeline_id = pipeline;
@@ -366,9 +352,9 @@ Both post-load screenshots were correct and contained the first guard.
 +    entry->vs_program_id = vs_source->stage_program;
 +    entry->ps_program_id = ps_source->stage_program;
      entry->separable = TRUE;
-
+ 
      /* Take the stage uniform locations, but keep the shader object ids this
-@@ -10816,8 +10943,8 @@
+@@ -10814,8 +10941,8 @@
       * shader was skipped -- the entry was freed while still linked into
       * ffp_vs->linked_programs.  Tearing those shaders down on a savegame load
       * then walked freed memory.  shader_entry itself is linked by the caller. */
@@ -379,7 +365,7 @@ Both post-load screenshots were correct and contained the first guard.
      entry->vs.id = vs->id;
      entry->ps.id = ps->id;
      entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
-@@ -10845,6 +10972,7 @@
+@@ -10843,6 +10970,7 @@
          struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
  {
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
@@ -387,8 +373,8 @@ Both post-load screenshots were correct and contained the first guard.
      struct glsl_vs_program *stage = NULL;
      GLuint *stage_program = NULL;
      struct mgs2_vs_stage_cache *cache;
-@@ -10884,8 +11012,8 @@
-
+@@ -10882,8 +11010,8 @@
+ 
      if (!mgs2_make_ffp_stage(gl_info, priv, vs_id, GL_VERTEX_SHADER_BIT, stage_program, stage,
              vshader->reg_maps.input_registers, vshader->limits->constant_float)
 -            || !mgs2_make_ffp_stage(gl_info, priv, ps->id, GL_FRAGMENT_SHADER_BIT,
@@ -396,9 +382,9 @@ Both post-load screenshots were correct and contained the first guard.
 +            || !mgs2_make_ffp_stage(gl_info, priv, ps_source->shader_id, GL_FRAGMENT_SHADER_BIT,
 +                    &ps_source->stage_program, &ps_source->stage, 0, 0))
          return FALSE;
-
+ 
      probe_start = mgs2_probe_now();
-@@ -10893,7 +11021,7 @@
+@@ -10891,7 +11019,7 @@
      if (!pipeline)
          return FALSE;
      mgs2_glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, *stage_program);
@@ -407,7 +393,7 @@ Both post-load screenshots were correct and contained the first guard.
      if (priv->mgs2_separable_validate)
      {
          mgs2_glValidateProgramPipeline(pipeline);
-@@ -10901,7 +11029,7 @@
+@@ -10899,7 +11027,7 @@
          if (!valid)
          {
              ERR("Programmable-VS pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
@@ -416,7 +402,7 @@ Both post-load screenshots were correct and contained the first guard.
              if (mgs2_glGetProgramPipelineInfoLog)
              {
                  char log[1024];
-@@ -10914,21 +11042,21 @@
+@@ -10912,21 +11040,21 @@
              /* d = 1 marks the programmable-VS variant in the probe ring, so a
               * capture can tell the two pairings apart. */
              mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
@@ -429,7 +415,7 @@ Both post-load screenshots were correct and contained the first guard.
      mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
 -            *stage_program, ps->stage_program, 1, 1, pipeline);
 +            *stage_program, ps_source->stage_program, 1, 1, pipeline);
-
+ 
      entry->id = 0;
      entry->pipeline_id = pipeline;
      entry->vs_program_id = *stage_program;
@@ -442,24 +428,24 @@ Both post-load screenshots were correct and contained the first guard.
      entry->vs.id = vs_id;
      entry->ps.id = ps->id;
      entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
-@@ -12053,6 +12181,7 @@
+@@ -12052,6 +12180,7 @@
      void *vertex_priv, *fragment_priv;
      struct shader_glsl_priv *priv;
      const char *separable_env;
 +    const char *source_dedup_env;
      const char *probe_env;
-
+ 
      if (!(priv = calloc(1, sizeof(*priv))))
-@@ -12065,6 +12194,8 @@
+@@ -12064,6 +12193,8 @@
      }
-
+ 
      string_buffer_list_init(&priv->string_buffers);
 +    list_init(&priv->mgs2_ffp_vs_sources);
 +    list_init(&priv->mgs2_ffp_ps_sources);
-
+ 
      if (!(vertex_priv = vertex_pipe->vp_alloc(&glsl_shader_backend, priv)))
      {
-@@ -12123,6 +12254,13 @@
+@@ -12122,6 +12253,13 @@
       * remaining hitch, so it is worth keeping. */
      separable_env = getenv("MGS2_GL_SEPARABLE");
      priv->mgs2_separable_enabled = !(separable_env && !strcmp(separable_env, "0"));
@@ -476,7 +462,7 @@ Both post-load screenshots were correct and contained the first guard.
 @@ -12168,10 +12306,37 @@
      return E_OUTOFMEMORY;
  }
-
+ 
 +static void mgs2_free_ffp_source_caches(struct shader_glsl_priv *priv,
 +        const struct wined3d_gl_info *gl_info)
 +{
@@ -508,7 +494,7 @@ Both post-load screenshots were correct and contained the first guard.
  {
      struct shader_glsl_priv *priv = device->shader_priv;
 +    const struct wined3d_gl_info *gl_info = wined3d_context_gl(context)->gl_info;
-
+ 
      wine_rb_destroy(&priv->program_lookup, NULL, NULL);
      constant_free(&priv->pconst_heap);
 @@ -12186,6 +12351,7 @@
@@ -516,7 +502,7 @@ Both post-load screenshots were correct and contained the first guard.
      priv->fragment_pipe->free_private(device, context);
      priv->vertex_pipe->vp_free(device, context);
 +    mgs2_free_ffp_source_caches(priv, gl_info);
-
+ 
      free(device->shader_priv);
      device->shader_priv = NULL;
 @@ -12653,11 +12819,7 @@
@@ -531,7 +517,7 @@ Both post-load screenshots were correct and contained the first guard.
 +    /* The exact-source cache owns the shared shader and stage program. */
      free(shader);
  }
-
+ 
 @@ -12885,9 +13047,7 @@
      {
          delete_glsl_program_entry(ctx->priv, gl_info, program);
@@ -542,3 +528,4 @@ Both post-load screenshots were correct and contained the first guard.
 +    /* The exact-source cache owns the shared shader and stage program. */
      free(shader);
  }
+ 

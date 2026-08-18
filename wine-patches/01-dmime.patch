@@ -56,12 +56,14 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
      if (*ppobj) {
          IUnknown_AddRef((IUnknown*)*ppobj);
-@@ -132,6 +166,8 @@
+@@ -132,6 +166,10 @@
              IDirectSoundBuffer_Release(This->pPrimary);
          if (This->pDSBuffer)
              IDirectSoundBuffer_Release(This->pDSBuffer);
 +        if (This->pPort)
 +            IDirectMusicPort_Release(This->pPort);
++        if (This->pToolGraph)
++            IDirectMusicGraph_Release(This->pToolGraph);
          This->pPerf = NULL;
          free(This);
      }

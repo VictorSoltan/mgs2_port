@@ -1,0 +1,29 @@
+Patch 58 -- keep the renderer GL-info helper in the NO-ISLAND chain.
+
+The native island translates guest GL function tables, but the ordinary
+renderer uses the original table directly.  The ordering and GLES fixups share
+the helper name, so provide the identity form without importing the island
+resolver or its global lifetime state.
+
+--- a/dlls/wined3d/wined3d_gl.h
++++ b/dlls/wined3d/wined3d_gl.h
+@@ -377,6 +377,7 @@ struct wined3d_gl_info
+     void (WINE_GLAPI *p_glEnableWINE)(GLenum cap);
+ };
+ 
++#define MGS2_GL_INFO(gi) (gi)
+ #define GL_EXTCALL(f) (gl_info->gl_ops.ext.p_##f)
+ 
+ void install_gl_compat_wrapper(struct wined3d_gl_info *gl_info, enum wined3d_gl_extension ext);
+
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -5135,0 +5136,8 @@
++/* The marker/census hooks belong to the experimental native-island track.
++ * Keep their call sites harmless in the ordinary renderer chain. */
++#ifndef MGS2_ISLAND_MARK
++# define MGS2_ISLAND_MARK(id) ((void)0)
++#endif
++#ifndef mgs2_p46_count
++# define mgs2_p46_count(slot) ((void)0)
++#endif

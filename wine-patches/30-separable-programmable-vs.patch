@@ -10,11 +10,11 @@ actual workload. Enabling this patch therefore changed nothing. Do not enable it
 in production; its value here is to make the recovered source and archived
 wined3d_p30_separable_vs.dll reproducible before patch 32.
 
---- a/dlls/wined3d/glsl_shader.c
-+++ b/dlls/wined3d/glsl_shader.c
+--- a/dlls/wined3d/glsl_shader.c	2026-08-18 00:18:25.100033805 +0300
++++ b/dlls/wined3d/glsl_shader.c	2026-08-18 00:18:25.382036453 +0300
 @@ -123,11 +123,18 @@
  };
-
+ 
  /* GLSL shader private data */
 +/* Patch 30: stage programs for programmable vertex shaders. Declared after
 + * glsl_vs_program, which this file defines below, so priv only carries a pointer
@@ -28,7 +28,7 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
      BOOL mgs2_separable_validate;
 +    BOOL mgs2_separable_vs_enabled;
 +    struct mgs2_vs_stage_cache *mgs2_vs_stages;
-
+ 
      struct wined3d_string_buffer shader_buffer;
      struct wined3d_string_buffer_list string_buffers;
 @@ -10527,7 +10534,8 @@
@@ -58,7 +58,7 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
 @@ -10596,14 +10609,38 @@
          return FALSE;
      }
-
+ 
 +    /* const_f_count is 0 for a fixed-function stage, which has no vs_c[]/ps_c[]
 +     * array at all, and the shader's limits->constant_float for a programmable
 +     * one. Passing 0 for a programmable vertex shader would leave every
@@ -72,7 +72,7 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
      *stage_program = program;
      return TRUE;
  }
-
+ 
 +/* Patch 30: stage programs for programmable vertex shaders, keyed on the compiled
 + * GL shader id. The whole gain is reuse -- the FFP side gets it from the shader
 + * cache wined3d already keeps, and a programmable shader has no such slot, so one
@@ -99,7 +99,7 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
 @@ -10662,6 +10699,50 @@
          entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_COLOR_KEY;
  }
-
+ 
 +/* Patch 30: the vertex half of the monolithic path's programmable branch, plus the
 + * fixed-function pixel half, because this pairing is a programmable vertex shader
 + * with an FFP pixel shader. Mirrors glsl_shader.c's monolithic assembly rather
@@ -147,9 +147,9 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
  static BOOL mgs2_make_ffp_pipeline(const struct wined3d_context_gl *context_gl,
          struct shader_glsl_priv *priv, struct glsl_ffp_vertex_shader *vs,
          struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
-@@ -10673,9 +10754,9 @@
-     /* The fixed-function pair keeps exactly the arguments it had before patch 30
-      * generalised this: the whole FFP attribute set, and no vs_c[]/ps_c[] array. */
+@@ -10671,9 +10752,9 @@
+     GLuint pipeline;
+ 
      if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs->id, GL_VERTEX_SHADER_BIT,
 -            &vs->stage_program, &vs->stage)
 +            &vs->stage_program, &vs->stage, (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1, 0)
@@ -157,12 +157,12 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
 -                    &ps->stage_program, &ps->stage))
 +                    &ps->stage_program, &ps->stage, 0, 0))
          return FALSE;
-
+ 
      probe_start = mgs2_probe_now();
-@@ -10745,6 +10826,128 @@
+@@ -10743,6 +10824,128 @@
      return TRUE;
  }
-
+ 
 +/* Patch 30: a pipeline whose vertex stage is a programmable shader and whose
 + * fragment stage is fixed function -- the pairing MGS2 uses for the world and its
 + * characters, and therefore the one that produced all 27 monolithic links and
@@ -288,7 +288,7 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
  static HRESULT shader_glsl_compile_compute_shader(struct shader_glsl_priv *priv,
          const struct wined3d_context_gl *context_gl, struct wined3d_shader *shader)
  {
-@@ -11049,6 +11252,37 @@
+@@ -11047,6 +11250,37 @@
              free(entry);
          }
      }
@@ -323,13 +323,13 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
 +        }
 +    }
 +
+ 
      /* If we get to this point, then no matching program exists, so we create one */
      program_id = GL_EXTCALL(glCreateProgram());
-     TRACE("Created new GLSL shader program %u.\n", program_id);
-@@ -11893,6 +12127,25 @@
+@@ -11891,6 +12125,25 @@
+     /* "2" keeps a pipeline whose glValidateProgramPipeline() failed.  That
       * query also reports on current GL state, so a failure is not by itself
       * evidence of an incompatible stage interface. */
-     priv->mgs2_separable_validate = !(separable_env && !strcmp(separable_env, "2"));
 +    /* Patch 30 extends the path to pairs whose vertex shader is programmable
 +     * instead of fixed function. Measured 2026-08-13 in real gameplay, save
 +     * loaded and the player walking between rooms: 27 program links costing
@@ -349,9 +349,9 @@ wined3d_p30_separable_vs.dll reproducible before patch 32.
 +        priv->mgs2_separable_vs_enabled = vs_env && strcmp(vs_env, "0");
 +    }
 +
+     priv->mgs2_separable_validate = !(separable_env && !strcmp(separable_env, "2"));
+ 
      priv->next_constant_version = 1;
-     priv->vertex_pipe = vertex_pipe;
-     priv->fragment_pipe = fragment_pipe;
 @@ -11923,6 +12176,11 @@
      wine_rb_destroy(&priv->program_lookup, NULL, NULL);
      constant_free(&priv->pconst_heap);

@@ -195,8 +195,18 @@ guard equality, and `MGS2_GL_SOURCE_DEDUP=0` is the rollback switch. See
 
 ```sh
 tar xf wine-11.0.tar.xz && cd wine-11.0
-for p in ../wine-patches/*.patch; do patch -p1 -F0 < "$p"; done
 ```
+
+The default `wine-patches/*.patch` directory also contains the historical
+native-island experiments.  For the reproducible renderer correctness build,
+use the explicitly documented [NO-ISLAND chain](wine-patches/NO-ISLAND.md)
+instead.
+
+That chain applies every correctness patch with `patch -p1 -F0 --batch` while
+skipping only the island track (42, 43, 48, 49, 50, 52, 53 and 54).  Do not
+silently omit those patches from an all-island experiment; the two tracks have
+different source prerequisites and the old island31 must not be loaded with
+the NO-ISLAND build.
 
 Patches 1-26 apply with zero fuzz and reproduce the FINALPLAY2 source byte for
 byte; patches 27-30 and 32 reproduce the deployed WineD3D source (patch 30 is

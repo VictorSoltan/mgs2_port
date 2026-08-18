@@ -1,0 +1,1152 @@
+--- a/dlls/d3d8/d3d8_private.h	2026-08-18 00:12:21.754394449 +0300
++++ b/dlls/d3d8/d3d8_private.h	2026-08-18 00:00:57.989744380 +0300
+@@ -106,6 +106,16 @@
+     D3D8_DEVICE_STATE_NOT_RESET,
+ };
+ 
++#define D3D8_MGS2_DRAW_BATCH_MAX 64
++
++struct d3d8_mgs2_pending
++{
++    D3DPRIMITIVETYPE primitive_type;
++    unsigned int count;
++    unsigned int starts[D3D8_MGS2_DRAW_BATCH_MAX];
++    unsigned int counts[D3D8_MGS2_DRAW_BATCH_MAX];
++};
++
+ struct d3d8_device
+ {
+     /* IUnknown fields */
+@@ -129,6 +139,9 @@
+      * matrix-vector transform for each AABB corner. */
+     struct wined3d_matrix mgs2_cull_wvp;
+     BOOL mgs2_cull_wvp_valid;
++    BOOL mgs2_state_dirty;
++    UINT mgs2_last_primitive;
++    struct d3d8_mgs2_pending mgs2_pending;
+ 
+     LONG device_state;
+     DWORD sysmem_vb : 16; /* D3D8_MAX_STREAMS */
+--- a/dlls/d3d8/device.c	2026-08-18 00:12:21.766304851 +0300
++++ b/dlls/d3d8/device.c	2026-08-18 00:12:40.158085103 +0300
+@@ -25,7 +25,7 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d8);
+ 
+-static void d3d8_mgs2_mark_state_dirty(void);
++static void d3d8_mgs2_mark_state_dirty(struct d3d8_device *device);
+ static BOOL d3d8_mgs2_visibility_should_cull(struct d3d8_device *device,
+         D3DPRIMITIVETYPE primitive_type, unsigned int start_vertex, unsigned int vertex_count);
+ void d3d8_mgs2_flush_pending(struct d3d8_device *device);
+@@ -625,6 +625,7 @@
+         wined3d_mutex_lock();
+ 
+         device->in_destruction = TRUE;
++        d3d8_mgs2_flush_pending(device);
+ 
+         for (i = 0; i < device->numConvertedDecls; ++i)
+         {
+@@ -968,6 +969,11 @@
+ 
+     wined3d_mutex_lock();
+ 
++    d3d8_mgs2_flush_pending(device);
++    device->mgs2_pending.count = 0;
++    device->mgs2_state_dirty = TRUE;
++    device->mgs2_last_primitive = ~0u;
++
+     wined3d_streaming_buffer_cleanup(&device->vertex_buffer);
+     wined3d_streaming_buffer_cleanup(&device->index_buffer);
+ 
+@@ -1415,6 +1421,8 @@
+     TRACE("iface %p, src_surface %p, src_rects %p, rect_count %u, dst_surface %p, dst_points %p.\n",
+             iface, src_surface, src_rects, rect_count, dst_surface, dst_points);
+ 
++    d3d8_mgs2_flush_pending(device);
++
+     wined3d_mutex_lock();
+     wined3d_texture_get_sub_resource_desc(src->wined3d_texture, src->sub_resource_idx, &wined3d_desc);
+     if (wined3d_desc.bind_flags & WINED3D_BIND_DEPTH_STENCIL)
+@@ -1436,6 +1444,9 @@
+     }
+     dst_format = wined3d_desc.format;
+ 
++    if (dst->texture && dst->texture->draw_texture)
++        dst->texture->mgs2_content_dirty = TRUE;
++
+     /* Check that the source and destination formats match */
+     if (src_format != dst_format)
+     {
+@@ -1529,6 +1540,8 @@
+ 
+     TRACE("iface %p, dst_surface %p.\n", iface, dst_surface);
+ 
++    d3d8_mgs2_flush_pending(device);
++
+     if (dst_impl && dst_impl->texture)
+         dst_impl->texture->mgs2_content_dirty = TRUE;
+ 
+@@ -1758,7 +1771,7 @@
+         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+     device->mgs2_cull_wvp_valid = FALSE;
+ 
+     TRACE("iface %p, state %#x, matrix %p.\n", iface, state, matrix);
+@@ -1791,7 +1804,7 @@
+         D3DTRANSFORMSTATETYPE state, const D3DMATRIX *matrix)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+     device->mgs2_cull_wvp_valid = FALSE;
+ 
+     TRACE("iface %p, state %#x, matrix %p.\n", iface, state, matrix);
+@@ -1813,7 +1826,7 @@
+     struct d3d8_surface *surface;
+     struct wined3d_viewport vp;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, viewport %p.\n", iface, viewport);
+ 
+@@ -1871,7 +1884,7 @@
+ static HRESULT WINAPI d3d8_device_SetMaterial(IDirect3DDevice8 *iface, const D3DMATERIAL8 *material)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, material %p.\n", iface, material);
+ 
+@@ -1902,7 +1915,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     HRESULT hr;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, index %lu, light %p.\n", iface, index, light);
+ 
+@@ -1937,6 +1950,8 @@
+ 
+     TRACE("iface %p, index %lu, enable %#x.\n", iface, index, enable);
+ 
++    d3d8_mgs2_mark_state_dirty(device);
++
+     wined3d_mutex_lock();
+     hr = wined3d_stateblock_set_light_enable(device->update_state, index, enable);
+     wined3d_mutex_unlock();
+@@ -1964,7 +1979,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     HRESULT hr;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, index %lu, plane %p.\n", iface, index, plane);
+ 
+@@ -2036,30 +2051,20 @@
+ 
+ /* FINALPLAY contains only the measured producer, dirty-range uploads and the
+  * conservative visibility culler. All laboratory policy is compile-time. */
+-static BOOL d3d8_mgs2_state_dirty = TRUE;
+-static UINT d3d8_mgs2_last_primitive = ~0u;
+-#define D3D8_MGS2_DRAW_BATCH_MAX 64
+-static struct
+-{
+-    D3DPRIMITIVETYPE primitive_type;
+-    unsigned int count;
+-    unsigned int starts[D3D8_MGS2_DRAW_BATCH_MAX];
+-    unsigned int counts[D3D8_MGS2_DRAW_BATCH_MAX];
+-} d3d8_mgs2_pending;
+-
+-static void d3d8_mgs2_mark_state_dirty(void)
++static void d3d8_mgs2_mark_state_dirty(struct d3d8_device *device)
+ {
+-    d3d8_mgs2_state_dirty = TRUE;
++    device->mgs2_state_dirty = TRUE;
+ }
+ 
+-static void d3d8_mgs2_set_primitive_type(struct wined3d_device_context *context,
++static void d3d8_mgs2_set_primitive_type(struct d3d8_device *device,
++        struct wined3d_device_context *context,
+         D3DPRIMITIVETYPE primitive_type)
+ {
+     UINT mapped = wined3d_primitive_type_from_d3d(primitive_type);
+ 
+-    if (mapped == d3d8_mgs2_last_primitive)
++    if (mapped == device->mgs2_last_primitive)
+         return;
+-    d3d8_mgs2_last_primitive = mapped;
++    device->mgs2_last_primitive = mapped;
+     wined3d_device_context_set_primitive_type(context, mapped, 0);
+ }
+ 
+@@ -2404,14 +2409,14 @@
+ 
+ void d3d8_mgs2_flush_pending(struct d3d8_device *device)
+ {
+-    if (!d3d8_mgs2_pending.count)
++    if (!device->mgs2_pending.count)
+         return;
+ 
+     wined3d_device_context_draw_batch(device->immediate_context,
+-            wined3d_primitive_type_from_d3d(d3d8_mgs2_pending.primitive_type), 0,
+-            d3d8_mgs2_pending.starts, d3d8_mgs2_pending.counts,
+-            d3d8_mgs2_pending.count);
+-    d3d8_mgs2_pending.count = 0;
++            wined3d_primitive_type_from_d3d(device->mgs2_pending.primitive_type), 0,
++            device->mgs2_pending.starts, device->mgs2_pending.counts,
++            device->mgs2_pending.count);
++    device->mgs2_pending.count = 0;
+ }
+ 
+ 
+@@ -2419,7 +2424,7 @@
+         D3DRENDERSTATETYPE state, DWORD value)
+ {
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, state %#x, value %#lx.\n", iface, state, value);
+ 
+@@ -2543,6 +2548,9 @@
+     if (!token)
+         return D3D_OK;
+ 
++    d3d8_mgs2_flush_pending(device);
++    d3d8_mgs2_mark_state_dirty(device);
++
+     wined3d_mutex_lock();
+     if (device->recording)
+     {
+@@ -2747,7 +2755,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     struct d3d8_texture *texture_impl;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, stage %lu, texture %p.\n", iface, stage, texture);
+ 
+@@ -2837,7 +2845,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     const struct tss_lookup *l;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, stage %lu, state %#x, value %#lx.\n", iface, stage, type, value);
+ 
+@@ -3056,6 +3064,7 @@
+ static void d3d8_device_upload_managed_textures(struct d3d8_device *device)
+ {
+     const struct wined3d_stateblock_state *state = device->stateblock_state;
++    BOOL flushed = FALSE;
+     unsigned int i;
+ 
+     for (i = 0; i < WINED3D_MAX_FRAGMENT_SAMPLERS; ++i)
+@@ -3073,6 +3082,13 @@
+          * on every draw is pure cost. */
+         if (!d3d8_texture->mgs2_content_dirty)
+             continue;
++        /* The upload changes the draw-visible copy. Do not let it alter a
++         * draw which was issued before the CPU-side texture update. */
++        if (!flushed && device->mgs2_pending.count)
++        {
++            d3d8_mgs2_flush_pending(device);
++            flushed = TRUE;
++        }
+         wined3d_device_update_texture(device->wined3d_device,
+                 d3d8_texture->wined3d_texture, d3d8_texture->draw_texture);
+         d3d8_texture->mgs2_content_dirty = FALSE;
+@@ -3091,10 +3107,10 @@
+ 
+     vertex_count = vertex_count_from_primitive_count(primitive_type, primitive_count);
+     wined3d_mutex_lock();
+-    if (d3d8_mgs2_pending.count
+-            && (d3d8_mgs2_state_dirty
+-            || d3d8_mgs2_pending.primitive_type != primitive_type
+-            || d3d8_mgs2_pending.count >= D3D8_MGS2_DRAW_BATCH_MAX))
++    if (device->mgs2_pending.count
++            && (device->mgs2_state_dirty
++            || device->mgs2_pending.primitive_type != primitive_type
++            || device->mgs2_pending.count >= D3D8_MGS2_DRAW_BATCH_MAX))
+         d3d8_mgs2_flush_pending(device);
+     if (d3d8_mgs2_visibility_should_cull(device, primitive_type, start_vertex, vertex_count))
+     {
+@@ -3111,17 +3127,17 @@
+     d3d8_device_flush_snapshot_vertex_buffers(device);
+     d3d8_device_upload_managed_textures(device);
+     d3d8_device_upload_sysmem_vertex_buffers(device, start_vertex, vertex_count);
+-    d3d8_mgs2_set_primitive_type(device->immediate_context, primitive_type);
+-    if (d3d8_mgs2_state_dirty)
++    d3d8_mgs2_set_primitive_type(device, device->immediate_context, primitive_type);
++    if (device->mgs2_state_dirty)
+     {
+         wined3d_device_apply_stateblock(device->wined3d_device, device->state);
+-        d3d8_mgs2_state_dirty = FALSE;
++        device->mgs2_state_dirty = FALSE;
+     }
+-    if (!d3d8_mgs2_pending.count)
+-        d3d8_mgs2_pending.primitive_type = primitive_type;
+-    d3d8_mgs2_pending.starts[d3d8_mgs2_pending.count] = start_vertex;
+-    d3d8_mgs2_pending.counts[d3d8_mgs2_pending.count] = vertex_count;
+-    ++d3d8_mgs2_pending.count;
++    if (!device->mgs2_pending.count)
++        device->mgs2_pending.primitive_type = primitive_type;
++    device->mgs2_pending.starts[device->mgs2_pending.count] = start_vertex;
++    device->mgs2_pending.counts[device->mgs2_pending.count] = vertex_count;
++    ++device->mgs2_pending.count;
+ 
+     for (i = 0; i < ARRAY_SIZE(device->stateblock_state->streams); ++i)
+     {
+@@ -3164,7 +3180,7 @@
+     base_vertex_index = device->stateblock_state->base_vertex_index;
+     d3d8_device_upload_managed_textures(device);
+     d3d8_device_upload_sysmem_vertex_buffers(device, base_vertex_index + min_vertex_idx, vertex_count);
+-    d3d8_mgs2_set_primitive_type(device->immediate_context, primitive_type);
++    d3d8_mgs2_set_primitive_type(device, device->immediate_context, primitive_type);
+     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
+     if (FAILED(hr = d3d8_device_upload_sysmem_index_buffer(device, &start_idx, index_count)))
+     {
+@@ -3222,7 +3238,7 @@
+         goto done;
+ 
+     d3d8_device_upload_managed_textures(device);
+-    d3d8_mgs2_set_primitive_type(device->immediate_context, primitive_type);
++    d3d8_mgs2_set_primitive_type(device, device->immediate_context, primitive_type);
+     wined3d_device_apply_stateblock(device->wined3d_device, device->state);
+     wined3d_device_context_draw(device->immediate_context, vb_pos / stride, vtx_count, 0, 0);
+     wined3d_stateblock_set_stream_source(device->state, 0, NULL, 0, 0);
+@@ -3464,7 +3480,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     struct d3d8_vertex_shader *shader_impl;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, shader %#lx.\n", iface, shader);
+ 
+@@ -3558,7 +3574,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     HRESULT hr;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, start_register %lu, data %p, count %lu.\n",
+             iface, start_register, data, count);
+@@ -3667,7 +3683,7 @@
+     struct d3d8_indexbuffer *ib = unsafe_impl_from_IDirect3DIndexBuffer8(buffer);
+     struct wined3d_buffer *wined3d_buffer;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, buffer %p, base_vertex_idx %u.\n", iface, buffer, base_vertex_idx);
+ 
+@@ -3776,7 +3792,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     struct d3d8_pixel_shader *shader_impl;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, shader %#lx.\n", iface, shader);
+ 
+@@ -3863,7 +3879,7 @@
+     struct d3d8_device *device = impl_from_IDirect3DDevice8(iface);
+     HRESULT hr;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, start_register %lu, data %p, count %lu.\n", iface, start_register, data, count);
+ 
+@@ -3947,7 +3963,7 @@
+     struct wined3d_buffer *wined3d_buffer;
+     HRESULT hr;
+ 
+-    d3d8_mgs2_mark_state_dirty();
++    d3d8_mgs2_mark_state_dirty(device);
+ 
+     TRACE("iface %p, stream_idx %u, buffer %p, stride %u.\n",
+             iface, stream_idx, buffer, stride);
+@@ -4231,6 +4247,9 @@
+     device->device_parent.ops = &d3d8_wined3d_device_parent_ops;
+     device->adapter_ordinal = adapter;
+     device->ref = 1;
++    device->mgs2_state_dirty = TRUE;
++    device->mgs2_last_primitive = ~0u;
++    device->mgs2_pending.count = 0;
+     if (!(device->handle_table.entries = calloc(D3D8_INITIAL_HANDLE_TABLE_SIZE,
+             sizeof(*device->handle_table.entries))))
+     {
+--- a/dlls/d3d8/texture.c	2026-08-18 00:12:21.683692141 +0300
++++ b/dlls/d3d8/texture.c	2026-08-18 00:03:21.941152307 +0300
+@@ -318,6 +318,8 @@
+     TRACE("iface %p, level %u, locked_rect %p, rect %p, flags %#lx.\n",
+             iface, level, locked_rect, rect, flags);
+ 
++    d3d8_mgs2_flush_pending(texture->parent_device);
++
+     wined3d_mutex_lock();
+     if (!(surface_impl = wined3d_texture_get_sub_resource_parent(texture->wined3d_texture, level)))
+         hr = D3DERR_INVALIDCALL;
+@@ -646,6 +648,8 @@
+     TRACE("iface %p, face %#x, level %u, locked_rect %p, rect %p, flags %#lx.\n",
+             iface, face, level, locked_rect, rect, flags);
+ 
++    d3d8_mgs2_flush_pending(texture->parent_device);
++
+     wined3d_mutex_lock();
+     sub_resource_idx = wined3d_texture_get_level_count(texture->wined3d_texture) * face + level;
+     if (!(surface_impl = wined3d_texture_get_sub_resource_parent(texture->wined3d_texture, sub_resource_idx)))
+@@ -961,6 +965,8 @@
+     TRACE("iface %p, level %u, locked_box %p, box %p, flags %#lx.\n",
+             iface, level, locked_box, box, flags);
+ 
++    d3d8_mgs2_flush_pending(texture->parent_device);
++
+     wined3d_mutex_lock();
+     if (!(volume_impl = wined3d_texture_get_sub_resource_parent(texture->wined3d_texture, level)))
+         hr = D3DERR_INVALIDCALL;
+--- a/dlls/wined3d/context_gl.c	2026-08-18 00:12:21.815838297 +0300
++++ b/dlls/wined3d/context_gl.c	2026-08-18 00:11:19.589892950 +0300
+@@ -31,6 +31,8 @@
+ WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
+ WINE_DECLARE_DEBUG_CHANNEL(d3d_sync);
+ 
++static void mgs2_batch_context_destroy(struct wined3d_context_gl *context_gl);
++
+ #define WINED3D_MAX_FBO_ENTRIES 64
+ #define WINED3D_ALL_LAYERS (~0u)
+ 
+@@ -331,7 +333,7 @@
+         gl_info->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
+                 GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &face);
+ 
+-        if (gl_info->gl_ops.ext.p_glGetTextureParameteriv)
++        if (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_glGetTextureParameteriv)
+         {
+             GL_EXTCALL(glGetTextureParameteriv(name, GL_TEXTURE_TARGET, &tex_target));
+ 
+@@ -348,8 +350,8 @@
+         }
+         else if (face)
+         {
+-            gl_info->gl_ops.gl.p_glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &old_texture);
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP, name);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &old_texture);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP, name);
+ 
+             tex_target = GL_TEXTURE_CUBE_MAP;
+             tex_type_str = "cube";
+@@ -361,17 +363,17 @@
+                 if (!gl_info->supported[texture_type[i].extension])
+                     continue;
+ 
+-                gl_info->gl_ops.gl.p_glGetIntegerv(texture_type[i].binding, &old_texture);
+-                while (gl_info->gl_ops.gl.p_glGetError());
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(texture_type[i].binding, &old_texture);
++                while (MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetError());
+ 
+-                gl_info->gl_ops.gl.p_glBindTexture(texture_type[i].target, name);
+-                if (!gl_info->gl_ops.gl.p_glGetError())
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(texture_type[i].target, name);
++                if (!MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetError())
+                 {
+                     tex_target = texture_type[i].target;
+                     tex_type_str = texture_type[i].str;
+                     break;
+                 }
+-                gl_info->gl_ops.gl.p_glBindTexture(texture_type[i].target, old_texture);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(texture_type[i].target, old_texture);
+             }
+ 
+             if (!tex_type_str)
+@@ -381,7 +383,7 @@
+             }
+         }
+ 
+-        if (gl_info->gl_ops.ext.p_glGetTextureParameteriv)
++        if (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_glGetTextureParameteriv)
+         {
+             GL_EXTCALL(glGetTextureLevelParameteriv(name, level, GL_TEXTURE_INTERNAL_FORMAT, &fmt));
+             GL_EXTCALL(glGetTextureLevelParameteriv(name, level, GL_TEXTURE_WIDTH, &width));
+@@ -390,15 +392,15 @@
+         }
+         else
+         {
+-            gl_info->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_INTERNAL_FORMAT, &fmt);
+-            gl_info->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_WIDTH, &width);
+-            gl_info->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_HEIGHT, &height);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_INTERNAL_FORMAT, &fmt);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_WIDTH, &width);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_HEIGHT, &height);
+             if (gl_info->supported[ARB_TEXTURE_MULTISAMPLE])
+-                gl_info->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_SAMPLES, &samples);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetTexLevelParameteriv(tex_target, level, GL_TEXTURE_SAMPLES, &samples);
+             else
+                 samples = 1;
+ 
+-            gl_info->gl_ops.gl.p_glBindTexture(tex_target, old_texture);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(tex_target, old_texture);
+         }
+ 
+         FIXME("    %s: %s texture %d, %dx%d, %d samples, format %#x.\n",
+@@ -479,7 +481,7 @@
+     if (new_mask == *current_mask)
+         return;
+ 
+-    gl_info->gl_ops.gl.p_glDrawBuffer(buffer);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawBuffer(buffer);
+     checkGLcall("glDrawBuffer()");
+ 
+     *current_mask = new_mask;
+@@ -805,7 +807,7 @@
+ 
+     /* Set valid read and draw buffer bindings to satisfy pedantic pre-ES2_compatibility
+      * GL contexts requirements. */
+-    gl_info->gl_ops.gl.p_glReadBuffer(GL_NONE);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glReadBuffer(GL_NONE);
+     wined3d_context_gl_set_draw_buffer(context_gl, GL_NONE);
+     if (target != GL_FRAMEBUFFER)
+     {
+@@ -1177,7 +1179,7 @@
+     if (!private && WindowFromDC(dc) != context_gl->window)
+         return FALSE;
+ 
+-    current = gl_info->gl_ops.wgl.p_wglGetPixelFormat(dc);
++    current = MGS2_GL_INFO(gl_info)->gl_ops.wgl.p_wglGetPixelFormat(dc);
+     if ((current == format) || (!current && context_gl->internal_format_set))
+         goto success;
+ 
+@@ -1359,7 +1361,7 @@
+          * anyway, so just do nothing in that case. */
+         if (context_gl->c.destroyed)
+         {
+-            gl_info->gl_ops.gl.p_glFinish();
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFinish();
+         }
+         else if (context_gl->c.d3d_info->fences)
+         {
+@@ -1544,7 +1546,7 @@
+             {
+                 const struct wined3d_gl_info *gl_info = old->gl_info;
+                 TRACE("Flushing context %p before switching to %p.\n", old, context_gl);
+-                gl_info->gl_ops.gl.p_glFlush();
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFlush();
+             }
+             old->c.current = 0;
+         }
+@@ -1628,7 +1630,7 @@
+         }
+         else if (!context_gl->needs_set && !(context_gl->dc_is_private && context_gl->dc_has_format))
+         {
+-            int current = context_gl->gl_info->gl_ops.wgl.p_wglGetPixelFormat(context_gl->dc);
++            int current = MGS2_GL_INFO(context_gl->gl_info)->gl_ops.wgl.p_wglGetPixelFormat(context_gl->dc);
+ 
+             if ((current && current != context_gl->pixel_format) || (!current && !context_gl->internal_format_set))
+                 context_gl->needs_set = 1;
+@@ -1746,31 +1748,31 @@
+     {
+         GL_EXTCALL(glActiveTexture(GL_TEXTURE0 + i));
+ 
+-        gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D, textures->tex_1d);
+-        gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, textures->tex_2d);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D, textures->tex_1d);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, textures->tex_2d);
+ 
+         if (textures->tex_3d)
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_3D, textures->tex_3d);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_3D, textures->tex_3d);
+ 
+         if (gl_info->supported[ARB_TEXTURE_CUBE_MAP])
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP, textures->tex_cube);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP, textures->tex_cube);
+ 
+         if (gl_info->supported[ARB_TEXTURE_CUBE_MAP_ARRAY])
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, textures->tex_cube_array);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, textures->tex_cube_array);
+ 
+         if (textures->tex_2d_array)
+         {
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D_ARRAY, textures->tex_1d_array);
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_ARRAY, textures->tex_2d_array);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D_ARRAY, textures->tex_1d_array);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_ARRAY, textures->tex_2d_array);
+         }
+ 
+         if (textures->tex_buffer)
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_BUFFER, textures->tex_buffer);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_BUFFER, textures->tex_buffer);
+ 
+         if (gl_info->supported[ARB_TEXTURE_MULTISAMPLE])
+         {
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures->tex_2d_ms);
+-            gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, textures->tex_2d_ms_array);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures->tex_2d_ms);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, textures->tex_2d_ms_array);
+         }
+     }
+ 
+@@ -1782,7 +1784,7 @@
+ {
+     GLint err;
+ 
+-    if (gl_info->supported[ARB_DEBUG_OUTPUT] || (err = gl_info->gl_ops.gl.p_glGetError()) == GL_NO_ERROR)
++    if (gl_info->supported[ARB_DEBUG_OUTPUT] || (err = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetError()) == GL_NO_ERROR)
+     {
+         TRACE("%s call ok %s / %u.\n", name, file, line);
+         return;
+@@ -1792,7 +1794,7 @@
+     {
+         ERR(">>>>>>> %s (%#x) from %s @ %s / %u.\n",
+                 debug_glerror(err), err, name, file,line);
+-        err = gl_info->gl_ops.gl.p_glGetError();
++        err = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetError();
+     } while (err != GL_NO_ERROR);
+ }
+ 
+@@ -2082,7 +2084,7 @@
+     {
+         GL_EXTCALL(glDebugMessageCallback(wined3d_debug_callback, context));
+         if (TRACE_ON(d3d_sync))
+-            gl_info->gl_ops.gl.p_glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+         GL_EXTCALL(glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_FALSE));
+         if (ERR_ON(d3d))
+         {
+@@ -2106,19 +2108,19 @@
+     }
+ 
+     if (gl_info->supported[WINED3D_GL_LEGACY_CONTEXT])
+-        gl_info->gl_ops.gl.p_glGetIntegerv(GL_AUX_BUFFERS, &context_gl->aux_buffers);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_AUX_BUFFERS, &context_gl->aux_buffers);
+ 
+     TRACE("Setting up the screen\n");
+ 
+     if (gl_info->supported[WINED3D_GL_LEGACY_CONTEXT])
+     {
+-        gl_info->gl_ops.gl.p_glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);
+         checkGLcall("glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);");
+ 
+-        gl_info->gl_ops.gl.p_glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);
+         checkGLcall("glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_EXT);");
+ 
+-        gl_info->gl_ops.gl.p_glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);
+         checkGLcall("glLightModeli(GL_LIGHT_MODEL_COLOR_CONTROL, GL_SEPARATE_SPECULAR_COLOR);");
+     }
+     else
+@@ -2130,9 +2132,9 @@
+         checkGLcall("creating VAO");
+     }
+ 
+-    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, device->surface_alignment);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, device->surface_alignment);
+     checkGLcall("glPixelStorei(GL_PACK_ALIGNMENT, device->surface_alignment);");
+-    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+     checkGLcall("glPixelStorei(GL_UNPACK_ALIGNMENT, 1);");
+ 
+     if (gl_info->supported[NV_TEXTURE_SHADER2])
+@@ -2143,7 +2145,7 @@
+         for (i = 1; i < gl_info->limits.ffp_textures; ++i)
+         {
+             wined3d_context_gl_active_texture(context_gl, gl_info, i);
+-            gl_info->gl_ops.gl.p_glTexEnvi(GL_TEXTURE_SHADER_NV,
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexEnvi(GL_TEXTURE_SHADER_NV,
+                     GL_PREVIOUS_TEXTURE_INPUT_NV, GL_TEXTURE0_ARB + i - 1);
+             checkGLcall("glTexEnvi(GL_TEXTURE_SHADER_NV, GL_PREVIOUS_TEXTURE_INPUT_NV, ...");
+         }
+@@ -2182,12 +2184,12 @@
+          * GL_COORD_REPLACE_ARB, nor do we need to dynamically toggle
+          * GL_POINT_SPRITE_ARB. */
+ 
+-        gl_info->gl_ops.gl.p_glEnable(GL_POINT_SPRITE_ARB);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_POINT_SPRITE_ARB);
+ 
+         for (i = 0; i < gl_info->limits.ffp_textures; ++i)
+         {
+             wined3d_context_gl_active_texture(context_gl, gl_info, i);
+-            gl_info->gl_ops.gl.p_glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
+             checkGLcall("glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE)");
+         }
+     }
+@@ -2211,7 +2213,7 @@
+     {
+         if (gl_info->supported[ARB_ES3_COMPATIBILITY])
+         {
+-            gl_info->gl_ops.gl.p_glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+             checkGLcall("enable GL_PRIMITIVE_RESTART_FIXED_INDEX");
+         }
+         else
+@@ -2222,7 +2224,7 @@
+     if (!(d3d_info->wined3d_creation_flags & WINED3D_LEGACY_CUBEMAP_FILTERING)
+             && gl_info->supported[ARB_SEAMLESS_CUBE_MAP])
+     {
+-        gl_info->gl_ops.gl.p_glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+         checkGLcall("enable seamless cube map filtering");
+     }
+     if (GL_EXTCALL(glPointParameteri) && gl_info->supported[ARB_CLIP_CONTROL])
+@@ -2235,21 +2237,21 @@
+         wined3d_context_gl_bind_dummy_textures(context_gl);
+ 
+     /* Initialise all rectangles to avoid resetting unused ones later. */
+-    gl_info->gl_ops.gl.p_glScissor(0, 0, 0, 0);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glScissor(0, 0, 0, 0);
+     checkGLcall("glScissor");
+ 
+     if (new_drawable)
+     {
+-        gl_info->gl_ops.gl.p_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+         /* 1.0 is already GL's default clear depth, so on GLES -- where neither
+          * glClearDepth nor glClearDepthf is callable -- skipping it changes
+          * nothing. See the note in texture_gl.c. */
+-        if (gl_info->gl_ops.ext.p_glClearDepthf)
++        if (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_glClearDepthf)
+             GL_EXTCALL(glClearDepthf(1.0f));
+         else if (!gl_info->is_gles)
+-            gl_info->gl_ops.gl.p_glClearDepth(1.0f);
+-        gl_info->gl_ops.gl.p_glClearStencil(0);
+-        gl_info->gl_ops.gl.p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glClearDepth(1.0f);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glClearStencil(0);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+         checkGLcall("glClear");
+     }
+     return WINED3D_OK;
+@@ -2296,6 +2298,7 @@
+         return;
+     }
+ 
++    mgs2_batch_context_destroy(context_gl);
+     wined3d_context_gl_cleanup(context_gl);
+     TlsSetValue(context_get_tls_idx(), NULL);
+     free(context_gl);
+@@ -2370,6 +2373,9 @@
+ 
+ void wined3d_context_gl_enable_clip_distances(struct wined3d_context_gl *context_gl, uint32_t enable_mask)
+ {
++    /* island entry 13: Box86 matches these bytes and reads the id. */
++    MGS2_ISLAND_MARK(0x0d);
++    mgs2_p46_count(13);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     unsigned int clip_distance_count, i;
+     uint32_t disable_mask, current_mask;
+@@ -2385,13 +2391,13 @@
+     while (enable_mask)
+     {
+         i = wined3d_bit_scan(&enable_mask);
+-        gl_info->gl_ops.gl.p_glEnable(GL_CLIP_DISTANCE0 + i);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_CLIP_DISTANCE0 + i);
+     }
+     disable_mask &= current_mask;
+     while (disable_mask)
+     {
+         i = wined3d_bit_scan(&disable_mask);
+-        gl_info->gl_ops.gl.p_glDisable(GL_CLIP_DISTANCE0 + i);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_CLIP_DISTANCE0 + i);
+     }
+     checkGLcall("toggle clip distances");
+ }
+@@ -2423,11 +2429,11 @@
+     }
+     else if (!rt_mask)
+     {
+-        gl_info->gl_ops.gl.p_glDrawBuffer(GL_NONE);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawBuffer(GL_NONE);
+     }
+     else if (is_rt_mask_onscreen(rt_mask))
+     {
+-        gl_info->gl_ops.gl.p_glDrawBuffer(draw_buffer_from_rt_mask(rt_mask));
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawBuffer(draw_buffer_from_rt_mask(rt_mask));
+     }
+     else
+     {
+@@ -2450,7 +2456,7 @@
+         }
+         else
+         {
+-            gl_info->gl_ops.gl.p_glDrawBuffer(draw_buffers[0]);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawBuffer(draw_buffers[0]);
+         }
+     }
+ 
+@@ -2484,7 +2490,7 @@
+     unsigned int unit;
+ 
+     if (name)
+-        gl_info->gl_ops.gl.p_glBindTexture(target, name);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(target, name);
+     else
+         target = GL_NONE;
+ 
+@@ -2498,34 +2504,34 @@
+                 /* nothing to do */
+                 break;
+             case GL_TEXTURE_1D:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D, textures->tex_1d);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D, textures->tex_1d);
+                 break;
+             case GL_TEXTURE_1D_ARRAY:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D_ARRAY, textures->tex_1d_array);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D_ARRAY, textures->tex_1d_array);
+                 break;
+             case GL_TEXTURE_2D:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, textures->tex_2d);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, textures->tex_2d);
+                 break;
+             case GL_TEXTURE_2D_ARRAY:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_ARRAY, textures->tex_2d_array);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_ARRAY, textures->tex_2d_array);
+                 break;
+             case GL_TEXTURE_CUBE_MAP:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP, textures->tex_cube);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP, textures->tex_cube);
+                 break;
+             case GL_TEXTURE_CUBE_MAP_ARRAY:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, textures->tex_cube_array);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, textures->tex_cube_array);
+                 break;
+             case GL_TEXTURE_3D:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_3D, textures->tex_3d);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_3D, textures->tex_3d);
+                 break;
+             case GL_TEXTURE_BUFFER:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_BUFFER, textures->tex_buffer);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_BUFFER, textures->tex_buffer);
+                 break;
+             case GL_TEXTURE_2D_MULTISAMPLE:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures->tex_2d_ms);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, textures->tex_2d_ms);
+                 break;
+             case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+-                gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, textures->tex_2d_ms_array);
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, textures->tex_2d_ms_array);
+                 break;
+             default:
+                 ERR("Unexpected texture target %#x.\n", old_texture_type);
+@@ -3153,7 +3159,7 @@
+     {
+         if (context_gl->blit_size.cx != rt_size.cx || context_gl->blit_size.cy != rt_size.cy)
+         {
+-            gl_info->gl_ops.gl.p_glViewport(0, 0, rt_size.cx, rt_size.cy);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glViewport(0, 0, rt_size.cx, rt_size.cy);
+             context->viewport_count = WINED3D_MAX_VIEWPORTS;
+             context_gl->blit_size = rt_size;
+             /* No need to dirtify here, the states are still dirtified because
+@@ -3175,21 +3181,21 @@
+ 
+     if (context->d3d_info->ffp_alpha_test)
+     {
+-        gl_info->gl_ops.gl.p_glDisable(GL_ALPHA_TEST);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_ALPHA_TEST);
+         context_invalidate_state(context, STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL));
+     }
+-    gl_info->gl_ops.gl.p_glDisable(GL_BLEND);
+-    gl_info->gl_ops.gl.p_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_BLEND);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+     context_invalidate_state(context, STATE_BLEND);
+-    gl_info->gl_ops.gl.p_glDisable(GL_CULL_FACE);
+-    gl_info->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_CULL_FACE);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
+     context_invalidate_state(context, STATE_RASTERIZER);
+-    gl_info->gl_ops.gl.p_glDisable(GL_DEPTH_TEST);
+-    gl_info->gl_ops.gl.p_glDisable(GL_STENCIL_TEST);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_DEPTH_TEST);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_STENCIL_TEST);
+     context_invalidate_state(context, STATE_DEPTH_STENCIL);
+     if (gl_info->supported[ARB_FRAMEBUFFER_SRGB])
+     {
+-        gl_info->gl_ops.gl.p_glDisable(GL_FRAMEBUFFER_SRGB);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_FRAMEBUFFER_SRGB);
+         context_invalidate_state(context, STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL));
+     }
+ 
+@@ -3202,7 +3208,7 @@
+     /* FIXME: Make draw_textured_quad() able to work with a upper left origin. */
+     if (gl_info->supported[ARB_CLIP_CONTROL])
+         GL_EXTCALL(glClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE));
+-    gl_info->gl_ops.gl.p_glViewport(0, 0, rt_size.cx, rt_size.cy);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glViewport(0, 0, rt_size.cx, rt_size.cy);
+     context->viewport_count = WINED3D_MAX_VIEWPORTS;
+     context_invalidate_state(context, STATE_VIEWPORT);
+ 
+@@ -3322,14 +3328,14 @@
+     /* Blending and clearing should be orthogonal, but tests on the nvidia
+      * driver show that disabling blending when clearing improves the clearing
+      * performance incredibly. */
+-    gl_info->gl_ops.gl.p_glDisable(GL_BLEND);
+-    gl_info->gl_ops.gl.p_glEnable(GL_SCISSOR_TEST);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_BLEND);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_SCISSOR_TEST);
+     if (rt_count && gl_info->supported[ARB_FRAMEBUFFER_SRGB])
+     {
+         if (needs_srgb_write(context_gl->c.d3d_info, state, fb))
+-            gl_info->gl_ops.gl.p_glEnable(GL_FRAMEBUFFER_SRGB);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_FRAMEBUFFER_SRGB);
+         else
+-            gl_info->gl_ops.gl.p_glDisable(GL_FRAMEBUFFER_SRGB);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_FRAMEBUFFER_SRGB);
+         context_invalidate_state(&context_gl->c, STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL));
+     }
+     checkGLcall("setting up state for clear");
+@@ -4549,7 +4555,7 @@
+     if (mgs2_batch.restart_enabled && mgs2_batch.restart_context == context_gl)
+         return;
+ 
+-    gl_info->gl_ops.gl.p_glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+     mgs2_batch.restart_context = context_gl;
+     mgs2_batch.restart_enabled = TRUE;
+ }
+@@ -4559,7 +4565,7 @@
+ {
+     if (mgs2_batch.restart_enabled && mgs2_batch.restart_context == context_gl)
+     {
+-        gl_info->gl_ops.gl.p_glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+         mgs2_batch.restart_context = NULL;
+         mgs2_batch.restart_enabled = FALSE;
+     }
+@@ -4632,6 +4638,34 @@
+     memset(entry, 0, sizeof(*entry));
+ }
+ 
++static void mgs2_batch_context_destroy(struct wined3d_context_gl *context_gl)
++{
++    unsigned int i;
++
++#ifdef MGS2_ISLAND_ARM
++    if (!mgs2_batch_ptr)
++        return;
++#endif
++
++    if (mgs2_batch.context_gl == context_gl)
++    {
++        mgs2_batch.n = 0;
++        mgs2_batch.max_index = 0;
++        mgs2_batch.context_gl = NULL;
++    }
++    if (mgs2_batch.restart_context == context_gl)
++    {
++        mgs2_batch.restart_context = NULL;
++        mgs2_batch.restart_enabled = FALSE;
++    }
++
++    for (i = 0; i < ARRAY_SIZE(mgs2_batch_cache); ++i)
++    {
++        if (mgs2_batch_cache[i].context_gl == context_gl)
++            mgs2_batch_cache_remove(&mgs2_batch_cache[i], context_gl->gl_info);
++    }
++}
++
+ static void mgs2_batch_cache_cancel(struct mgs2_batch_cache_entry *entry)
+ {
+     assert(!entry->context_gl);
+@@ -4684,6 +4718,9 @@
+  * draws were issued under -- callers must guarantee that. */
+ void mgs2_batch_flush(void)
+ {
++    /* island entry 4: Box86 matches these bytes and reads the id. */
++    MGS2_ISLAND_MARK(0x04);
++    mgs2_p46_count(4);
+     static void *buf;
+     static unsigned int buf_size;
+     struct wined3d_context_gl *context_gl = mgs2_batch.context_gl;
+@@ -4703,7 +4740,7 @@
+     {
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1);
+         mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1, mgs2_batch.mode);
+-        gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                 mgs2_batch.first[0], mgs2_batch.count[0]);
+         mgs2_batch.n = 0;
+         mgs2_batch.max_index = 0;
+@@ -4731,8 +4768,9 @@
+         mgs2_batch_restart_begin(context_gl, gl_info);
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1);
+         mgs2_p38_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1, entry->mode);
+-        gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+                 entry->index_type, (const void *)(ULONG_PTR)entry->offset);
++        mgs2_batch_restart_end(context_gl, gl_info);
+         mgs2_batch.n = 0;
+         mgs2_batch.max_index = 0;
+         return;
+@@ -4744,7 +4782,7 @@
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
+         mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
+         for (i = 0; i < mgs2_batch.n; ++i)
+-            gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+         mgs2_batch.n = 0;
+         mgs2_batch.max_index = 0;
+@@ -4754,7 +4792,18 @@
+     if (bytes > buf_size)
+     {
+         void *p = realloc(buf, bytes);
+-        if (!p) { mgs2_batch.n = 0; return; }
++        if (!p)
++        {
++            mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
++            mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
++            for (i = 0; i < mgs2_batch.n; ++i)
++                MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
++                        mgs2_batch.first[i], mgs2_batch.count[i]);
++            mgs2_batch_cache_cancel(entry);
++            mgs2_batch.n = 0;
++            mgs2_batch.max_index = 0;
++            return;
++        }
+         buf = p; buf_size = bytes;
+     }
+ 
+@@ -4792,7 +4841,7 @@
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
+         mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
+         for (i = 0; i < mgs2_batch.n; ++i)
+-            gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+         mgs2_batch.n = 0;
+         mgs2_batch.max_index = 0;
+@@ -4810,7 +4859,7 @@
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n);
+         mgs2_p38_gl_draw(MGS2_SUBMIT_GL_ARRAYS, mgs2_batch.n, mgs2_batch.mode);
+         for (i = 0; i < mgs2_batch.n; ++i)
+-            gl_info->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(mgs2_batch.mode,
+                     mgs2_batch.first[i], mgs2_batch.count[i]);
+         mgs2_batch.n = 0;
+         mgs2_batch.max_index = 0;
+@@ -4833,8 +4882,9 @@
+     mgs2_batch_restart_begin(context_gl, gl_info);
+     mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1);
+         mgs2_p38_gl_draw(MGS2_SUBMIT_GL_BATCH_ELEMENTS, 1, entry->mode);
+-    gl_info->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawElements(entry->mode, entry->element_count,
+             entry->index_type, (const void *)(ULONG_PTR)entry->offset);
++    mgs2_batch_restart_end(context_gl, gl_info);
+     mgs2_batch.n = 0;
+     mgs2_batch.max_index = 0;
+ }
+@@ -4905,6 +4955,12 @@
+ 
+     ops = &gl_info->ffp_attrib_ops;
+ 
++    /* A pending synthetic strip is already part of GL ordering. Finish it
++     * before every draw which cannot join the same non-indexed strip run. */
++    if (mgs2_batch.n && (idx_size || mode != GL_TRIANGLE_STRIP
++            || start_instance || instance_count != 1))
++        mgs2_batch_flush();
++
+     /* D3D8 may legally use the fixed restart value as a real index. The MGS2
+      * scene census is non-indexed, but terminate the opt-in hoist before any
+      * indexed path so it cannot alter an unrelated draw. */
+@@ -4924,7 +4980,7 @@
+ 
+             mgs2_p38_bypass(mode);
+             mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ARRAYS, 1);
+-            gl_info->gl_ops.gl.p_glDrawArrays(mode, start_idx, count);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(mode, start_idx, count);
+             checkGLcall("glDrawArrays");
+             return;
+         }
+@@ -4938,7 +4994,7 @@
+         }
+ 
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_ELEMENTS, 1);
+-        gl_info->gl_ops.gl.p_glDrawElements(mode, count, idx_type, indices);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawElements(mode, count, idx_type, indices);
+         checkGLcall("glDrawElements");
+         return;
+     }
+@@ -5038,7 +5094,7 @@
+         else
+         {
+             mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_INSTANCED, 1);
+-            gl_info->gl_ops.gl.p_glDrawElements(mode, count, idx_type, indices);
++            MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawElements(mode, count, idx_type, indices);
+             checkGLcall("glDrawElements");
+         }
+     }
+@@ -5586,14 +5642,14 @@
+ static void apply_texture_blit_state(const struct wined3d_gl_info *gl_info, struct gl_texture *texture,
+         GLenum target, unsigned int level, enum wined3d_texture_filter_type filter)
+ {
+-    gl_info->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_MAG_FILTER, wined3d_gl_mag_filter(filter));
+-    gl_info->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_MIN_FILTER,
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_MAG_FILTER, wined3d_gl_mag_filter(filter));
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_MIN_FILTER,
+             wined3d_gl_min_mip_filter(filter, WINED3D_TEXF_NONE));
+-    gl_info->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+-    gl_info->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+     if (gl_info->supported[EXT_TEXTURE_SRGB_DECODE])
+-        gl_info->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT, GL_SKIP_DECODE_EXT);
+-    gl_info->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, level);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_SRGB_DECODE_EXT, GL_SKIP_DECODE_EXT);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, level);
+ 
+     /* We changed the filtering settings on the texture. Make sure they get
+      * reset on subsequent draws. */
+@@ -5627,7 +5683,7 @@
+     level = sub_resource_idx % texture_gl->t.level_count;
+     wined3d_context_gl_bind_texture(context_gl, info.bind_target, texture_gl->texture_rgb.name);
+     apply_texture_blit_state(gl_info, &texture_gl->texture_rgb, info.bind_target, level, filter);
+-    gl_info->gl_ops.gl.p_glTexParameteri(info.bind_target, GL_TEXTURE_MAX_LEVEL, level);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(info.bind_target, GL_TEXTURE_MAX_LEVEL, level);
+ 
+     wined3d_context_gl_pause_transform_feedback(context_gl, FALSE);
+ 
+@@ -5669,7 +5725,7 @@
+         GL_EXTCALL(glEnableVertexAttribArray(1));
+ 
+         mgs2_submit_census_gl_draw(MGS2_SUBMIT_GL_OTHER, 1);
+-        gl_info->gl_ops.gl.p_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+ 
+         GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
+         GL_EXTCALL(glDisableVertexAttribArray(1));
+@@ -5677,7 +5733,7 @@
+     }
+     else
+     {
+-        gl_info->gl_ops.gl.p_glBegin(GL_TRIANGLE_STRIP);
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glBegin(GL_TRIANGLE_STRIP);
+ 
+         for (i = 0; i < ARRAY_SIZE(quad); ++i)
+         {
+@@ -5685,10 +5741,10 @@
+             GL_EXTCALL(glVertexAttrib2fv(0, &quad[i].x));
+         }
+ 
+-        gl_info->gl_ops.gl.p_glEnd();
++        MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnd();
+     }
+     checkGLcall("draw");
+ 
+-    gl_info->gl_ops.gl.p_glTexParameteri(info.bind_target, GL_TEXTURE_MAX_LEVEL, texture_gl->t.level_count - 1);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(info.bind_target, GL_TEXTURE_MAX_LEVEL, texture_gl->t.level_count - 1);
+     wined3d_context_gl_bind_texture(context_gl, info.bind_target, 0);
+ }

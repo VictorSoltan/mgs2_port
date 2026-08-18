@@ -229,9 +229,9 @@ fi
 #
 # MGS2_BOX86_ISLAND_FULL=0 turns the island off and takes the run back to the
 # previous stack, which is the first thing to try if anything misbehaves.
-export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-1}"
+export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-0}"
 export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,28,29,32,33}"
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-island31}" /usr/bin/box86 || exit 1
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-clean1}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 mount_bind "$GAMEDIR/winewayland_stall1.so" /usr/lib/wine/i386-unix/winewayland.so || exit 1
 mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32.so || exit 1
@@ -293,7 +293,7 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # p56 adds the cold guest-batch accessor required by island31. Keep these two
 # binaries paired. p55 + island29 is the exact rollback baseline.
 export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
-mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_p56_batch_state.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_noisland59.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the
@@ -304,7 +304,7 @@ mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || 
 # generation the game bumps every frame. Frees 73,760 bytes of BSS and 848 bytes
 # of code, and cannot change a culling decision. The culler itself stays: measured
 # 44.3 fps with it against 37.7 without, over two 400 s windows.
-mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_noisland59.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
 # Patch 31 is OFF. It replaces the culler's per-draw AABB scan -- 349 vertex walks
 # a frame in emulated x86 -- with one conservative box per buffer write. Measured
 # +74% on an autoloaded corridor route (48.68/48.39 against 27.92) with identical

@@ -1,0 +1,171 @@
+--- a/dlls/winewayland.drv/opengl.c	2026-08-18 00:12:21.680474105 +0300
++++ b/dlls/winewayland.drv/opengl.c	2026-08-18 00:14:57.407849733 +0300
+@@ -286,6 +286,17 @@
+ 
+     mgs_release_pbos(gl);
+ 
++    if (gl->async_tex[0] || gl->async_fbo)
++    {
++        if (funcs->p_eglGetCurrentContext() != EGL_NO_CONTEXT)
++        {
++            if (gl->async_tex[0]) funcs->p_glDeleteTextures(2, gl->async_tex);
++            if (gl->async_fbo) funcs->p_glDeleteFramebuffers(1, &gl->async_fbo);
++        }
++        gl->async_tex[0] = gl->async_tex[1] = 0;
++        gl->async_fbo = 0;
++    }
++
+     /* Order matters. A buffer the compositor is still scanning out keeps a
+      * reference, so unref alone leaves its wl_buffer proxy alive; if that
+      * proxy is still assigned to our event queue when we destroy the queue,
+@@ -318,7 +329,7 @@
+ /* Create (or recreate) the offscreen pbuffer we render into. */
+ static BOOL wayland_gl_drawable_resize_pbuffer(struct wayland_gl_drawable *gl, int width, int height)
+ {
+-    EGLint attribs[] = { EGL_WIDTH, width, EGL_HEIGHT, height, EGL_NONE };
++    EGLint attribs[];
+     EGLConfig config = egl_config_for_format(gl->base.format);
+     EGLSurface old = gl->base.surface, surface;
+     BOOL was_current = old && funcs->p_eglGetCurrentSurface(EGL_DRAW) == old;
+@@ -326,6 +337,11 @@
+     if (width <= 0) width = 1;
+     if (height <= 0) height = 1;
+     if (old && gl->width == width && gl->height == height) return TRUE;
++    attribs[0] = EGL_WIDTH;
++    attribs[1] = width;
++    attribs[2] = EGL_HEIGHT;
++    attribs[3] = height;
++    attribs[4] = EGL_NONE;
+ 
+     if (!(surface = funcs->p_eglCreatePbufferSurface(egl->display, config, attribs)))
+     {
+@@ -333,15 +349,19 @@
+         return FALSE;
+     }
+ 
+-    gl->base.surface = surface;
+-    gl->width = width;
+-    gl->height = height;
+-
+     if (was_current)
+     {
+         EGLContext ctx = funcs->p_eglGetCurrentContext();
+-        funcs->p_eglMakeCurrent(egl->display, surface, surface, ctx);
++        if (!funcs->p_eglMakeCurrent(egl->display, surface, surface, ctx))
++        {
++            funcs->p_eglDestroySurface(egl->display, surface);
++            ERR("eglMakeCurrent failed while resizing pbuffer to %dx%d\n", width, height);
++            return FALSE;
++        }
+     }
++    gl->base.surface = surface;
++    gl->width = width;
++    gl->height = height;
+     if (old) funcs->p_eglDestroySurface(egl->display, old);
+ 
+     /* geometry changed, the pixel-pack buffers are the wrong size now */
+@@ -655,6 +675,16 @@
+     return TRUE;
+ }
+ 
++static void mgs_restore_pack_state(GLint pbo, GLint alignment, GLint row_length,
++        GLint skip_rows, GLint skip_pixels)
++{
++    funcs->p_glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
++    funcs->p_glPixelStorei(GL_PACK_ALIGNMENT, alignment);
++    funcs->p_glPixelStorei(GL_PACK_ROW_LENGTH, row_length);
++    funcs->p_glPixelStorei(GL_PACK_SKIP_ROWS, skip_rows);
++    funcs->p_glPixelStorei(GL_PACK_SKIP_PIXELS, skip_pixels);
++}
++
+ static BOOL wayland_drawable_swap(struct opengl_drawable *base)
+ {
+     struct wayland_gl_drawable *gl = impl_from_opengl_drawable(base);
+@@ -662,11 +692,24 @@
+     struct wayland_shm_buffer *buf;
+     double t0 = 0.0, t1 = 0.0, t2 = 0.0, t_drained = 0.0;
+     BOOL timing = mgs_cfg.stats > 0;
++    GLint saved_pack_pbo = 0, saved_pack_alignment = 4, saved_pack_row_length = 0;
++    GLint saved_pack_skip_rows = 0, saved_pack_skip_pixels = 0;
++
++    funcs->p_glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &saved_pack_pbo);
++    funcs->p_glGetIntegerv(GL_PACK_ALIGNMENT, &saved_pack_alignment);
++    funcs->p_glGetIntegerv(GL_PACK_ROW_LENGTH, &saved_pack_row_length);
++    funcs->p_glGetIntegerv(GL_PACK_SKIP_ROWS, &saved_pack_skip_rows);
++    funcs->p_glGetIntegerv(GL_PACK_SKIP_PIXELS, &saved_pack_skip_pixels);
++    funcs->p_glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
++    funcs->p_glPixelStorei(GL_PACK_ALIGNMENT, 1);
++    funcs->p_glPixelStorei(GL_PACK_ROW_LENGTH, 0);
++    funcs->p_glPixelStorei(GL_PACK_SKIP_ROWS, 0);
++    funcs->p_glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+ 
+     client_surface_present(base->client);
+     funcs->p_eglSwapBuffers(egl->display, gl->base.surface);
+ 
+-    if (gl->width <= 0 || gl->height <= 0) return TRUE;
++    if (gl->width <= 0 || gl->height <= 0) goto done;
+ 
+     /* Mali is tile-based, so an attachment whose contents are still "live" at the
+      * end of a pass has to be written out of tile memory into RAM. The game
+@@ -706,13 +749,13 @@
+         if (gl->pbo_filled < mgs_cfg.pbos)
+         {
+             funcs->p_glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+-            return TRUE;
++            goto done;
+         }
+ 
+         if (!(buf = mgs_acquire_shm_buffer(gl, gl->width, gl->height)))
+         {
+             funcs->p_glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+-            return TRUE;
++            goto done;
+         }
+ 
+         funcs->p_glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[old]);
+@@ -731,7 +774,7 @@
+             funcs->p_glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+             mgs_release_pbos(gl);
+             mgs_cfg.use_pbo = FALSE;
+-            return TRUE;
++            goto done;
+         }
+     }
+     else if (mgs_cfg.async)
+@@ -739,7 +782,7 @@
+         GLint saved_tex = 0, saved_fbo = 0;
+         int cur, prev;
+ 
+-        if (!mgs_async_ensure(gl, &saved_tex, &saved_fbo)) return TRUE;
++        if (!mgs_async_ensure(gl, &saved_tex, &saved_fbo)) goto done;
+ 
+         cur = gl->async_index;
+         prev = 1 - cur;
+@@ -793,7 +836,7 @@
+                 if (d > gl->acquire_max) gl->acquire_max = d;
+             }
+         }
+-        if (!buf) return TRUE;
++        if (!buf) goto done;
+ 
+         /* What the implementation itself calls its preferred read format.  Asking
+          * for BGRA when the render target is RGBA can make the driver swizzle
+@@ -839,7 +882,7 @@
+             if (gl->scratch_size < size)
+             {
+                 free(gl->scratch);
+-                if (!(gl->scratch = malloc(size))) { gl->scratch_size = 0; return TRUE; }
++                if (!(gl->scratch = malloc(size))) { gl->scratch_size = 0; goto done; }
+                 gl->scratch_size = size;
+             }
+             funcs->p_glReadPixels(0, 0, gl->width, gl->height, read_format,
+@@ -881,6 +924,9 @@
+         if (gl->frames >= (unsigned int)mgs_cfg.stats) mgs_report_stats(gl, mgs_now_ms());
+     }
+ 
++done:
++    mgs_restore_pack_state(saved_pack_pbo, saved_pack_alignment, saved_pack_row_length,
++            saved_pack_skip_rows, saved_pack_skip_pixels);
+     return TRUE;
+ }
+ 
