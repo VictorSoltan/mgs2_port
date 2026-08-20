@@ -1,0 +1,82 @@
+Patch 64 -- symmetric guest-side A/B selector for the picture-correct p68 DRAW tail.
+
+The original entry-38 wrapper could not measure its own guest arm honestly. The
+routed arm called the native function directly, while the guest arm paid one
+`RunFunctionFmt()` re-entry for every tail call. The separately measured empty
+re-entry cost was already several milliseconds per frame at this route's roughly
+one-thousand calls per displayed frame.
+
+This patch puts the final choice back in guest WineD3D. Both arms execute the
+same enabled/route/settle reads and the same per-arm counter. The routed arm calls
+the existing entry-38 bridge; the control arm calls
+`wined3d_context_gl_draw_primitive_arrays()` directly. Box86 validates and
+registers the appended control pointer, publishes route changes only from the
+displayed-frame tick, and reads the cumulative counters when each ABBA cycle
+closes.
+
+This is a research-only measurement patch. It does not promote entry 38 and has
+no device FPS result at the time it was recorded. Full design, build hashes and
+acceptance rules are in
+`docs/briefs/MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md` section 10.2.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -5102,6 +5102,23 @@
+     }
+ }
+ 
++#define MGS2_DRAW_TAIL_AB_MAGIC 0x31424154u /* TAB1 */
++
++struct mgs2_draw_tail_ab_control
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled, route, settled;
++    volatile unsigned int calls[2];
++};
++
++static struct mgs2_draw_tail_ab_control mgs2_draw_tail_ab =
++{
++    MGS2_DRAW_TAIL_AB_MAGIC, 1,
++    sizeof(struct mgs2_draw_tail_ab_control) / sizeof(unsigned int),
++    ~MGS2_DRAW_TAIL_AB_MAGIC,
++    0, 1, 0, {0, 0},
++};
++
+ struct mgs2_draw_primitive_arrays_args
+ {
+     struct wined3d_context_gl *context_gl;
+@@ -5110,6 +5127,7 @@
+     unsigned int idx_size;
+     int base_vertex_idx;
+     unsigned int start_idx, count, start_instance, instance_count;
++    struct mgs2_draw_tail_ab_control *ab_control;
+ };
+ 
+ /* p68 correctness cut.  The guest draw path has already acquired and validated
+@@ -5403,7 +5421,25 @@
+         mgs2_draw_args.count = parameters->u.direct.index_count;
+         mgs2_draw_args.start_instance = parameters->u.direct.start_instance;
+         mgs2_draw_args.instance_count = parameters->u.direct.instance_count;
+-        mgs2_draw_primitive_arrays_island(&mgs2_draw_args);
++        mgs2_draw_args.ab_control = &mgs2_draw_tail_ab;
++        if (__atomic_load_n(&mgs2_draw_tail_ab.enabled, __ATOMIC_ACQUIRE))
++        {
++            unsigned int routed = __atomic_load_n(&mgs2_draw_tail_ab.route, __ATOMIC_ACQUIRE);
++
++            if (__atomic_load_n(&mgs2_draw_tail_ab.settled, __ATOMIC_ACQUIRE))
++                __atomic_fetch_add(&mgs2_draw_tail_ab.calls[routed ? 0 : 1], 1, __ATOMIC_RELAXED);
++            if (routed)
++                mgs2_draw_primitive_arrays_island(&mgs2_draw_args);
++            else
++                wined3d_context_gl_draw_primitive_arrays(context_gl, state, idx_data, idx_size,
++                        parameters->u.direct.base_vertex_idx, parameters->u.direct.start_idx,
++                        parameters->u.direct.index_count, parameters->u.direct.start_instance,
++                        parameters->u.direct.instance_count);
++        }
++        else
++        {
++            mgs2_draw_primitive_arrays_island(&mgs2_draw_args);
++        }
+     }
+ 
+ 

@@ -43,6 +43,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # different RVAs, which is what made the first class-C failure silent.
 GUEST_DLL="${GUEST_DLL:-$WINE_BUILD/dlls/wined3d/i386-windows/wined3d.dll}"
 GUEST_GL="${GUEST_GL:-}"
+CLASS_C_HEADER="${CLASS_C_HEADER:-$BOX86_SRC/src/mgs2_island_class_b.h}"
 
 INC="-I$WINE_BUILD/dlls/wined3d -I$WINE_SRC/dlls/wined3d -I$WINE_SRC/include \
      -I$WINE_SRC/include/msvcrt -I$WINE_SRC/libs/vkd3d/include \
@@ -65,7 +66,15 @@ echo "pass 1: built $n island objects (names only)"
 # ---- generate the table and the per-TU registries ---------------------------
 rm -f "$REG"/*.h
 GEN_ARGS="$GUEST_DLL --objects $OUT --registry $REG -o $BOX86_SRC/src/mgs2_island_class_b.h"
-[ -n "$GUEST_GL" ] && GEN_ARGS="$GEN_ARGS --opengl32 $GUEST_GL"
+if [ -n "$GUEST_GL" ]; then
+    GEN_ARGS="$GEN_ARGS --opengl32 $GUEST_GL"
+elif [ -r "$CLASS_C_HEADER" ]; then
+    # The mounted opengl32.dll is a separate device artifact and is not kept in
+    # this repository. Preserve its already-verified fallback table exactly;
+    # emitting zero class-C entries would make an unrelated WineD3D rebuild
+    # silently lose 379 mappings.
+    GEN_ARGS="$GEN_ARGS --preserve-class-c-from $CLASS_C_HEADER"
+fi
 # shellcheck disable=SC2086
 python3 "$HERE/gen_class_b_table.py" $GEN_ARGS
 
@@ -129,3 +138,12 @@ if [ "$want" != "$got" ]; then
     exit 1
 fi
 echo "control check passed: all $want native IDs registered by the objects"
+
+# CMake lists these prebuilt .o files as EXTERNAL_OBJECT inputs, but does not
+# track their mtimes as link dependencies. Without a normal source becoming
+# newer, `cmake --build` can leave the previous island inside box86 even though
+# every object above was replaced (observed as 1124/1612 IDs at runtime). Make
+# the bridge TU newer so the next build necessarily recompiles one cheap source
+# and relinks against the just-built objects.
+touch "$BOX86_SRC/src/mgs2_island_bridges.c"
+echo "relink trigger updated: mgs2_island_bridges.c"

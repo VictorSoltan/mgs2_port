@@ -1,0 +1,311 @@
+Patch 10 -- identity by canonical offset, and a trap that names an unresolved GL slot.
+
+TWO INDEPENDENT FIXES, BOTH FOUND ON 2026-08-19. Full record in
+docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md sections 14 and 18.
+
+## 1. The marker is a witness, not an identity
+
+`getAlternate()` scanned 64 bytes from EVERY branch and call target the dynarec
+translated and published the first address whose window held a marker. The
+published address does not have to be a function entry, and in production it was
+not:
+
+```text
+entry 22 matched 0x7b919f23  = RVA 0x101b9f23, offset 0xe3 INSIDE the function
+                               0x101b9e40..0x101b9f4d
+id 22 marker at              RVA 0x101b9f59, in the NEXT function 0x101b9f50..
+```
+
+So `wined3d_rendertarget_view_invalidate_location`, an entry in the production
+allow-list, was bound to a mid-function address in the function before it, 54
+bytes ahead of its marker -- and because the first match publishes, its real
+entry point could never route afterwards. Nothing observed is attributed to this;
+it is a defect in the rule.
+
+The rule is now:
+
+```text
+identity  =  the address at which this id's marker sits at ITS CANONICAL OFFSET
+witness 1 =  the marker bytes themselves (unchanged)
+witness 2 =  addr == module_base + canonical RVA, once the class-B resolver has
+             established the base from two independent agreeing RVAs
+```
+
+The canonical offset and RVA come from `harness/island/full/gen_entry_identity.py`,
+which reads them out of the MOUNTED DLL: markers from the byte pattern, function
+boundaries from `.eh_frame` FDEs, because the shipped DLL is stripped. An id with
+no canonical identity is not armed at all rather than armed on a guess.
+
+Witness 2 is skipped, not failed, while the base is unknown: entries are matched
+at translation time, which can precede the first class-B dispatch. That is why
+the offset check carries the decision and the base check is confirmation.
+
+Verified on the device: `MGS2 island: entry 22 matched 0x7b919f50` -- the function
+start -- with all 18 armed entries still matching.
+
+## 2. An unresolved GL slot now names itself
+
+Production leaves an unresolved gl_ops slot NULL so a native call through it
+faults at once instead of entering guest x86 bytes. That is right, but a fault at
+address zero does not say WHICH slot, and entry 34's static closure had eight
+candidates. `mgs2_island_gl_trap.S` provides one 8-byte stub per slot:
+
+```asm
+    movw    r0, #N
+    b       mgs2_unresolved_gl_trap
+```
+
+`movw`, not `mov`: the ARM data-processing immediate is an 8-bit value rotated by
+an even amount, so slot numbers like 3113 are not encodable and the assembler
+would either refuse or grow the stub. `movw` takes a 16-bit immediate, so every
+stub is exactly 8 bytes and the address of a stub is base + 8 * slot with no
+pointer table. ARM mode, so the island's Thumb callers interwork through the
+function pointer with bit 0 clear.
+
+The handler prints the slot, its name -- from the island's own macro-generated
+lists, through a weak `mgs2_island_gl_slot_name()` -- and the CALLER, taken from
+`__builtin_return_address(0)`, which works because the stub arrives with `b` and
+LR still holds the island caller's return address. Then it aborts: there is
+nothing safe to return, and faking a GL call would change what the renderer draws.
+
+It answered in one run:
+
+```text
+MGS2 island: called UNRESOLVED GL slot 90 (glDrawBuffer) from 0x62b61525
+  -> wined3d_context_gl_apply_fbo_state+0x2a0, i.e. the inlined
+     wined3d_context_gl_set_draw_buffer(context_gl, GL_NONE)
+```
+
+DIAGNOSTIC USE ONLY, which is narrower than "diagnostic build only" -- corrected
+here rather than left as written. `mgs2_island_gl_trap()` returns NULL unless
+MGS2_ISLAND_DIAGNOSTICS is set, so a production build hands out NULL and keeps the
+fail-closed behaviour. The stub table and its handler are still LINKED, because a
+.S file does not see CMAKE_C_FLAGS: 32 KB of unreferenced stubs plus one dead
+string in a 27 MB binary. Gating the table itself would mean touching the global
+ASM flags, which is not worth it for 32 KB. Neither fix has a frame-rate measurement and neither is
+in a production binary.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -328,6 +328,7 @@
+     HEADER_FILE_ONLY TRUE)
+ 
+ set(ELFLOADER_SRC
++    "${BOX86_ROOT}/src/mgs2_island_gl_trap.S"
+     "${BOX86_ROOT}/src/mgs2_island_gl.c"
+     "${BOX86_ROOT}/src/mgs2_island_bridges.c"
+     "${BOX86_ROOT}/src/mgs2_island_natives.c"
+--- a/src/mgs2_island_resolve.c
++++ b/src/mgs2_island_resolve.c
+@@ -617,3 +617,32 @@
+ #endif
+ }
+ 
++/*
++ * The guest module base, for anyone who needs to turn an RVA into an address.
++ *
++ * Only meaningful once two independent witnesses have agreed on it (see the top
++ * of this file); 0 means "not established yet", which callers must treat as
++ * "cannot check", not as "base 0".
++ */
++uintptr_t mgs2_island_module_base(void)
++{
++    if (__atomic_load_n(&mgs2_class_b_state, __ATOMIC_ACQUIRE) != 1)
++        return 0;
++    return __atomic_load_n(&mgs2_class_b_base, __ATOMIC_RELAXED);
++}
++
++/* A slot the island implements itself, because the driver does not have it and
++ * the guest's own path for it ends in Wine code the island cannot call. Reported
++ * separately from an unresolved slot: "substituted" and "missing" are different
++ * facts and conflating them is how a fake implementation would hide. */
++void mgs2_island_report_substitution(unsigned int slot, const char *name, const char *how)
++{
++#if MGS2_ISLAND_DIAGNOSTICS
++    printf_log(LOG_NONE, "MGS2 island: GL slot %u (%s) substituted natively: %s\n",
++            slot, name ? name : "?", how ? how : "?");
++#else
++    (void)slot;
++    (void)name;
++    (void)how;
++#endif
++}
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -25,6 +25,7 @@
+ #endif
+ #ifdef DYNAREC
+ #include "dynablock.h"
++#include "mgs2_island_entry_identity.h"
+ #endif
+ 
+ KHASH_MAP_INIT_INT(bridgemap, uintptr_t)
+@@ -326,6 +327,7 @@
+  * harness/island/full/island_marker_check.py checks every marker against this
+  * window; keep the two in step. */
+ #define MGS2_ISLAND_WINDOW 64
++uintptr_t mgs2_island_module_base(void);   /* mgs2_island_resolve.c */
+ 
+ static int mgs2_signature_readable(uintptr_t addr, size_t size)
+ {
+@@ -536,6 +538,49 @@
+                         ? __atomic_load_n(&mgs2_island_bridges[id], __ATOMIC_ACQUIRE) : 0;
+                 if (id >= MGS2_ISLAND_MAX || !bridge)
+                     break;
++                /* IDENTITY IS NOT THE MARKER. Finding the marker within 64 bytes
++                 * only says "this address is near an island root"; it does not say
++                 * the address IS one. Production entry 22 was bound to
++                 * 0x7b919f23, which is 0xe3 bytes inside the PRECEDING function --
++                 * the window reached 54 bytes forward into the next function's
++                 * marker, the first match published, and the real entry point
++                 * could never route afterwards. See section 14 of
++                 * docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md.
++                 *
++                 * So the marker is a witness and the canonical offset is the
++                 * identity: the generated table says where the marker sits inside
++                 * its own function, and any other offset means this address is not
++                 * that function's entry point. An id with no canonical identity is
++                 * not armed at all, rather than armed on a guess. */
++                {
++                    const struct mgs2_entry_identity *ident = NULL;
++                    unsigned int k;
++
++                    for (k = 0; k < MGS2_ENTRY_IDENTITY_COUNT; ++k)
++                        if (mgs2_entry_identity[k].id == id)
++                        {
++                            ident = &mgs2_entry_identity[k];
++                            break;
++                        }
++                    if (!ident || ident->marker_off != i)
++                        break;
++                    /* Second witness, when it exists: the class-B resolver
++                     * establishes the guest module base from two independent
++                     * agreeing RVAs. Until it has, this check is skipped rather
++                     * than failed -- entries are matched at translation time,
++                     * which can precede the first class-B dispatch. */
++                    {
++                        uintptr_t base = mgs2_island_module_base();
++
++                        if (base && (uintptr_t)addr != base + ident->func_rva)
++                        {
++                            printf_log(LOG_NONE, "MGS2 island: entry %u marker at the"
++                                    " canonical offset but %p != base+%#x -- NOT armed\n",
++                                    id, addr, ident->func_rva);
++                            break;
++                        }
++                    }
++                }
+                 {
+                     uintptr_t expected = 0;
+                     uintptr_t matched = __atomic_load_n(&mgs2_island_guest[id],
+--- /dev/null
++++ b/src/mgs2_island_gl_trap.S
+@@ -0,0 +1,50 @@
++/*
++ * One tiny ARM stub per GL slot, so an island call through an UNRESOLVED slot
++ * names the slot instead of faulting at address zero.
++ *
++ * Leaving an unresolved slot NULL is the right production behaviour -- a call
++ * faults at once instead of entering guest x86 bytes -- but it says nothing
++ * about WHICH slot. On 2026-08-19 island entry 34 died on
++ * "SIGSEGV @(nil) for accessing (nil)" with eight candidate slots in its static
++ * closure and no way to tell them apart. This table turns that into one line.
++ *
++ * `movw` is required, not `mov`: the ARM data-processing immediate is an 8-bit
++ * value rotated by an even amount, so a slot number like 3113 is not encodable,
++ * and the assembler would either reject it or (worse, with a literal pool)
++ * change the stub's size. `movw` takes a 16-bit immediate, so every stub is
++ * exactly two instructions -- 8 bytes -- and the runtime can compute a stub
++ * address as base + 8 * slot without a table of pointers.
++ *
++ * ARM mode, deliberately: box86 is built Thumb-2-capable, and the island's
++ * callers reach these through a function pointer, so bit 0 of the address stays
++ * clear and the CPU interworks into ARM. A Thumb version would need the bit set
++ * on every address handed out, which is one more thing to get wrong.
++ *
++ * DIAGNOSTIC BUILDS ONLY. mgs2_island_gl_trap() hands out these addresses only
++ * when MGS2_ISLAND_DIAGNOSTICS is set; a production build keeps NULL and does
++ * not need the 32 KB.
++ */
++    .syntax unified
++    .arm
++    .text
++    .balign 4
++    .global mgs2_gl_trap_stubs
++    .hidden mgs2_gl_trap_stubs
++    .type mgs2_gl_trap_stubs, %function
++mgs2_gl_trap_stubs:
++    .set mgs2_trap_slot, 0
++    .rept 4096
++    movw    r0, #mgs2_trap_slot
++    b       mgs2_unresolved_gl_trap
++    .set mgs2_trap_slot, mgs2_trap_slot + 1
++    .endr
++    .size mgs2_gl_trap_stubs, . - mgs2_gl_trap_stubs
++
++    .global mgs2_gl_trap_stub_count
++    .hidden mgs2_gl_trap_stub_count
++    .section .rodata
++    .balign 4
++mgs2_gl_trap_stub_count:
++    .word 4096
++    .size mgs2_gl_trap_stub_count, 4
++    .section .note.GNU-stack,"",%progbits
+--- /dev/null
++++ b/src/mgs2_island_entry_identity.h
+@@ -0,0 +1,55 @@
++/* Generated by harness/island/full/gen_entry_identity.py from the
++ * MOUNTED wined3d.dll. Identity is module base + func_rva; the marker
++ * is only a witness, and it must sit at marker_off. A match at any
++ * other offset is a neighbouring or mid-function address -- see
++ * section 14 of docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md,
++ * where production entry 22 was bound to one. Do not hand-edit. */
++#ifndef MGS2_ISLAND_ENTRY_IDENTITY_H
++#define MGS2_ISLAND_ENTRY_IDENTITY_H
++
++struct mgs2_entry_identity { unsigned short id; unsigned short marker_off; unsigned int func_rva; };
++
++static const struct mgs2_entry_identity mgs2_entry_identity[] = {
++    {   0,   7, 0x0001cbf0 },
++    {   1,  13, 0x0001cc30 },
++    {   2,  12, 0x00053ee0 },
++    {   3,  15, 0x00058e20 },
++    {   4,   9, 0x000af3b0 },
++    {   5,  11, 0x000b1c30 },
++    {   6,  15, 0x000b7ba0 },
++    {   7,  15, 0x0017dd70 },
++    {   8,  14, 0x0017e180 },
++    {   9,  13, 0x0017e9f0 },
++    {  10,  10, 0x0017eb10 },
++    {  11,  14, 0x0017ec30 },
++    {  12,  10, 0x0017ef10 },
++    {  13,  15, 0x00186720 },
++    {  14,  15, 0x0019a050 },
++    {  15,  18, 0x001a2b10 },
++    {  16,  60, 0x001a3de0 },
++    {  17,   9, 0x001b1770 },
++    {  18,  30, 0x001b24a0 },
++    {  19,  18, 0x001b2680 },
++    {  20,  15, 0x001b5680 },
++    {  21,  14, 0x001b9790 },
++    {  22,   9, 0x001b9f50 },
++    {  23,  18, 0x001b9fd0 },
++    {  24,  12, 0x001ba0c0 },
++    {  25,  12, 0x001ba200 },
++    {  26,  15, 0x001ba2f0 },
++    {  27,  10, 0x001ba420 },
++    {  28,  27, 0x001ba6d0 },
++    {  29,   9, 0x001c2360 },
++    {  30,  14, 0x001c40d0 },
++    {  31,  18, 0x001c68d0 },
++    {  32,   3, 0x001c7a50 },
++    {  33,  13, 0x001cc460 },
++    {  34,  15, 0x001cc6c0 },
++    {  35,  17, 0x001ccbf0 },
++    {  36,  18, 0x001cddd0 },
++    {  50,   6, 0x000afe80 },
++    {  51,   6, 0x000afeb0 },
++};
++#define MGS2_ENTRY_IDENTITY_COUNT 39
++
++#endif /* MGS2_ISLAND_ENTRY_IDENTITY_H */

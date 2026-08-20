@@ -1,0 +1,244 @@
+Unexported dmsynth sink startup/lifetime hardening, recovered 2026-08-19.
+
+Found in ../recovered-session/wine-11.0/dlls/dmsynth/synthsink.c with an
+mtime of 2026-08-17 23:24, i.e. after the 18:26 build of the production
+dmsynth_p34_interp_reset.dll and before the 23:34 build of
+dmsynth_audit_round3.dll.  It is present in the audit_round3 binary, absent
+from production p34, and was never exported into wine-patches/.
+
+It propagates each sink thread's startup HRESULT back to synth_sink_activate,
+closes the thread handles, resets the stop events on every failure and on
+deactivate, and frees the render buffer on the early-failure paths.  None of it
+has been measured on the device, and it is NOT part of dmsynth p35: the p35
+watchdog was built on the production p34 source recovered from the patch chain,
+so the two changes stay separable.
+
+Applies on top of the NO-ISLAND chain with `patch -p1 -F0` as long as patch 60
+is not applied.  The two are not stackable as they stand: this diff and patch 60
+both rewrite the `if (!started)` startup-signal region of the timing thread, so
+the last hunk of whichever is applied second has to be merged by hand.
+
+Kept here so the tree revert does not lose it.
+
+--- a/dlls/dmsynth/synthsink.c
++++ b/dlls/dmsynth/synthsink.c
+@@ -674,8 +674,15 @@
+     struct synth_sink *sink;
+     IDirectSoundBuffer *buffer;
+     HANDLE started_event;
++    HRESULT startup_hr;
+ };
+ 
++static void synth_sink_signal_startup(HANDLE event, HRESULT *startup_hr, HRESULT hr)
++{
++    *startup_hr = hr;
++    SetEvent(event);
++}
++
+ static DWORD CALLBACK synth_sink_timing_thread(void *args)
+ {
+     struct timing_thread_params *params = args;
+@@ -686,7 +693,7 @@
+     BOOL started = FALSE;
+     WAVEFORMATEX format;
+     HANDLE buffer_event;
+-    HRESULT hr;
++    HRESULT hr = S_OK;
+ 
+     TRACE("Starting timing thread, args %p\n", args);
+     SetThreadDescription(GetCurrentThread(), L"wine_dmsynth_sink_timing");
+@@ -723,13 +730,14 @@
+ 
+     if (!buffer_event || FAILED(hr))
+     {
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr,
++                FAILED(hr) ? hr : E_FAIL);
+         goto done;
+     }
+ 
+     if (FAILED(hr = IDirectSoundBuffer_Play(buffer, 0, 0, DSBPLAY_LOOPING)))
+     {
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
+         ERR("Failed to start sound buffer, hr %#lx.\n", hr);
+         goto done;
+     }
+@@ -772,18 +780,19 @@
+ 
+         if (!started)
+         {
+-            SetEvent(params->started_event);
++            synth_sink_signal_startup(params->started_event, &params->startup_hr, S_OK);
+             started = TRUE;
+         }
+     }
+ 
+     if (!started)
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr,
++                FAILED(hr) ? hr : E_FAIL);
+ 
+     if (FAILED(hr))
+     {
+         ERR("Thread unexpected termination, hr %#lx\n", hr);
+-        return hr;
++        goto done;
+     }
+ 
+ done:
+@@ -802,7 +811,7 @@
+     }
+ 
+     IDirectSoundBuffer_Release(buffer);
+-    CloseHandle(buffer_event);
++    if (buffer_event) CloseHandle(buffer_event);
+ 
+     return 0;
+ }
+@@ -813,6 +822,7 @@
+     IDirectMusicSynth *synth;
+     IDirectSoundBuffer *buffer;
+     HANDLE started_event;
++    HRESULT startup_hr;
+ };
+ 
+ static DWORD CALLBACK synth_sink_render_thread(void *args)
+@@ -824,8 +834,8 @@
+     struct synth_sink *sink = params->sink;
+     WAVEFORMATEX format;
+     DWORD samples_size;
+-    short *samples;
+-    HRESULT hr;
++    short *samples = NULL;
++    HRESULT hr = S_OK;
+ 
+     TRACE("Starting thread, args %p\n", args);
+     SetThreadDescription(GetCurrentThread(), L"wine_dmsynth_sink_render");
+@@ -837,7 +847,7 @@
+ 
+     if (FAILED(hr))
+     {
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
+         goto done;
+     }
+ 
+@@ -845,13 +855,18 @@
+     if (!(samples = malloc(samples_size)))
+     {
+         ERR("Failed to allocate memory for samples\n");
+-        SetEvent(params->started_event);
++        hr = E_OUTOFMEMORY;
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
+         goto done;
+     }
+ 
+     if (FAILED(hr = synth_sink_render_data(sink, synth, buffer, &format, samples, samples_size)))
++    {
+         ERR("Failed to render initial buffer data, hr %#lx.\n", hr);
+-    SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
++        goto cleanup;
++    }
++    synth_sink_signal_startup(params->started_event, &params->startup_hr, S_OK);
+ 
+     while (SUCCEEDED(hr) && SUCCEEDED(hr = synth_sink_write_data(sink, buffer,
+             &caps, &format, samples, samples_size)))
+@@ -871,10 +886,11 @@
+     if (FAILED(hr))
+     {
+         ERR("Thread unexpected termination, hr %#lx\n", hr);
+-        return hr;
++        goto cleanup;
+     }
+ 
+     synth_sink_wait_play_end(sink, buffer, &caps, &format, samples_size);
++cleanup:
+     free(samples);
+ 
+ done:
+@@ -925,6 +941,7 @@
+ 
+     timing_params.sink = This;
+     timing_params.buffer = render_params.buffer;
++    timing_params.startup_hr = E_FAIL;
+     IDirectSoundBuffer_AddRef(render_params.buffer);
+ 
+     if (!(timing_params.started_event = CreateEventW(NULL, FALSE, FALSE, NULL))
+@@ -933,16 +950,27 @@
+         ERR("Failed to create timing thread, error %lu\n", GetLastError());
+         hr = HRESULT_FROM_WIN32(GetLastError());
+         IDirectSoundBuffer_Release(timing_params.buffer);
+-        CloseHandle(timing_params.started_event);
++        if (timing_params.started_event) CloseHandle(timing_params.started_event);
+         IDirectSoundBuffer_Release(render_params.buffer);
+         return hr;
+     }
+ 
+     WaitForSingleObject(timing_params.started_event, INFINITE);
++    hr = timing_params.startup_hr;
+     CloseHandle(timing_params.started_event);
++    if (FAILED(hr))
++    {
++        WaitForSingleObject(This->timing_thread, INFINITE);
++        CloseHandle(This->timing_thread);
++        ResetEvent(This->timing_stop_event);
++        This->timing_thread = NULL;
++        IDirectSoundBuffer_Release(render_params.buffer);
++        return hr;
++    }
+ 
+     render_params.sink = This;
+     render_params.synth = This->synth;
++    render_params.startup_hr = E_FAIL;
+     IDirectMusicSynth_AddRef(This->synth);
+ 
+     if (!(render_params.started_event = CreateEventW(NULL, FALSE, FALSE, NULL))
+@@ -952,14 +980,31 @@
+         hr = HRESULT_FROM_WIN32(GetLastError());
+         SetEvent(This->timing_stop_event);
+         WaitForSingleObject(This->timing_thread, INFINITE);
++        ResetEvent(This->timing_stop_event);
+         IDirectSoundBuffer_Release(render_params.buffer);
+         IDirectMusicSynth_Release(render_params.synth);
+-        CloseHandle(render_params.started_event);
++        if (render_params.started_event) CloseHandle(render_params.started_event);
++        CloseHandle(This->timing_thread);
++        This->timing_thread = NULL;
+         return hr;
+     }
+ 
+     WaitForSingleObject(render_params.started_event, INFINITE);
++    hr = render_params.startup_hr;
+     CloseHandle(render_params.started_event);
++    if (FAILED(hr))
++    {
++        WaitForSingleObject(This->render_thread, INFINITE);
++        CloseHandle(This->render_thread);
++        ResetEvent(This->render_stop_event);
++        This->render_thread = NULL;
++        SetEvent(This->timing_stop_event);
++        WaitForSingleObject(This->timing_thread, INFINITE);
++        CloseHandle(This->timing_thread);
++        ResetEvent(This->timing_stop_event);
++        This->timing_thread = NULL;
++        return hr;
++    }
+     This->active = TRUE;
+     return S_OK;
+ }
+@@ -970,9 +1015,13 @@
+ 
+     SetEvent(This->render_stop_event);
+     WaitForSingleObject(This->render_thread, INFINITE);
++    CloseHandle(This->render_thread);
++    ResetEvent(This->render_stop_event);
+     This->render_thread = NULL;
+     SetEvent(This->timing_stop_event);
+     WaitForSingleObject(This->timing_thread, INFINITE);
++    CloseHandle(This->timing_thread);
++    ResetEvent(This->timing_stop_event);
+     This->timing_thread = NULL;
+     This->active = FALSE;
+ 

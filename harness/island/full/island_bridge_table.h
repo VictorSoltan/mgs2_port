@@ -36,3 +36,8 @@ MGS2_ISLAND_ENTRY(33, wined3d_texture_invalidate_location, vFpuu)
 MGS2_ISLAND_ENTRY(34, wined3d_texture_load_location, uFpupu)
 MGS2_ISLAND_ENTRY(35, wined3d_texture_prepare_location, uFpupu)
 MGS2_ISLAND_ENTRY(36, wined3d_texture_validate_location, vFpuu)
+/* The post-batching DRAW boundary: both CS_OP_DRAW and CS_OP_DRAW_BATCH
+ * converge here.  Queue dispatch and packet decoding remain guest x86. */
+MGS2_ISLAND_ENTRY(37, mgs2_cs_exec_draw_one_island, vFpuup)
+/* p68 correctness boundary: guest owns context acquisition and draw state. */
+MGS2_ISLAND_ENTRY(38, mgs2_draw_primitive_arrays_island, vFp)

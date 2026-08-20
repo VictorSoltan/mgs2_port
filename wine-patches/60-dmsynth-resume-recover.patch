@@ -1,0 +1,266 @@
+Patch 60 (dmsynth p35) -- self-heal a stalled synth sink transport.
+
+The synth sink's timing thread starts the DirectSound buffer once with
+DSBPLAY_LOOPING and then waits on the notification event with INFINITE.  Every
+play/write position the render thread reads comes from that one loop.  If the
+transport stops, or the notifications stop arriving, the thread stays alive but
+blocked for good: sink->play_pos never advances again, the render thread keeps
+writing into a buffer nothing plays, and there is no path back short of
+restarting the game.  That matches the reported defect -- gameplay SFX gone
+after the console suspends and resumes, and less often after a death or a
+transition, with music and menus unaffected in some reports.
+
+Wait with a timeout instead and use the expiry as a watchdog tick.  Two
+different failures are handled, because DirectSound reports them differently:
+
+  * The buffer is stopped or lost: Restore if needed, then Play with
+    DSBPLAY_LOOPING again.  This is the documented recovery path.
+  * The buffer still reports DSBSTATUS_PLAYING while its play position does not
+    advance.  Wine keeps that flag for the secondary buffer itself regardless of
+    what the mixer and the endpoint below it are doing, so a device that stopped
+    advancing across a suspend is invisible in the status word.  After
+    MGS2_DMSYNTH_WATCHDOG_STALL consecutive ticks on an unchanged play position,
+    the transport is re-armed once with Stop + Play.
+
+This is not polling.  While notifications arrive -- BUFFER_SUBDIVISIONS per
+buffer, 200 ms apart at this sink's format -- the loop is woken by the event
+exactly as before and the timeout does not expire.  In the broken state it costs
+one GetStatus per tick and logs nothing per tick, so rule 2 is respected.  A
+failed recovery is deliberately not fatal and only the first failure of an
+episode is reported: ending the thread there would guarantee the silence the
+watchdog exists to undo.
+
+Two lifecycle details, both from review:  the stop event is re-checked with a
+zero timeout before the transport is touched, because a stop request can land
+while the wait was timing out and the loop would otherwise restart a transport
+the sink is already tearing down; and a successful re-arm clears both the stall
+count and the last-seen position, so a recovery cannot trigger the next one from
+the very position it was recovering from.
+
+sink->written is deliberately not touched from the timing thread.  The render
+thread already resynchronises it against the published play position in its own
+underrun check, so a re-armed transport is caught up by the thread that owns
+that field instead of racing it from this one.
+
+Knobs, read once per process:
+
+  MGS2_DMSYNTH_WATCHDOG_MS      watchdog period, default 250, 0 restores the
+                                exact pre-patch INFINITE wait -- so the control
+                                arm is this same binary with one variable set
+  MGS2_DMSYNTH_WATCHDOG_STALL   consecutive stalled ticks before a re-arm,
+                                default 4, 0 keeps the watchdog and disables the
+                                position-stall re-arm
+
+Status: built as binaries/dmsynth_p35_resume_recover.dll
+(f387ff2d2f0273deee4313442c03c51373dc1ecaae3134c33cafde1a56392d0c), semantically
+verified to change only synth_sink_timing_thread (458 -> 625 instructions, no
+function added or removed), and NOT yet measured on the device.
+The status-only half is the documented DirectSound recovery; the stall re-arm is
+reasoned from Wine's dsound keeping its own PLAYING flag and has no capture of a
+resumed device behind it yet.
+
+--- a/dlls/dmsynth/synthsink.c
++++ b/dlls/dmsynth/synthsink.c
+@@ -669,6 +669,117 @@
+     return hr;
+ }
+ 
++/*
++ * Patch 35 -- self-heal a stalled synth sink transport.
++ *
++ * The timing thread used to wait on the DirectSound notification event with no
++ * timeout.  The buffer is started once with DSBPLAY_LOOPING and every position
++ * published afterwards depends on that single transport staying alive.  If it
++ * stops, or the notifications stop arriving, the thread stays alive but blocked
++ * forever: sink->play_pos never advances again, the render thread keeps writing
++ * into a buffer nothing plays, and there is no path back short of restarting
++ * the game.  The user-visible defect is gameplay SFX that disappear after the
++ * console suspends and resumes, and less often after a death or a transition.
++ *
++ * Wait with a timeout instead, and use the expiry as a watchdog tick.  Two
++ * different failures have to be handled, because DirectSound reports them
++ * differently:
++ *
++ *   - The buffer is stopped or lost.  Restore it if needed, then Play with
++ *     DSBPLAY_LOOPING again; this is the documented recovery path.
++ *   - The buffer still reports DSBSTATUS_PLAYING while its play position no
++ *     longer advances.  Wine maintains that flag for the secondary buffer
++ *     itself, whatever the mixer and the endpoint below it are doing, so a
++ *     device that stopped advancing across a suspend is invisible in the
++ *     status word.  After MGS2_DMSYNTH_WATCHDOG_STALL consecutive ticks with
++ *     an unchanged play position, re-arm the transport once with Stop + Play.
++ *
++ * This is not polling.  While notifications arrive -- BUFFER_SUBDIVISIONS per
++ * buffer, 200 ms apart at this sink's format -- the loop is woken by the event
++ * exactly as before and the timeout does not expire.  In the broken state it
++ * costs one GetStatus per tick, and nothing is logged per tick, so it does not
++ * repeat the mistake of measuring an audio thread by writing to it.
++ *
++ * sink->written is deliberately not touched here.  The render thread already
++ * resynchronises it against the published play position in its own underrun
++ * check, so a re-armed transport is caught up by the thread that owns that
++ * field rather than by racing it from this one.
++ *
++ * Both knobs default to on, and MGS2_DMSYNTH_WATCHDOG_MS=0 restores the exact
++ * pre-patch INFINITE wait, so the control arm for this patch is the same binary
++ * with one variable set.  MGS2_DMSYNTH_WATCHDOG_STALL=0 keeps the watchdog but
++ * disables the stall re-arm, which is the reasoned rather than measured half:
++ * the status-only recovery cannot heal a mixer that stopped advancing, and no
++ * capture of the resumed device exists yet.
++ */
++#define SINK_WATCHDOG_MS 250
++#define SINK_WATCHDOG_STALL 4
++
++static DWORD sink_watchdog_timeout(void)
++{
++    static int watchdog_ms = -1;
++
++    if (watchdog_ms < 0)
++        watchdog_ms = mgs2_env_int("MGS2_DMSYNTH_WATCHDOG_MS", SINK_WATCHDOG_MS, 0, 5000);
++
++    return watchdog_ms ? (DWORD)watchdog_ms : INFINITE;
++}
++
++static DWORD sink_watchdog_stall_ticks(void)
++{
++    static int stall_ticks = -1;
++
++    if (stall_ticks < 0)
++        stall_ticks = mgs2_env_int("MGS2_DMSYNTH_WATCHDOG_STALL", SINK_WATCHDOG_STALL, 0, 64);
++
++    return stall_ticks;
++}
++
++/* Bring a stopped, lost or stalled transport back, and change nothing when the
++ * buffer is simply playing and late with its notification.  *rearmed reports
++ * whether the transport was actually restarted, so the caller can start its
++ * stall detection over instead of measuring against a stale baseline. */
++static HRESULT sink_watchdog_recover(IDirectSoundBuffer *buffer, BOOL stalled, BOOL *rearmed)
++{
++    DWORD status = 0;
++    HRESULT hr;
++
++    *rearmed = FALSE;
++
++    if (FAILED(hr = IDirectSoundBuffer_GetStatus(buffer, &status))
++            || (status & DSBSTATUS_BUFFERLOST))
++    {
++        /* A lost buffer can fail the status query as well, so try the
++         * documented recovery once and restart it below. */
++        if (FAILED(hr = IDirectSoundBuffer_Restore(buffer)))
++            return hr;
++        status = 0;
++    }
++
++    if (!(status & DSBSTATUS_PLAYING))
++    {
++        TRACE("Restarting stopped sink buffer %p\n", buffer);
++        if (FAILED(hr = IDirectSoundBuffer_Play(buffer, 0, 0, DSBPLAY_LOOPING)))
++            return hr;
++
++        *rearmed = TRUE;
++        return S_OK;
++    }
++
++    if (!stalled)
++        return S_OK;
++
++    TRACE("Re-arming stalled sink buffer %p\n", buffer);
++    if (FAILED(hr = IDirectSoundBuffer_Stop(buffer)))
++        return hr;
++
++    if (FAILED(hr = IDirectSoundBuffer_Play(buffer, 0, 0, DSBPLAY_LOOPING)))
++        return hr;
++
++    *rearmed = TRUE;
++    return S_OK;
++}
++
+ struct timing_thread_params
+ {
+     struct synth_sink *sink;
+@@ -682,7 +793,10 @@
+     DSBCAPS caps = {.dwSize = sizeof(DSBCAPS)};
+     IDirectSoundBuffer *buffer = params->buffer;
+     struct synth_sink *sink = params->sink;
++    BOOL recover_failed = FALSE;
++    DWORD last_play_pos = ~0u;
+     IDirectSoundNotify *notify;
++    DWORD watchdog_ticks = 0;
+     BOOL started = FALSE;
+     WAVEFORMATEX format;
+     HANDLE buffer_event;
+@@ -742,7 +856,8 @@
+         DWORD play_pos;
+         DWORD ret;
+ 
+-        ret = WaitForMultipleObjects(ARRAY_SIZE(handles), handles, FALSE, INFINITE);
++        ret = WaitForMultipleObjects(ARRAY_SIZE(handles), handles, FALSE,
++                sink_watchdog_timeout());
+         if (ret == WAIT_FAILED)
+         {
+             ERR("WaitForMultipleObjects failed with %lu\n", GetLastError());
+@@ -752,6 +867,48 @@
+         if (ret == WAIT_OBJECT_0)
+             break;
+ 
++        if (ret == WAIT_TIMEOUT)
++        {
++            DWORD stall_ticks = sink_watchdog_stall_ticks();
++            BOOL rearmed = FALSE;
++            HRESULT recover_hr;
++            BOOL stalled;
++
++            /* A stop request can land while this wait was timing out, and the
++             * loop would otherwise only see it after having restarted a
++             * transport the sink is already tearing down. */
++            if (WaitForSingleObject(sink->timing_stop_event, 0) == WAIT_OBJECT_0)
++                break;
++
++            stalled = stall_ticks && ++watchdog_ticks >= stall_ticks;
++            recover_hr = sink_watchdog_recover(buffer, stalled, &rearmed);
++
++            if (rearmed)
++            {
++                /* Start the stall detection over from whatever the re-armed
++                 * transport reports next, so a recovery cannot trigger the
++                 * next one from the position it was recovering from. */
++                watchdog_ticks = 0;
++                last_play_pos = ~0u;
++            }
++            else if (stalled)
++                watchdog_ticks = 0;
++
++            /* A failed recovery is deliberately not fatal.  The buffer may be
++             * healthy and merely late with its notification, and ending the
++             * thread here would guarantee the silence this watchdog exists to
++             * undo.  Report the first failure of an episode, keep ticking, and
++             * leave hr alone so the thread's own exit path is unchanged. */
++            if (FAILED(recover_hr))
++            {
++                if (!recover_failed)
++                    ERR("Failed to recover the sink buffer, hr %#lx\n", recover_hr);
++                recover_failed = TRUE;
++            }
++            else
++                recover_failed = FALSE;
++        }
++
+         if (FAILED(hr = IDirectSoundBuffer_GetCurrentPosition(buffer, &play_pos, &write_pos)))
+         {
+             ERR("IDirectSoundBuffer_GetCurrentPosition failed, hr %#lx\n", hr);
+@@ -770,6 +927,14 @@
+         sink->play_pos_time = play_pos_time;
+         LeaveCriticalSection(&sink->cs);
+ 
++        /* Any movement clears the stall count; a re-arm is only attempted for a
++         * position that has not moved across whole watchdog ticks. */
++        if (play_pos != last_play_pos)
++        {
++            last_play_pos = play_pos;
++            watchdog_ticks = 0;
++        }
++
+         if (!started)
+         {
+             SetEvent(params->started_event);

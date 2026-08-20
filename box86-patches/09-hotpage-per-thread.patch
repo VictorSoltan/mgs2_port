@@ -1,0 +1,41 @@
+Patch 09 -- the hot page is per thread.
+
+`hotpage` and `hotpage_cnt` were process-wide, so every thread running under the
+dynarec shared one page marker and one budget. With more than one guest thread
+generating code -- which this game has -- thread B's SetHotPage() silently
+retargets the marker thread A is still spending its budget on, and neither
+thread's self-modifying page keeps the relaxed protection the mechanism exists
+to give it. Making both variables `__thread` gives each thread its own marker and
+its own budget; nothing else in the mechanism changes.
+
+Cost: PT_TLS memsz grows by 16 bytes per thread.
+
+WHY THIS PATCH EXISTS SEPARATELY. It was found on 2026-08-19 in the box86 source
+tree with no patch recording it, while `box86-patches/08` recorded only the
+budget hunk -- so the patch series did not reproduce the deployed production
+binary. Which binary has which is checkable without an ARM disassembler:
+
+```text
+box86-island31            .tbss 0x294   neither hunk
+box86-island32-hotpage    .tbss 0x294   patch 08 only
+box86-island32-prod       .tbss 0x2a4   patch 08 + this patch   <- production
+```
+
+NOT MEASURED, in either direction, on frame rate or on the open Box86 sync-arena
+freeze. It is deployed because `launch-play.sh` selects `box86-island32-prod`;
+that selection is not carried by a number. `box86-island31` + the FINALPLAY6
+allow-list is the measured rollback.
+
+--- a/src/custommem.c
++++ b/src/custommem.c
+@@ -881,8 +881,8 @@
+     return 1;
+ }
+ 
+-uintptr_t hotpage = 0;
+-int hotpage_cnt = 0;
++__thread uintptr_t hotpage = 0;
++__thread int hotpage_cnt = 0;
+ #define HOTPAGE_MARK 64
+ void SetHotPage(uintptr_t addr)
+ {

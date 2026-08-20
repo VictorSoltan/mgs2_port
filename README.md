@@ -23,11 +23,13 @@ input       works normally. Two distinct stalls were captured: a stock-user32
             both fixes and moves the hot DirectSound FIR loop to native ARM.
             A later self-owned shadow-mutex freeze was captured on 14 August;
             production now bypasses that Box86 pool with direct compatible
-            mutexes (`BOX86_MUTEX_ALIGNED=1`), with no FPS claim
+            mutexes (`BOX86_MUTEX_ALIGNED=1`), with no FPS claim. On 20 August
+            the same self-owned lock shape recurred on the direct mutex itself;
+            bypassing the shadow pool did not close the gameplay deadlock
 saves       work
 ```
 
-The FINALPLAY6 configuration is `device/launch-play.sh`; the old
+The FINALPLAY7 configuration is `device/launch-play.sh`; the old
 `device/launch.sh` remains an archival measurement harness. Measured wins kept
 from the earlier releases plus the native WineD3D routes are:
 
@@ -39,12 +41,13 @@ from the earlier releases plus the native WineD3D routes are:
 | exact Wine `_sse2_memmove` → native ARM libc bridge | removes the former 744-sample top guest block without changing overlap semantics |
 | cached `DISCARD` shadow instead of reading mapped upload memory back | fixed spot: three consecutive windows at 30.0, 30.0 and 30.1 fps |
 | atomic Box86 aligned-mutex first-use publication | old bridge fails the direct race test; fixed bridge passes 10/10 × 1,000 mappings |
-| direct compatible Box86 mutexes | bypasses the shadow pool after a second live session-lock self-deadlock; reliability change, not an FPS claim |
+| direct compatible Box86 mutexes | bypasses the shadow pool, but a later live capture proved the direct guest mutex can still become self-owned; mechanism change, not a closed fix or FPS claim |
 | exact-source FFP shader/stage cache | corrected save/enemy control: 36 stages from 19 sources; removes 17 duplicate links that cost 2.04 s |
 | exact Wine DirectSound FIR → native ARM bridge | fixed 1416 MHz: mixer thread 12.97% → 7.57% of one core (-41.6%); guest `dsound` samples 717 → 40 |
 | GPU governor `simple_ondemand` → `performance` after the cooling fix | same-process interleaved arms: 15.21 → 16.85 fps (+10.8%), CPU held 1992 MHz |
 | native ARM `wined3d_buffer_load` (island entry 10) | same-process ABBA: -8.87 ms/frame (-12.8%), about +2.1 fps |
 | native ARM `mgs2_batch_flush` with shared guest state (entry 4) | 10 stable same-process pairs: -2.680 ms/frame, +0.899 fps median (+4.8%), zero faults |
+| native ARM `wined3d_rendertarget_view_load_location` (entry 23) | robust direction about -2 to -2.6 ms/frame in the measured scene; paired median about +1.3 fps; do not quote the withdrawn sigma/p-value |
 
 FINALPLAY uses a fixed 1992000 Hz target after the cooling upgrade. The culling
 A/B above remains a historical 1800 MHz measurement; it is not relabelled.
@@ -361,7 +364,66 @@ native ARM WineD3D island, routed entry point by entry point
                           entries. The GL-slot preflight is not semantic proof;
                           texture/rendertarget roots remain closed until their
                           state and indirect-call cuts are proved. See the latest
-                          `MGS2_ISLAND_*` brief before extending the allow-list
+                          `MGS2_ISLAND_*` brief before extending the allow-list.
+                          2026-08-19: entry 34 (`wined3d_texture_load_location`)
+                          was tried and it does not get as far as its own body --
+                          armed, it dies within the first frames with an illegal
+                          instruction at its own bridge + 0xB, which is the
+                          routing mechanism, not the cut. Production's 17 entries
+                          and entry 10 through the same launcher both run, so the
+                          harness and the base are exonerated. This is NOT a
+                          closed dead end: it is an unfixed fault with a named
+                          next check (`island_marker_check.py` against an
+                          unstripped p56). Nothing about frame rate was measured
+                          for entry 34 or entry 23. See
+                          `MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md`
+                          2026-08-20: the broader post-batching CS DRAW boundary
+                          (entry 37, clean p66) is a closed correctness failure.
+                          An A/B-disabled always-routed playtest had working sound
+                          and a live 58--60 fps PRESENT/readback loop but no picture.
+                          Thus the apparently fast routed windows were presenting
+                          an incorrect/empty frame, not accelerating gameplay; the
+                          raw -61.732 and calibrated -58.860 ms/frame readings are
+                          withdrawn as optimisation results. p67 then proved that
+                          the guest/ARM context TLS split was real (21 versus 0)
+                          and synchronised ARM to 21, but 101,305 source DRAWs
+                          still became 101,305 final GL submissions while all 64
+                          retained frame-content samples stayed black. The one
+                          relocation audit found no other authoritative shared
+                          state beyond the already-synchronised batch pointer and
+                          TLS. The coarse entry-37 boundary is therefore closed,
+                          not awaiting another timing run. A future cut must stay
+                          below guest context acquisition and prove equal picture
+                          content before any FPS A/B.
+                          p68 did exactly that: guest x86 retained context and
+                          draw-state ownership while only the final primitive-
+                          arrays tail became entry 38. At the heavy spot,
+                          4,982,735 source calls equalled 4,982,735 final GL
+                          submissions, fallback stayed zero, and the last 64 of
+                          17,832 frame samples were all non-empty and unique.
+                          This fixes the black picture for the lower cut. Its
+                          later symmetric p68b A/B completed 46 cycles: 28 were
+                          call-count balanced, with paired median +0.002 ms/frame,
+                          mean +0.109 and only 13/28 favouring ARM. The independent
+                          28k-call plateau gives median +0.046. Entry 38 is closed
+                          as a performance root under its pre-registered <=0.3
+                          ms/frame gate and is not a production candidate. The same
+                          session later froze on direct mutex 0x6040623c:
+                          lock=2, owner=wine_dinput_worker, while that owner,
+                          main and wined3d_cs all waited on the same mutex. A
+                          one-time unlock returned zero and rendering resumed.
+                          Exact symbols in the matching unstripped win32u name
+                          this address as `display_lock` (RVA 0x20623c), not
+                          `session_lock` (RVA 0x226284, live 0x60426284). It is
+                          separate from entry 38 and the 0x400f alert-futex
+                          family; BOX86_MUTEX_ALIGNED=1 did not close it.
+                          The standalone p68 record, exact ABI, hashes, recovery
+                          and revised queue are in
+                          `MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md`.
+                          The passive `display_lock` ring remains available. The
+                          next renderer action is correctness-only native
+                          context_apply_draw_state() while context ownership
+                          remains guest; p66/p68 never separated those two halves.
 WINE_D3D_CONFIG=csmt=0    the game does not start (page fault at 0x3C), twice
 suspending EmulationStation      ~1 fps, and it can leave the menu frozen
 PChannel disjoint allocation, group→channel remapping, DLS gain boost,
@@ -432,6 +494,7 @@ box86-native-memmove2                      previous production Box86 rollback
 box86-native-memmove3                      previous FINALPLAY3 rollback
 box86-native-dsound-fir1                   production memmove/mutex fixes + native dsound FIR
 box86-island31                             FINALPLAY6 native WineD3D island + shared batch state
+box86-island41                             FINALPLAY7 production island: canonical identity, indirect/GL routing fixes and entry 23
 d3d8_producer_batch14_dirtyranges.dll      bounded dirty-range aggregation for game VBs
 d3d8_producer_batch15_projectedcensus.dll  300-frame projected break census; diagnostic only
 d3d8_producer_batch16_mixedcensus.dll      top mixed-state masks plus 64-mask projections
@@ -449,6 +512,8 @@ dmsynth_se2_lifetime.dll                   current voice-refresh and 48-voice bu
 dmsynth_se3_state1.dll                     se2 plus bounded reset/note/voice recorder
 dmsynth_se4_unmute1.dll                    se3 plus note-triggered stuck-mute recovery
 dmsynth_p34_interp_reset.dll                production interpolation-reset CPU fix
+dmsynth_p35_resume_recover.dll              p34 source plus the sink transport watchdog;
+                                           unmeasured, MGS2_DMSYNTH_WATCHDOG_MS=0 is its control arm
 dsound_se1.dll                             previous production audio fallback
 dsound_p36_native_fir_target.dll            production bridgeable FIR target
 dsound_state1.dll                           se1 plus bounded gameplay-SFX recorder
@@ -464,7 +529,7 @@ wined3d_batch17_relative_range.dll          relative-index/range-draw candidate;
 wined3d_finalplay.dll                       clean production batch16/set-cache policy
 wined3d_p32_ffp_source_dedup.dll            production exact-source shader/stage cache
 wined3d_p37_reinforcement_census.dll         p32 plus bounded submission census; diagnostic only
-wined3d_p56_batch_state.dll                  FINALPLAY6 island markers, class-B/GL plumbing and guest batch accessor
+wined3d_p56_batch_state.dll                  FINALPLAY7 guest half: island markers, class-B/GL plumbing and guest batch accessor
 ```
 
 The archived research renderer DLLs are intentionally included even though each

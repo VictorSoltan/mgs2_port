@@ -35,3 +35,5 @@ wined3d_texture_invalidate_location
 wined3d_texture_load_location
 wined3d_texture_prepare_location
 wined3d_texture_validate_location
+mgs2_cs_exec_draw_one_island
+mgs2_draw_primitive_arrays_island

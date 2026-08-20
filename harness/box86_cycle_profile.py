@@ -6,7 +6,13 @@ import importlib.util
 spec = importlib.util.spec_from_file_location("bgp", "harness/box86_guest_profile.py")
 bgp = importlib.util.module_from_spec(spec); spec.loader.exec_module(bgp)
 
-LINE = re.compile(r"^\s*(\S+)\s+(\d+)\s+([0-9.]+):\s+(\d+)\s+cycles:u:\s+([0-9a-f]+)\s+(.*?)\s+\(([^)]*)\)\s*$")
+# perf on ROCKNIX normally prints ``comm tid ...`` but explicit field selection
+# may produce ``comm pid/tid ...``. Keep this reader aligned with the sample
+# reader: an offline capture must not depend on perf's display choice.
+LINE = re.compile(
+    r"^\s*(\S+)\s+(?:(\d+)/)?(\d+)\s+([0-9.]+):\s+(\d+)\s+"
+    r"cycles:u:\s+([0-9a-fA-F]+)\s+(.*?)\s+\(([^)]*)\)\s*$"
+)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--guest-map", required=True)
@@ -27,12 +33,14 @@ jit_cycles = 0
 blocks = collections.Counter(); bsmp = collections.Counter()
 bthread = collections.defaultdict(collections.Counter)
 modules = collections.Counter()
+dsos = collections.Counter()
 unres = 0
 for l in pathlib.Path(a.script).read_text(errors="replace").splitlines():
     m = LINE.match(l)
     if not m: continue
-    comm, tid, ts, per, ip, sym, dso = m.groups()
+    comm, _pid, tid, ts, per, ip, sym, dso = m.groups()
     per = int(per); total_cycles += per
+    dsos[dso] += per
     if not dso.startswith("/tmp/perf-"): continue
     rec = bgp.containing(records, nstarts, int(ip, 16))
     if rec is None:
@@ -46,6 +54,9 @@ for l in pathlib.Path(a.script).read_text(errors="replace").splitlines():
 
 print(f"total_user_cycles={total_cycles:,}  jit_cycles={jit_cycles:,} "
       f"({100*jit_cycles/total_cycles:.2f}%)  unresolved_jit_cycles={unres:,}")
+print("\nNative and JIT DSOs (cycle-weighted, % of ALL user cycles):")
+for dso, c in dsos.most_common(20):
+    print(f"  {100*c/total_cycles:6.2f}%  {c:>14,}  {dso}")
 print("\nGuest modules (cycle-weighted, % of ALL user cycles):")
 for mod, c in modules.most_common(20):
     print(f"  {100*c/total_cycles:6.2f}%  {c:>14,}  {mod}")

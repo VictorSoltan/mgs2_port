@@ -158,6 +158,26 @@ def gl_exports(path):
     return gl
 
 
+def preserved_gl_entries(path):
+    """Read the already-verified class-C fallback from a generated header.
+
+    The mounted opengl32.dll is not retained in this repository. Regenerating
+    WineD3D must not silently replace its table with zero entries merely because
+    that independent input is offline. The names/RVAs remain tied to the same
+    unchanged mounted opengl32 artifact and are copied exactly, with the count
+    checked against the header's own witness."""
+    text = open(path).read()
+    start = text.index("static const struct mgs2_class_c_entry mgs2_class_c_table[]")
+    end = text.index("#define MGS2_CLASS_C_COUNT", start)
+    block = text[start:end]
+    entries = {name: int(rva, 16) for rva, name in
+               re.findall(r'\{\s*0x([0-9a-fA-F]+),\s*"([^"]+)"\s*\}', block)}
+    match = re.search(r"#define MGS2_CLASS_C_COUNT\s+(\d+)", text[end:])
+    if not match or int(match.group(1)) != len(entries):
+        raise RuntimeError(f"class-C count mismatch in {path}")
+    return entries
+
+
 def c_ident(name):
     return re.sub(r"[^0-9A-Za-z_]", "_", name)
 
@@ -196,6 +216,8 @@ def main():
     ap.add_argument("dll")
     ap.add_argument("--objects", default="/mnt/data/holden/mgs/box86-src/src/island")
     ap.add_argument("--opengl32", help="the guest opengl32.dll AS MOUNTED ON THE DEVICE")
+    ap.add_argument("--preserve-class-c-from",
+                    help="copy the verified class-C table from this generated header")
     ap.add_argument("--registry", help="directory for the per-TU registry fragments")
     ap.add_argument("-o", "--out")
     args = ap.parse_args()
@@ -242,9 +264,14 @@ def main():
               "not establish the guest module base")
         return 1
 
-    gl = gl_exports(args.opengl32) if args.opengl32 else {}
+    if args.opengl32 and args.preserve_class_c_from:
+        ap.error("--opengl32 and --preserve-class-c-from are mutually exclusive")
+    gl = (gl_exports(args.opengl32) if args.opengl32 else
+          preserved_gl_entries(args.preserve_class_c_from) if args.preserve_class_c_from else {})
     if gl:
-        print("opengl32 export entry points             %d  (class-C fallback)" % len(gl))
+        origin = "preserved verified table" if args.preserve_class_c_from else "mounted DLL"
+        print("opengl32 export entry points             %d  (class-C fallback, %s)"
+              % (len(gl), origin))
 
     registered = 0
     if args.registry:

@@ -1,0 +1,249 @@
+Patch 62 -- the island's side of the GL-slot trap, and glDrawBuffer resolved.
+
+Island-only, and verified so: the guest i386 `utils.o` is BYTE-IDENTICAL with and
+without this patch, whole object including DWARF, because everything here is
+inside the trailing `#ifdef MGS2_ISLAND_ARM` block and nothing after it uses
+`__LINE__`.
+
+That verification is why the change lives here. The first attempt put the GLES
+mapping at the call site in `context_gl.c`, and the 30-line comment shifted every
+`checkGLcall()` line number after it -- the guest `.text` then differed in the
+`__LINE__` immediates baked into GL-error diagnostics. Inert, but it would have
+cost the "island patches leave the shipping DLL untouched" invariant for nothing.
+
+## 1. Unresolved slots get a naming stub instead of NULL
+
+A slot that cannot be resolved now gets `mgs2_island_gl_trap(slot)` -- a stub that
+prints the slot, its name and its caller, then aborts (Box86 patch 10). In a
+production build that helper returns NULL, so the fail-closed behaviour is
+unchanged. `mgs2_island_gl_slot_name()` is added here because this file owns the
+macro-generated name lists, and one numbering now covers every table it
+translates:
+
+```text
+0                     .. count-1   gl_ops, position IS the name
+count                 .. +20       fbo_ops
+count + 0x100         .. +N        ffp_attrib_ops.generic[]
+count + 0x200 / +0x201             glDisableWINE / glEnableWINE
+```
+
+## 2. glDrawBuffer is implemented, not faked
+
+The trap named the blocker in one run: slot 90, `glDrawBuffer`, called from
+`wined3d_context_gl_apply_fbo_state+0x2a0` -- the inlined
+`wined3d_context_gl_set_draw_buffer(context_gl, GL_NONE)` on the FBO attach path.
+
+The scalar entry point does not exist anywhere on this stack:
+
+```text
+libmali-bifrost-g52    exports glDrawBuffers and glReadBuffer, NO glDrawBuffer
+                       (readelf --dyn-syms on the device)
+Wine's GLES path       has no USE_GL_FUNC(glDrawBuffer) in win32u, so the unix
+                       half of the guest's own slot is not filled either
+```
+
+So it is not a resolution failure to be fixed by looking harder. The island
+installs its own implementation: `glDrawBuffers(1, &buffer)`, which is the
+documented GLES equivalent and, more to the point, the mapping THIS TREE ALREADY
+USES for the same reason in `wined3d_context_gl_apply_draw_buffers()`.
+
+It is installed only if `glDrawBuffers` itself resolved, and it is reported
+separately -- "substituted natively", not "resolved" -- because a substitution and
+a resolution are different facts:
+
+```text
+MGS2 island: GL slot 90 (glDrawBuffer) substituted natively: glDrawBuffers(1, &buffer)
+```
+
+No no-op, no faked success, nothing that returns a plausible value: an
+unimplementable call still has to fail loudly.
+
+OPEN QUESTION, deliberately left open: whether the GUEST ever executes that line.
+If it does, it would call through a null unix pointer, which production does not
+do -- so either it always takes the early return above it, or something outside
+this tree fills that pointer. A memory-only counter on the guest side would
+settle it. Until then this is an island-side resolution, not a renderer change.
+
+RESULT. Entry 34 no longer traps and no longer raises an illegal instruction on
+a GL pointer. It now gets far enough to reach DirectMusic startup, and stops on
+the NEXT layer: a guest wined3d function pointer that no instrumented dispatch
+site covers -- `convert_b8g8r8a8_unorm_gles`, reached through the format-converter
+pointer. Section 19 of the brief.
+
+NOT MEASURED. Diagnostic path only.
+
+--- a/dlls/wined3d/utils.c
++++ b/dlls/wined3d/utils.c
+@@ -7542,6 +7542,12 @@
+ void mgs2_island_report_unresolved(unsigned int slot, void *fp);
+ void mgs2_island_report_gl_info(unsigned int total, unsigned int null_in,
+         unsigned int resolved, unsigned int failed);
++/* Diagnostic builds hand back a stub that names the slot and aborts; production
++ * returns NULL, which is the fail-closed behaviour. Either way the island never
++ * calls a guest x86 pointer. */
++void *mgs2_island_gl_trap(unsigned int slot);
++void mgs2_island_report_substitution(unsigned int slot, const char *name,
++        const char *how);
+ 
+ /*
+  * Slot index -> GL function name, in the exact order gl_ops declares them.
+@@ -7603,6 +7609,74 @@
+     "glBlitFramebuffer", "glGenerateMipmap",
+ };
+ 
++/*
++ * One numbering for every pointer this file translates, so a slot number in a
++ * log names exactly one thing:
++ *
++ *   0                       .. GL_SLOT_COUNT-1   gl_ops, position IS the name
++ *   GL_SLOT_COUNT           .. +20               fbo_ops
++ *   GL_SLOT_COUNT + 0x100   .. +generic count    ffp_attrib_ops.generic[]
++ *   GL_SLOT_COUNT + 0x200 / +0x201               glDisableWINE / glEnableWINE
++ *
++ * The trap table in Box86 is indexed by this same number, which is why the
++ * offsets are sparse: they leave room for each group to grow without renumbering
++ * the ones already printed in old logs.
++ */
++#define MGS2_GL_SLOT_COUNT   (sizeof(struct wined3d_gl_funcs) / sizeof(void *))
++#define MGS2_FBO_SLOT_BASE   (MGS2_GL_SLOT_COUNT)
++#define MGS2_FFP_SLOT_BASE   (MGS2_GL_SLOT_COUNT + 0x100)
++#define MGS2_WINE_SLOT_BASE  (MGS2_GL_SLOT_COUNT + 0x200)
++
++const char *mgs2_island_gl_slot_name(unsigned int slot)
++{
++    if (slot < MGS2_GL_SLOT_COUNT)
++        return mgs2_gl_slot_name[slot];
++    if (slot >= MGS2_FBO_SLOT_BASE
++            && slot < MGS2_FBO_SLOT_BASE + ARRAY_SIZE(mgs2_fbo_slot_name))
++        return mgs2_fbo_slot_name[slot - MGS2_FBO_SLOT_BASE];
++    if (slot >= MGS2_FFP_SLOT_BASE && slot < MGS2_FFP_SLOT_BASE + WINED3D_FFP_EMIT_COUNT)
++    {
++        /* No name list exists for these -- they are WineD3D's own emitters,
++         * identified by index, and the caller already prints the number. No
++         * formatting here on purpose: the island reaches libc through Box86's
++         * stub list, and half of it aborts by design. */
++        return "ffp_attrib_ops.generic[]";
++    }
++    if (slot == MGS2_WINE_SLOT_BASE)
++        return "glDisableWINE";
++    if (slot == MGS2_WINE_SLOT_BASE + 1)
++        return "glEnableWINE";
++    return NULL;
++}
++
++/*
++ * glDrawBuffer(), implemented for the island in terms of glDrawBuffers().
++ *
++ * This is a RESOLUTION, not a stand-in. The scalar entry point does not exist on
++ * this stack at all: libmali exports glDrawBuffers and glReadBuffer but no
++ * glDrawBuffer (readelf on the device), and Wine's GLES path does not fill the
++ * unix half of it either, so the guest's own slot ends in code the island cannot
++ * call. The array form with one element is the documented GLES equivalent, and
++ * it is the mapping this tree ALREADY uses for the same reason in
++ * wined3d_context_gl_apply_draw_buffers(); this puts it where the island's own
++ * table can use it too.
++ *
++ * It is installed only when glDrawBuffers itself resolved. If it did not, the
++ * slot keeps whatever the failure path put there -- an unresolved call must fail,
++ * not quietly do nothing.
++ *
++ * Found by the diagnostic trap: "called UNRESOLVED GL slot 90 (glDrawBuffer)
++ * from wined3d_context_gl_apply_fbo_state+0x2a0", which is the inlined
++ * wined3d_context_gl_set_draw_buffer(context_gl, GL_NONE) on the FBO attach
++ * path. Section 18 of docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md.
++ */
++static void (WINE_GLAPI *mgs2_island_native_draw_buffers)(GLsizei n, const GLenum *bufs);
++
++static void WINE_GLAPI mgs2_island_gl_draw_buffer(GLenum buffer)
++{
++    mgs2_island_native_draw_buffers(1, &buffer);
++}
++
+ const struct wined3d_gl_info *mgs2_island_gl_info(const struct wined3d_gl_info *guest)
+ {
+     static struct wined3d_gl_info translated;
+@@ -7628,6 +7702,7 @@
+          * device run costs ten minutes each; this names every gap in a single
+          * run so the remaining work can be seen rather than discovered. */
+         unsigned int null_in = 0, ok = 0, failed = 0;
++        int draw_buffer_slot = -1;
+ 
+         for (i = 0; i < count; ++i)
+         {
+@@ -7641,7 +7716,37 @@
+             if (!slot[i])
+                 slot[i] = mgs2_island_try_resolve(before);
+             if (slot[i]) ++ok;
+-            else { ++failed; mgs2_island_report_unresolved((unsigned int)i, before); }
++            else
++            {
++                ++failed;
++                mgs2_island_report_unresolved((unsigned int)i, before);
++                slot[i] = mgs2_island_gl_trap((unsigned int)i);
++                if (!strcmp(mgs2_gl_slot_name[i], "glDrawBuffer"))
++                    draw_buffer_slot = (int)i;
++            }
++        }
++
++        /* The scalar draw-buffer entry point, once the array form is known to
++         * have resolved. Ordering matters: glDrawBuffers is an extension slot and
++         * is translated later in this same pass, so this cannot go inside the
++         * loop. */
++        if (draw_buffer_slot >= 0)
++        {
++            if (translated.gl_ops.ext.p_glDrawBuffers)
++            {
++                mgs2_island_native_draw_buffers = translated.gl_ops.ext.p_glDrawBuffers;
++                ((void **)&translated.gl_ops)[draw_buffer_slot] =
++                        (void *)mgs2_island_gl_draw_buffer;
++                --failed;
++                ++ok;
++                mgs2_island_report_substitution((unsigned int)draw_buffer_slot,
++                        "glDrawBuffer", "glDrawBuffers(1, &buffer)");
++            }
++            else
++            {
++                mgs2_island_report_substitution((unsigned int)draw_buffer_slot,
++                        "glDrawBuffer", "NOT substituted: glDrawBuffers is unresolved too");
++            }
+         }
+ 
+         /* fbo_ops: same treatment, same key. Reported with the slot index
+@@ -7663,6 +7768,7 @@
+             {
+                 ++failed;
+                 mgs2_island_report_unresolved((unsigned int)(count + i), before);
++                slot[i] = mgs2_island_gl_trap((unsigned int)(MGS2_FBO_SLOT_BASE + i));
+             }
+         }
+ 
+@@ -7681,6 +7787,7 @@
+             {
+                 ++failed;
+                 mgs2_island_report_unresolved((unsigned int)(count + 0x100 + i), before);
++                slot[i] = mgs2_island_gl_trap((unsigned int)(MGS2_FFP_SLOT_BASE + i));
+             }
+         }
+ 
+@@ -7692,11 +7799,19 @@
+         if (translated.p_glDisableWINE
+                 && !(translated.p_glDisableWINE = mgs2_island_try_resolve(
+                         (void *)translated.p_glDisableWINE)))
+-            { ++failed; mgs2_island_report_unresolved((unsigned int)(count + 0x200), NULL); }
++            {
++                ++failed;
++                mgs2_island_report_unresolved((unsigned int)(count + 0x200), NULL);
++                translated.p_glDisableWINE = (void (WINE_GLAPI *)(GLenum))mgs2_island_gl_trap((unsigned int)MGS2_WINE_SLOT_BASE);
++            }
+         if (translated.p_glEnableWINE
+                 && !(translated.p_glEnableWINE = mgs2_island_try_resolve(
+                         (void *)translated.p_glEnableWINE)))
+-            { ++failed; mgs2_island_report_unresolved((unsigned int)(count + 0x201), NULL); }
++            {
++                ++failed;
++                mgs2_island_report_unresolved((unsigned int)(count + 0x201), NULL);
++                translated.p_glEnableWINE = (void (WINE_GLAPI *)(GLenum))mgs2_island_gl_trap((unsigned int)(MGS2_WINE_SLOT_BASE + 1));
++            }
+ 
+         /* Context creation stays on the x86 side by design (section 13.6 of the
+          * reinforcement frame-budget brief), so this one is not translated at

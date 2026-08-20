@@ -52,6 +52,11 @@ docs/briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md
                            START HERE for the still-open intermittent SFX loss:
                            exact artefacts, retracted patch-14 CC hypothesis,
                            independent review, and the next bounded capture
+docs/briefs/MGS2_DMSYNTH_RESUME_RECOVER_2026-08-19.md
+                           START HERE for sound lost after suspend/resume: the
+                           synth sink's one-shot transport and INFINITE wait,
+                           dmsynth p35's watchdog, its same-binary control arm,
+                           and why production p34 is not byte-reproducible
 docs/briefs/MGS2_RUNTIME_BUG_CAPTURE_2026-08-09.md
                            full chronological record of SFX work and the captured
                            PeekMessage no-render/input stall
@@ -72,6 +77,33 @@ docs/briefs/MGS2_SHADER_FIRST_USE_RESEARCH_2026-08-13.md
 docs/briefs/MGS2_NATIVE_DSOUND_FIR_2026-08-13.md
                            FINALPLAY4 native audio work: exact guest hotspot,
                            bridge ABI, fixed-clock A/B, production hashes and rollback
+docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md
+                           START HERE before widening the native ARM island: the
+                           two next roots already have A/B wrappers in every
+                           shipped binary, entry 34 faults at its own bridge+0xB
+                           when armed, the controls that prove the harness is not
+                           at fault, why the attract route cannot measure this,
+                           and the production Box86 patch record gap it exposed
+docs/briefs/MGS2_NATIVE_CS_DRAW_BLACK_FRAME_2026-08-20.md
+                           START HERE for the rejected generic CS DRAW boundary:
+                           profile rationale, entry-37 closure work, A/B and
+                           re-entry calibration, withdrawn FPS readings, clean
+                           sound-with-black-picture proof, byte-checked rollback
+                           and the only valid correctness-first follow-up
+docs/briefs/MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md
+                           START HERE after p67: lower entry 38's exact ABI and
+                           correctness proof, the separately captured direct
+                           self-owned mutex freeze, debugger recovery, passive
+                           mutex ring + immediate symmetric p68 A/B, and the
+                           isolated native context_apply_draw_state() gate
+docs/briefs/MGS2_ISLAND_MEASURED_2026-08-16c.md
+                           the entry-10 measurement the ABBA harness exists for:
+                           -8.87 ms/frame, and section 4 on the unfinished
+                           fail-closed GL preflight
+docs/briefs/MGS2_ISLAND_BATCH_STATE_MEASURED_2026-08-16d.md
+                           entry 4 / mgs2_batch_flush: +0.899 fps once the guest
+                           batch object is shared, and why the duplicate-state
+                           implementation had to be closed
 docs/briefs/MGS2_PERF_BRIEF_43.md   START HERE for performance: native Wine
                                     memmove, exact copy census, cached DISCARD
                                     shadow and measured 30 fps at the heavy spot
@@ -131,6 +163,13 @@ source and configured i386 build deliberately live one level above it:
     DirectMusic / AudioPath / synth lifetime and SFX pipeline.  Start here for
     missing gameplay audio; do not start in DirectSound unless evidence points
     there.
+    As of 2026-08-19 `dmsynth/synthsink.c` is the exported patch record plus
+    patch 60 (the p35 sink watchdog), reverted from an unexported startup /
+    lifetime change set that shipped only in `dmsynth_audit_round3.dll`; that
+    change set is kept as `wine-patches/UNAPPLIED-dmsynth-sink-startup-lifetime.diff`.
+    Production `dmsynth_p34_interp_reset.dll` is NOT byte-reproducible from this
+    build tree -- same functions, different codegen and fluidsynth lib -- so A/B
+    the watchdog with its env knob inside one binary, not against p34.
 
 ../recovered-session/wine-11.0/dlls/dmime/performance.c
 ../recovered-session/wine-11.0/dlls/dmime/segmentstate.c
@@ -293,14 +332,14 @@ effect is measured for it in either direction. The GPU governor is the one
 measured gain: 15.21 -> 16.85 fps, +10.8%, interleaved arms in one process at one
 spot, CPU cap holding 1992000 throughout. It supersedes a dead-end entry that was
 correct before the cooling was fixed
-FINALPLAY6 is production: island entry 10 remains the measured
+FINALPLAY6 was the previous production baseline: island entry 10 remains the measured
 `wined3d_buffer_load` win (-8.87 ms/frame, about +2.1 fps), and entry 4 now
 routes native `mgs2_batch_flush`. Entry 4 uses the authoritative guest batch
 object shared across the cut by the paired island31/p56 binaries; ten stable
 same-process ABBA pairs measured 53.466 routed versus 56.050 guest ms/frame,
 paired median -2.680 ms/frame and +0.899 fps (+4.8%), with zero faults. The
-first duplicate-state implementation crashed and is closed. The production
-allow-list has 17 entries. A real external-launcher smoke loaded the target save
+first duplicate-state implementation crashed and is closed. Its production
+allow-list had 17 entries. A real external-launcher smoke loaded the target save
 and completed all 12 walk bursts with one process, 16 entries encountered,
 class-B 1616 armed, byte-identical mount targets and zero island faults. The
 owner explicitly authorised promotion on 2026-08-16; island29+p55 plus the old
@@ -312,7 +351,143 @@ futex behind NtWaitForAlertByThreadId, NOT a CS queue word, so that proves only
 asserted and is WITHDRAWN: Wine 11 publishes queue->head with InterlockedExchange
 and guards the wait race with InterlockedCompareExchange, and Box86 barriers
 lock-prefixed ops regardless of STRONGMEM. Read section 24 before theorising
-again; the queue head/tail and waiting_for_event have never been read
+again. The queue head/tail and waiting_for_event have now been read once, on
+2026-08-19, but on an island-entry-34 stall and NOT on the production freeze, so
+that reading says nothing about this bug
+FINALPLAY6's box86 was box86-island32-prod, and until 2026-08-19 no brief described
+it and no patch recorded half of it: patch 08 carried the hot-page budget fix
+only, while the deployed binary also makes `hotpage`/`hotpage_cnt` `__thread`.
+Now split into patches 08 and 09, verified by PT_TLS growing 0x2bc -> 0x2cc
+between island32-hotpage and island32-prod. BOTH changes are unmeasured, in
+either direction; box86-island31 is the last binary without them
+entry 23 (wined3d_rendertarget_view_load_location) is measured: a robust positive
+direction, about -2 to -2.6 ms/frame in the scene played, 24 of 25 balanced cycles
+favouring routed, zero faults in a live session on the owner's save. Do NOT quote a
+sigma or a sign-test p for it -- 20 of those 25 cycles come from one deterministic
+stretch with identical call counts and are not independent trials -- and note that
+the +1.76 fps figure is the MEAN pair delta while the median is about +1.3 fps
+FINALPLAY7 is production: box86-island41 with the unchanged
+wined3d_p56_batch_state.dll, the old 17-entry allow-list plus entry 23, and no
+entry 34 or 37. Its correctness soak ran one byte-checked process at fixed
+1992 MHz for 21 complete 300-frame PRESENT windows (6300 frames), class-B armed
+with 1616 functions, zero island/native faults, and the owner reported correct
+play and picture. A following launch through the external PortMaster wrapper
+selected the same live binaries and exact 18-entry list with no A/B variable.
+This promotion claims only entry 23's already recorded about -2 to -2.6 ms/frame
+direction; the soak FPS varied with the scene and is not a new measurement.
+Immediate rollback is box86-island32-prod + p56 + the previous 17-entry list
+the old renderer frame budget is RETIRED as a decision basis. It put 22.0 ms libmali
+plus 20.4 ms present near a 42.4 ms/frame floor; the same kind of route now measures
+37.2 ms/frame, so that floor described a capture, a governor state and a WineD3D
+that no longer exist. What is unknown, and blocks the next decision, is how today's
+37 ms splits between translated x86 WineD3D, native ARM island, libmali and
+present/readback. One fresh profile of island41 on a heavy spot answers it; nothing
+should be chosen from the old budget
+the fresh island41 heavy-scene profile is now captured: one external 36,426-sample
+cycles:u capture of wined3d_cs, CPU fixed 1992 MHz, both mounted binary targets
+byte-checked, guest map 16,487/262,144 with overflow=0 and no unresolved JIT
+samples. Of all user cycles, native libmali is 42.48%, Box86 JIT is 41.76%, and
+resolved guest wined3d.dll alone is 26.47%; the leading block is draw_primitive at
+RVA 0x59e20 (5.424%). These are CPU-cycle shares, NOT ms/frame -- the neighbouring
+frame windows were not timestamp-correlated. They rule out the "only 2-3 ms left"
+case and make a DRAW-first generic CS-handler boundary the next research patch;
+they do not make a whole thread port or claim a libmali gain
+the DRAW-first generic CS boundary (entry 37) is REJECTED in its p66 form. It
+smoked and timed without a native fault, but the required A/B-disabled,
+always-routed playtest produced sound and continuously advancing PRESENT with NO
+PICTURE. The process stayed alive, 300-frame windows reported 58--60 fps and
+0.84--1.15 ms/frame readback, proving those fast windows were presenting an
+incorrect/empty frame rather than rendering the game. Therefore withdraw the
+raw -61.732 and calibrated -58.860 ms/frame figures as optimisation results,
+not merely as scene-attribution errors. Earlier exact windows may also have been
+the later death/MISSION FAILED screen; the original entry-37 log was not retained.
+Production never changed. Do not time or promote entry 37 again until a
+correctness-only memory census proves equal source/final GL submissions and a
+bounded frame-content witness proves the routed and guest pictures agree
+p67 refutes context TLS as the entry-37 black-frame cause and closes coarse DRAW.
+The duplicated state was real: guest `wined3d_context_tls_idx` was 21 while ARM
+held 0; p67 copied it once after two class-B witnesses and verified ARM=21. With
+zero guest fallbacks, source DRAW and final GL submissions matched exactly at
+101,305, yet the bounded frame witness retained 64 identical black frames. The
+single relocation-based writable-global audit then covered 605 functions, found
+46 referenced writable objects / 12 runtime candidates, and passed controls for
+both `mgs2_batch_ptr` and TLS. Batch is already synchronised by production entry
+4; TLS was the only new authoritative guest/ARM object and p67 disproved it.
+There is no honest second correction candidate. Do NOT time entry 37 again: the
+generic post-batching cut is closed. Any next DRAW experiment must leave context
+acquire/current-context ownership/release in guest x86 and enter ARM below them,
+with source/final counts and frame content as correctness gates before any A/B
+p68 proves the lower DRAW cut can render correctly: guest x86 keeps context
+acquire/current-context ownership, draw-state application, barriers and release;
+only `wined3d_context_gl_draw_primitive_arrays()` is native entry 38. On the live
+heavy spot source/final counts were exactly 4,982,735/4,982,735, fallback 0, and
+the last 64 of 17,832 bounded frame samples were all lit and unique; an external
+screenshot showed correct gameplay. The later symmetric p68b A/B completed 46
+cycles, 28 balanced within 2%: paired median +0.002 ms/frame, mean +0.109 and
+13/28 favouring routed. The 17 balanced cycles on the 28k-call plateau give
+median +0.046. This is inside the pre-registered <=0.3 ms/frame close gate, so
+entry 38 is closed as a performance root and is not production. The session then froze for a
+separate, named reason: with BOX86_MUTEX_ALIGNED=1, direct mutex 0x6040623c had
+lock=2 and owner wine_dinput_worker TID 29633 while that owner, main and
+wined3d_cs all waited on the same mutex. One debugger unlock returned 0, zeroed
+the mutex and immediately resumed rendering/counts. Exact symbols in the
+matching unstripped win32u identify 0x6040623c as `display_lock` (RVA 0x20623c),
+not `session_lock` (RVA 0x226284, live 0x60426284). Bypassing Box86's shadow pool
+did not close this display-lock self-deadlock. Do not attribute this occurrence
+or its frequency to entry 38, and do not confuse it with the 0x400f alert-futex freeze. Full
+standalone record and next gates:
+`docs/briefs/MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md`
+p66/p67 moved current-context ownership and context_apply_draw_state into ARM
+together; p68 moved both back together. They therefore did NOT prove that state
+apply itself must stay guest. The passive bounded display-lock ring remains
+available; the next renderer action is context_apply_draw_state alone in ARM,
+correctness first, while acquire/current ownership/release stay guest. WINE_NO_TRACE_MSGS is
+not another experiment: the documented production recipe already defines it
+with WINE_NO_DEBUG_MSGS, and brief 29 records TRACE/debug removed
+the first 2026-08-19 attempt to widen past 17 entries was blocked by entry 34
+appearing to fault at its bridge +0xB. That interim diagnosis is superseded by
+sections 11 onward of the same brief: the parked guest EIP hid native ARM calls
+through guest pointers; patches 61--63 and box86 patch 10 closed those routing
+classes. Entry 34 now survives gameplay but remains unmeasured because its guest
+A/B fallback deadlocks; entry 23 is measured and promoted in FINALPLAY7
+the armhf cross toolchain is installed again (Ubuntu gcc 15.2.0), so box86, the
+island objects and island_gl_reach.py all work here; the tool now finishes in 25 s
+rather than the 45 minutes at which it was abandoned. box86-island32-prod itself
+is still not reproducible: it was built with a toolchain that lived in a deleted
+scratch directory
+patch 61 is the island's real GL defect and its fix: the translated gl_info was
+consulted only by GL_EXTCALL(), so 315 plain gl_ops/fbo_ops call sites called
+GUEST x86 pointers and native ARM branched into x86 bytes. 135 of them are now
+routed through MGS2_GL_INFO() and the extra tables are translated; the shipping
+i386 objects are byte-identical in .text/.rdata/.data across all 32 TUs. Entry 34
+no longer raises an illegal instruction -- it now fails legibly on a NULL GL slot
+production entry 22 WAS bound to the wrong guest address -- the 64-byte marker
+window matched it from a mid-function address inside the preceding function, so
+its real entry could never route. Fixed by box86 patch 10: identity is now the
+address at which the id's marker sits at its CANONICAL offset, with the marker as
+a witness and addr == base + rva(id) as a second witness once the class-B base is
+known; verified on the device, entry 22 now matches 0x7b919f50, its own start
+an unresolved GL slot now names itself: 4096 8-byte ARM stubs (movw r0,#N; b trap
+-- a plain mov cannot encode 3113) installed instead of NULL in diagnostic builds,
+and the handler prints the slot, its name and the caller from LR. It answered on
+the first run: slot 90 glDrawBuffer, from wined3d_context_gl_apply_fbo_state+0x2a0.
+libmali has glDrawBuffers and glReadBuffer but NO glDrawBuffer, and Wine's GLES
+path does not fill it either, so patch 62 has the island implement it as
+glDrawBuffers(1, &buffer) -- the mapping this tree already uses elsewhere for the
+same reason. Entry 34 then reaches DirectMusic startup and stops on the NEXT
+unrouted pointer: convert_b8g8r8a8_unorm_gles, a guest WineD3D format converter
+called through a pointer no instrumented dispatch site covers
+patch 63 closes that class by audit rather than by launches: harness/island/full/
+island_icall_audit.py lists every call through a function-pointer field in one
+entry's closure and splits routed from unrouted. Entry 34: 432 functions, 47
+unrouted, 39 of them real calls, all now routed through the existing
+MGS2_P50_CALL() with one site id per family. Guest .text/.rdata/.data byte-identical
+across all 32 TUs. ENTRY 34 NOW RUNS: 4200+ frames through the attract demo, its
+death and the MISSION FAILED menu, zero island faults, correct rendering, and the
+same on box86-island41 with diagnostics off (timing-capable). Nothing is claimed
+about frame rate -- attract mode cannot measure it. The measurement needs the
+owner's save and ~20 minutes: device/launch-island-ab.sh 34 with
+MGS2_BOX86_BIN=box86-island41, read with harness/island_ab_read.py
 the attract-mode demo is NOT a frame-rate A/B harness: it sits on the 60 Hz cap,
 so four interleaved 240 s arms differed by -0.05%, which measures the display and
 not the change. Its determinism is real but only useful for stall buckets

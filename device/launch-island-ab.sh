@@ -31,7 +31,7 @@ set -eu
 
 ENTRY="${1:-10}"
 HERE=$(cd "$(dirname "$0")" && pwd)
-PRODUCTION_ONLY="0,1,2,3,4,5,6,9,10,14,18,19,22,28,29,32,33"
+PRODUCTION_ONLY="0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33"
 
 # A candidate outside the production set must still be armed before its A/B
 # wrapper can switch it. Keep all production entries identical in both arms and
@@ -45,7 +45,18 @@ esac
 # MGS2_ISLAND_AB_MEASURE, not MGS2_ISLAND_AB: the play launcher clears the
 # latter and translates the former. The name that can leak from a shell is
 # therefore not the name that arms the harness.
+# The binary is pinned to whatever launch-play.sh selects by default, not to the
+# island31 pair this file was written against. A candidate must be measured on
+# the base that is actually played: the A/B is paired inside one process, so a
+# different base does not invalidate the pairing, but it does answer a question
+# about a stack nobody runs. FINALPLAY7 uses island41; it contains the canonical
+# identity fix and the routing support required by production entry 23. Entry 34
+# remains outside production and its RunFunctionFmt fallback still deadlocks.
 MGS2_ISLAND_AB_MEASURE="$ENTRY" \
+MGS2_BOX86_BIN="${MGS2_BOX86_BIN:-box86-island41}" \
+MGS2_WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_p56_batch_state.dll}" \
+MGS2_D3D8_DLL=d3d8_finalplay3_nocullcache.dll \
+MGS2_BOX86_ISLAND_FULL=1 \
 MGS2_BOX86_ISLAND_ONLY="$MEASURE_ONLY" \
 MGS2_GL_STATS="${MGS2_GL_STATS:-300}" \
 MGS2_PLAY_WINEDEBUG="${MGS2_PLAY_WINEDEBUG:-err+all}" \

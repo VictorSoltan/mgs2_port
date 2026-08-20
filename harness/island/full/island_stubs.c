@@ -87,11 +87,8 @@ void SizeofResource(void) { mgs2_island_forbidden("SizeofResource"); }
 void SystemParametersInfoW(void) { mgs2_island_forbidden("SystemParametersInfoW"); }
 void TlsAlloc(void) { mgs2_island_forbidden("TlsAlloc"); }
 void TlsFree(void) { mgs2_island_forbidden("TlsFree"); }
-void TlsGetValue(void) { mgs2_island_forbidden("TlsGetValue"); }
-void TlsSetValue(void) { mgs2_island_forbidden("TlsSetValue"); }
 void UnhookWindowsHookEx(void) { mgs2_island_forbidden("UnhookWindowsHookEx"); }
 void UnregisterClassA(void) { mgs2_island_forbidden("UnregisterClassA"); }
-void WindowFromDC(void) { mgs2_island_forbidden("WindowFromDC"); }
 void __stdio_common_vsprintf(void) { mgs2_island_forbidden("__stdio_common_vsprintf"); }
 void __stdio_common_vsscanf(void) { mgs2_island_forbidden("__stdio_common_vsscanf"); }
 void __wine_dbg_get_channel_flags(void) { mgs2_island_forbidden("__wine_dbg_get_channel_flags"); }
@@ -156,13 +153,6 @@ void vkd3d_shader_free_shader_code(void) { mgs2_island_forbidden("vkd3d_shader_f
 void vkd3d_shader_parse_dxbc(void) { mgs2_island_forbidden("vkd3d_shader_parse_dxbc"); }
 void vkd3d_shader_scan(void) { mgs2_island_forbidden("vkd3d_shader_scan"); }
 void vkd3d_utils_set_log_callback(void) { mgs2_island_forbidden("vkd3d_utils_set_log_callback"); }
-void wglCreateContext(void) { mgs2_island_forbidden("wglCreateContext"); }
-void wglDeleteContext(void) { mgs2_island_forbidden("wglDeleteContext"); }
-void wglGetCurrentContext(void) { mgs2_island_forbidden("wglGetCurrentContext"); }
-void wglGetCurrentDC(void) { mgs2_island_forbidden("wglGetCurrentDC"); }
-void wglGetProcAddress(void) { mgs2_island_forbidden("wglGetProcAddress"); }
-void wglMakeCurrent(void) { mgs2_island_forbidden("wglMakeCurrent"); }
-void wglShareLists(void) { mgs2_island_forbidden("wglShareLists"); }
 void wined3d_adapter_cleanup(void) { mgs2_island_forbidden("wined3d_adapter_cleanup"); }
 void wined3d_adapter_init(void) { mgs2_island_forbidden("wined3d_adapter_init"); }
 void wined3d_adapter_vk_get_memory_type_index(void) { mgs2_island_forbidden("wined3d_adapter_vk_get_memory_type_index"); }

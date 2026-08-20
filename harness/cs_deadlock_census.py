@@ -30,6 +30,16 @@ Anything less is INDETERMINATE, which is a better answer than a confident wrong
 one. The census publishes the live cs pointer and the field offsets, so this
 needs no debug info.
 
+WHEN THE CS THREAD CANNOT BE NAMED. `comm` is "wined3d_cs" only while Wine has
+set the thread name; a capture on 2026-08-19 found every task in the process
+called `mgs2_sse_rg353v`, so the match failed, `wchan` came back None, and the
+tool printed INDETERMINATE over a process that was demonstrably not running --
+the queue was non-empty, nothing advanced, and the whole process consumed zero
+CPU. Losing a capture to a naming heuristic is not acceptable, so there is now a
+fallback witness: the summed CPU time of every task, read from /proc across the
+same sample window. It is independent of the census -- different producer, other
+side of the emulator -- which is what a control here has to be.
+
 usage: cs_deadlock_census.py [--pid N] [--samples 5] [--interval 0.2]
 """
 import argparse
@@ -40,7 +50,8 @@ import time
 
 MAGIC = 0x32355250  # PR52
 IMAGE_BASE = 0x10000000
-SYMBOL_VMA = 0x101D40C0
+VERSION = 1
+SIZE_WORDS = 0x214
 RING = 64
 
 EVENTS = {1: "SUBMIT", 2: "ALERT", 3: "WAIT_PREPARE",
@@ -82,13 +93,103 @@ def cs_thread(pid):
     return None, None, None
 
 
+def process_cpu(pid):
+    """Summed utime+stime of every task, in clock ticks.
+
+    The independent witness for "this process is not running". Reading it once
+    before and once after the sample window is two reads of a counter, not the
+    per-thread wchan sampling that amplified the freezes it was measuring in
+    August -- see rule 2 in AGENTS.md.
+    """
+    total = 0
+    base = f"/proc/{pid}/task"
+    for tid in os.listdir(base):
+        try:
+            with open(f"{base}/{tid}/stat") as s:
+                f = s.read().rsplit(") ", 1)[-1].split()
+            total += int(f[11]) + int(f[12])   # utime, stime after the comm field
+        except (OSError, IndexError, ValueError):
+            continue
+    return total
+
+
+def task_table(pid):
+    """comm and wchan for every task. Only for the already-stopped process."""
+    rows = []
+    base = f"/proc/{pid}/task"
+    for tid in sorted(os.listdir(base), key=int):
+        try:
+            wchan = open(f"{base}/{tid}/wchan").read().strip()
+        except OSError:
+            wchan = "?"
+        rows.append((tid, _comm(f"{base}/{tid}") or "?", wchan))
+    return rows
+
+
+def module_mappings(pid, module="wined3d.dll"):
+    """Return readable mappings of the loaded WineD3D image.
+
+    The census is a writable data object, so its RVA legitimately moves between
+    production DLLs.  Searching the module mapping by its self-describing
+    header is safer than preserving a VMA from an older build.
+    """
+    mappings = []
+    with open(f"/proc/{pid}/maps") as s:
+        for line in s:
+            f = line.split()
+            if len(f) >= 6 and "r" in f[1] and f[-1].endswith(module):
+                start, end = (int(v, 16) for v in f[0].split("-", 1))
+                mappings.append((start, end))
+    if not mappings:
+        raise RuntimeError(f"no readable mapping for {module}")
+    return mappings
+
+
 def module_base(pid, module="wined3d.dll"):
+    """Return the PE image base for an explicit legacy --vma override."""
     with open(f"/proc/{pid}/maps") as s:
         for line in s:
             f = line.split()
             if len(f) >= 6 and f[2] == "00000000" and f[-1].endswith(module):
                 return int(f[0].split("-", 1)[0], 16)
     raise RuntimeError(f"no offset-zero mapping for {module}")
+
+
+def find_census(fd, mappings):
+    """Find the unique PR52 v1 / 0x214-word public census header."""
+    needle = struct.pack("<I", MAGIC)
+    matches = []
+    chunk_size = 64 * 1024
+
+    for start, end in mappings:
+        pos, tail = start, b""
+        while pos < end:
+            data = os.pread(fd, min(chunk_size, end - pos), pos)
+            if not data:
+                break
+            window = tail + data
+            scan = 0
+            while True:
+                found = window.find(needle, scan)
+                if found < 0:
+                    break
+                addr = pos - len(tail) + found
+                try:
+                    head = HEAD.unpack(os.pread(fd, HEAD.size, addr))
+                except struct.error:
+                    scan = found + 1
+                    continue
+                magic, version, size_words, signature = head[:4]
+                if (magic == MAGIC and version == VERSION and size_words == SIZE_WORDS
+                        and signature == (~MAGIC & 0xffffffff)):
+                    matches.append(addr)
+                scan = found + 1
+            tail = window[-3:]
+            pos += len(data)
+
+    if len(matches) != 1:
+        raise RuntimeError(f"expected one PR52 census header, found {len(matches)}")
+    return matches[0]
 
 
 def sample(fd, addr):
@@ -116,20 +217,28 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pid", type=int)
-    ap.add_argument("--vma", type=lambda s: int(s, 0), default=SYMBOL_VMA)
+    ap.add_argument("--vma", type=lambda s: int(s, 0),
+                    help="legacy PE VMA override; normally auto-discovered")
     ap.add_argument("--samples", type=int, default=5)
     ap.add_argument("--interval", type=float, default=0.2)
     args = ap.parse_args()
 
     pid = args.pid or find_pid()
-    addr = module_base(pid) + args.vma - IMAGE_BASE
     fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+    try:
+        addr = (module_base(pid) + args.vma - IMAGE_BASE if args.vma is not None
+                else find_census(fd, module_mappings(pid)))
+    except Exception:
+        os.close(fd)
+        raise
 
+    cpu_before = process_cpu(pid)
     shots = []
     for i in range(args.samples):
         shots.append(sample(fd, addr))
         if i + 1 < args.samples:
             time.sleep(args.interval)
+    cpu_ticks = process_cpu(pid) - cpu_before
 
     first, last = shots[0], shots[-1]
     if not first["enabled"]:
@@ -161,6 +270,7 @@ def main():
     queue_stable = all(stable(k) for k in ("dh", "dt", "mh", "mt"))
     wfe_stable = stable("wfe")
     asleep = wchan is not None and wchan.startswith("__futex")
+    no_cpu = cpu_ticks == 0
 
     span = args.interval * (args.samples - 1)
     print(f"stability over {args.samples} samples / {span:.1f}s:")
@@ -168,7 +278,17 @@ def main():
           f"   ring {'unchanged' if ring_stable else 'ADVANCING'}"
           f"   queue {'unchanged' if queue_stable else 'ADVANCING'}"
           f"   waiting_for_event {'unchanged' if wfe_stable else 'ADVANCING'}")
-    print(f"  CS thread {'blocked in futex' if asleep else 'NOT blocked (wchan ' + str(wchan) + ')'}\n")
+    print(f"  CS thread {'blocked in futex' if asleep else 'NOT blocked (wchan ' + str(wchan) + ')'}")
+    print(f"  process CPU over the window: {cpu_ticks} ticks"
+          f"   ({'no task ran at all' if no_cpu else 'something is running'})")
+    if tid is None:
+        # The comm heuristic missed. Say so, name every task once, and fall back
+        # to the CPU witness rather than throwing the capture away.
+        print("  CS thread not identified by comm; using the process CPU witness."
+              " Tasks at this moment:")
+        for t, comm, wc in task_table(pid):
+            print(f"      {t:<8} {comm:<16} {wc}")
+    print()
 
     print(f"last {min(last['ring_write'], RING)} sync events, oldest first:")
     start = max(0, last["ring_write"] - RING)
@@ -179,7 +299,12 @@ def main():
         print(f"  {EVENTS.get(ev, ev):<20} tid {thread:#7x} exec {ex:<9}"
               f" D {edh:#x}/{edt:#x} M {emh:#x}/{emt:#x} wfe {ewfe}")
 
-    frozen = asleep and exec_stable and ring_stable and queue_stable and wfe_stable
+    # Either witness will do for "nothing is advancing": the named CS thread
+    # parked in a futex, or -- when the name is missing -- no task in the whole
+    # process having consumed a single tick. The counter checks are required in
+    # both cases, so a busy process still reads as INDETERMINATE.
+    stopped = asleep or (tid is None and no_cpu)
+    frozen = stopped and exec_stable and ring_stable and queue_stable and wfe_stable
     nonempty = lv["dh"] != lv["dt"] or lv["mh"] != lv["mt"]
 
     print()
@@ -189,6 +314,15 @@ def main():
         print("consumer is running -- do not read it as a stuck consumer. Re-run")
         print("this while the game is actually frozen.")
         rc = 2
+    elif not lv["wfe"] and nonempty:
+        print("VERDICT C: nothing advances, the DEFAULT queue holds published work,")
+        print("and waiting_for_event is 0 -- so the consumer did NOT stop in the")
+        print("wined3d wait path, and with no task consuming CPU this is not a")
+        print("livelock either. It stopped somewhere inside command execution.")
+        print("Suspect whatever that run routed differently -- an armed island")
+        print("entry first, since a native function holding a lock the guest half")
+        print("of the process expects to release looks exactly like this.")
+        rc = 3
     elif not lv["wfe"]:
         print("VERDICT INDETERMINATE: everything is stable and the CS thread is")
         print("blocked, but waiting_for_event is 0, so it did not stop in the")

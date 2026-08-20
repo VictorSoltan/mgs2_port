@@ -1,0 +1,37 @@
+Patch 08 -- spend the hot-page budget only on addresses in the hot page.
+
+`SetHotPage()` marks one page as recently self-modifying and gives it a budget of
+HOTPAGE_MARK checks; `isInHotPage()` is asked about an address on the dynarec's
+protection path. The original decremented the budget on EVERY call, including
+calls about addresses in some other page entirely, so unrelated traffic spent the
+budget of the page that actually needed it and the hot page fell back to full
+protection early.
+
+The change is order-of-operations only: test membership first, and charge the
+budget only for a hit. It cannot make isInHotPage() return true where it
+returned false; it can only keep it true for longer on the page it is about.
+
+NOT MEASURED. There is no A/B for this patch: it went into
+`box86-island32-hotpage` and then into the production `box86-island32-prod`
+without a frame-rate arm on either. Treat it as an unmeasured change that is
+currently deployed, not as a win. `box86-island31` is the last binary without it.
+
+Verifiable without a disassembler: this hunk alone is what separates
+`box86-island32-hotpage` from `box86-island31`, and patch 09 is what separates
+`box86-island32-prod` from `box86-island32-hotpage` -- .tbss is 0x294 bytes in
+both of the first two and 0x2a4 in prod.
+
+--- a/src/custommem.c
++++ b/src/custommem.c
+@@ -893,8 +893,10 @@
+ {
+     if(!hotpage_cnt)
+         return 0;
++    if(addr < hotpage || addr >= hotpage + box86_pagesize)
++        return 0;
+     --hotpage_cnt;
+-    return (addr>=hotpage) && (addr<hotpage+box86_pagesize);
++    return 1;
+ }
+ int checkInHotPage(uintptr_t addr)
+ {

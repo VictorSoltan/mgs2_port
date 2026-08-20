@@ -21,6 +21,7 @@
 
 #include "debug.h"
 #include "box86context.h"
+#include "callback.h"
 #include "x86emu.h"
 #include "emu/x86emu_private.h"
 #include "emu/x86run_private.h"
@@ -66,6 +67,279 @@ void *mgs2_island_teb(void)
         abort();
     }
     return *(void **)(fs + 0x18);
+}
+
+/* Win32 TLS must use the guest TEB, not host pthread TLS. Wine i386 keeps
+ * LastErrorValue at 0x34, 64 inline TLS cells at 0xe10, and the expansion-array
+ * pointer at 0xf94. A missing expansion array cannot be allocated with host
+ * malloc: guest HeapFree would later receive the wrong allocator's pointer. */
+#define MGS2_TEB_LAST_ERROR          0x034
+#define MGS2_TEB_TLS_SLOTS           0xe10
+#define MGS2_TEB_TLS_EXPANSION       0xf94
+#define MGS2_TLS_INLINE_SLOTS        64
+#define MGS2_TLS_EXPANSION_SLOTS     1024
+#define MGS2_ERROR_SUCCESS           0
+#define MGS2_ERROR_INVALID_PARAMETER 87
+
+void *TlsGetValue(uint32_t index)
+{
+    unsigned char *teb = mgs2_island_teb();
+    uint32_t value;
+
+    *(uint32_t *)(teb + MGS2_TEB_LAST_ERROR) = MGS2_ERROR_SUCCESS;
+    if (index < MGS2_TLS_INLINE_SLOTS)
+        value = *(uint32_t *)(teb + MGS2_TEB_TLS_SLOTS + index * sizeof(uint32_t));
+    else
+    {
+        uint32_t expansion;
+
+        index -= MGS2_TLS_INLINE_SLOTS;
+        if (index >= MGS2_TLS_EXPANSION_SLOTS)
+        {
+            *(uint32_t *)(teb + MGS2_TEB_LAST_ERROR) = MGS2_ERROR_INVALID_PARAMETER;
+            return NULL;
+        }
+        expansion = *(uint32_t *)(teb + MGS2_TEB_TLS_EXPANSION);
+        if (!expansion)
+            return NULL;
+        value = ((uint32_t *)(uintptr_t)expansion)[index];
+    }
+    return (void *)(uintptr_t)value;
+}
+
+int TlsSetValue(uint32_t index, void *value)
+{
+    unsigned char *teb = mgs2_island_teb();
+
+    if (index < MGS2_TLS_INLINE_SLOTS)
+        *(uint32_t *)(teb + MGS2_TEB_TLS_SLOTS + index * sizeof(uint32_t)) = (uintptr_t)value;
+    else
+    {
+        uint32_t expansion;
+
+        index -= MGS2_TLS_INLINE_SLOTS;
+        if (index >= MGS2_TLS_EXPANSION_SLOTS)
+        {
+            *(uint32_t *)(teb + MGS2_TEB_LAST_ERROR) = MGS2_ERROR_INVALID_PARAMETER;
+            return 0;
+        }
+        expansion = *(uint32_t *)(teb + MGS2_TEB_TLS_EXPANSION);
+        if (!expansion)
+        {
+            printf_log(LOG_NONE, "MGS2 island: TlsSetValue expansion array is absent;"
+                    " refusing host-heap substitution\n");
+            abort();
+        }
+        ((uint32_t *)(uintptr_t)expansion)[index] = (uintptr_t)value;
+    }
+    return 1;
+}
+
+static uintptr_t mgs2_guest_import(const char *name, uintptr_t *cached);
+
+/* DCE ownership is mutable guest win32u state. Resolve Wine's real export once
+ * and execute it under Box86 instead of manufacturing a second native cache. */
+void *WindowFromDC(void *dc)
+{
+    static uintptr_t fn;
+    static volatile unsigned int diagnostic_calls;
+    uint32_t result;
+
+    if (!__atomic_load_n(&fn, __ATOMIC_ACQUIRE))
+    {
+        mgs2_guest_import("WindowFromDC", &fn);
+#if MGS2_ISLAND_DIAGNOSTICS
+        printf_log(LOG_NONE, "MGS2 island: guest WindowFromDC resolved to %p\n", (void *)fn);
+#endif
+    }
+#if MGS2_ISLAND_DIAGNOSTICS
+    if (diagnostic_calls < 4)
+        printf_log(LOG_NONE, "MGS2 island: guest WindowFromDC enter dc %p\n", dc);
+#endif
+    result = RunFunctionFmt(fn, "p", dc);
+#if MGS2_ISLAND_DIAGNOSTICS
+    if (diagnostic_calls++ < 4)
+        printf_log(LOG_NONE, "MGS2 island: guest WindowFromDC return %#x\n", result);
+#endif
+    return (void *)(uintptr_t)result;
+}
+
+static uintptr_t mgs2_guest_wgl_get_pixel_format;
+
+static int mgs2_island_wgl_get_pixel_format(void *dc)
+{
+    uintptr_t fn = __atomic_load_n(&mgs2_guest_wgl_get_pixel_format, __ATOMIC_ACQUIRE);
+
+    if (!fn)
+    {
+        printf_log(LOG_NONE, "MGS2 island: wglGetPixelFormat thunk called before install\n");
+        abort();
+    }
+    return (int)RunFunctionFmt(fn, "p", dc);
+}
+
+void *mgs2_island_wrap_wgl_get_pixel_format(void *guest)
+{
+    uintptr_t expected = 0;
+    uintptr_t fn = (uintptr_t)guest;
+
+    if (!fn)
+        return NULL;
+    if (!__atomic_compare_exchange_n(&mgs2_guest_wgl_get_pixel_format,
+            &expected, fn, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
+            && expected != fn)
+    {
+        printf_log(LOG_NONE, "MGS2 island: wglGetPixelFormat target changed"
+                " from %p to %p -- refusing stale thunk\n", (void *)expected, guest);
+        abort();
+    }
+    return (void *)mgs2_island_wgl_get_pixel_format;
+}
+
+/* Desktop polygon mode has no GLES entry point on this driver. The guest
+ * opengl32 thunk is still authoritative: it performs Wine's Unix-call and
+ * returns STATUS_NOT_IMPLEMENTED when the GLES facade cannot provide the
+ * operation. Preserve that exact behaviour instead of inventing a no-op. */
+static uintptr_t mgs2_guest_gl_polygon_mode;
+
+static void mgs2_island_gl_polygon_mode(unsigned int face, unsigned int mode)
+{
+    uintptr_t fn = __atomic_load_n(&mgs2_guest_gl_polygon_mode, __ATOMIC_ACQUIRE);
+
+    if (!fn)
+    {
+        printf_log(LOG_NONE, "MGS2 island: glPolygonMode thunk called before install\n");
+        abort();
+    }
+    RunFunctionFmt(fn, "uu", face, mode);
+}
+
+void *mgs2_island_wrap_gl_polygon_mode(void *guest)
+{
+    uintptr_t expected = 0;
+    uintptr_t fn = (uintptr_t)guest;
+
+    if (!fn)
+        return NULL;
+    if (!__atomic_compare_exchange_n(&mgs2_guest_gl_polygon_mode,
+            &expected, fn, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
+            && expected != fn)
+    {
+        printf_log(LOG_NONE, "MGS2 island: glPolygonMode target changed"
+                " from %p to %p -- refusing stale thunk\n", (void *)expected, guest);
+        abort();
+    }
+    return (void *)mgs2_island_gl_polygon_mode;
+}
+
+uintptr_t mgs2_island_module_base(void);
+
+static uintptr_t mgs2_guest_import(const char *name, uintptr_t *cached)
+{
+    uintptr_t fn = __atomic_load_n(cached, __ATOMIC_ACQUIRE);
+
+    if (!fn)
+    {
+        unsigned char *image = (unsigned char *)mgs2_island_module_base();
+        uint32_t pe_offset, import_rva, import_size, descriptor_count, d;
+        uintptr_t found = 0;
+        uintptr_t expected = 0;
+
+        if (!image || *(uint16_t *)image != 0x5a4d)
+            goto not_found;
+        pe_offset = *(uint32_t *)(image + 0x3c);
+        if (*(uint32_t *)(image + pe_offset) != 0x00004550
+                || *(uint16_t *)(image + pe_offset + 24) != 0x10b)
+            goto not_found;
+        import_rva = *(uint32_t *)(image + pe_offset + 24 + 104);
+        import_size = *(uint32_t *)(image + pe_offset + 24 + 108);
+        if (!import_rva || import_size < 20)
+            goto not_found;
+        descriptor_count = import_size / 20;
+        for (d = 0; d < descriptor_count && !found; ++d)
+        {
+            uint32_t *descriptor = (uint32_t *)(image + import_rva + d * 20);
+            uint32_t lookup_rva = descriptor[0], iat_rva = descriptor[4], i;
+            uint32_t *lookup, *iat;
+
+            if (!lookup_rva && !iat_rva)
+                break;
+            if (!lookup_rva || !iat_rva)
+                continue;
+            lookup = (uint32_t *)(image + lookup_rva);
+            iat = (uint32_t *)(image + iat_rva);
+            for (i = 0; lookup[i]; ++i)
+            {
+                const char *import_name;
+
+                if (lookup[i] & 0x80000000u)
+                    continue;
+                import_name = (const char *)(image + lookup[i] + 2);
+                if (!strcmp(import_name, name))
+                {
+                    found = iat[i];
+                    break;
+                }
+            }
+        }
+not_found:
+        if (!found)
+        {
+            printf_log(LOG_NONE, "MGS2 island: cannot resolve guest import %s"
+                    " from wined3d IAT\n", name);
+            abort();
+        }
+#if MGS2_ISLAND_DIAGNOSTICS
+        printf_log(LOG_NONE, "MGS2 island: guest import %s resolved to %p\n",
+                name, (void *)found);
+#endif
+        __atomic_compare_exchange_n(cached, &expected, found, 0,
+                __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+        fn = expected ? expected : found;
+    }
+    return fn;
+}
+
+void *wglCreateContext(void *dc)
+{
+    static uintptr_t fn;
+    return (void *)(uintptr_t)RunFunctionFmt(mgs2_guest_import("wglCreateContext", &fn), "p", dc);
+}
+
+int wglDeleteContext(void *context)
+{
+    static uintptr_t fn;
+    return (int)RunFunctionFmt(mgs2_guest_import("wglDeleteContext", &fn), "p", context);
+}
+
+void *wglGetCurrentContext(void)
+{
+    static uintptr_t fn;
+    return (void *)(uintptr_t)RunFunctionFmt(mgs2_guest_import("wglGetCurrentContext", &fn), "");
+}
+
+void *wglGetCurrentDC(void)
+{
+    static uintptr_t fn;
+    return (void *)(uintptr_t)RunFunctionFmt(mgs2_guest_import("wglGetCurrentDC", &fn), "");
+}
+
+void *wglGetProcAddress(const char *name)
+{
+    static uintptr_t fn;
+    return (void *)(uintptr_t)RunFunctionFmt(mgs2_guest_import("wglGetProcAddress", &fn), "p", name);
+}
+
+int wglMakeCurrent(void *dc, void *context)
+{
+    static uintptr_t fn;
+    return (int)RunFunctionFmt(mgs2_guest_import("wglMakeCurrent", &fn), "pp", dc, context);
+}
+
+int wglShareLists(void *context1, void *context2)
+{
+    static uintptr_t fn;
+    return (int)RunFunctionFmt(mgs2_guest_import("wglShareLists", &fn), "pp", context1, context2);
 }
 
 /* MSVCRT assert. Reaching one means a WineD3D invariant failed inside native
@@ -186,6 +460,9 @@ int __stdio_common_vsprintf(unsigned long long options, char *str, size_t len,
  *
  *   _assert  _fdclass  __wine_dbg_get_channel_flags  __wine_dbg_header
  *   __wine_dbg_output  __wine_dbg_strdup  __stdio_common_vsprintf
+ *   TlsGetValue  TlsSetValue  WindowFromDC
+ *   wglCreateContext  wglDeleteContext  wglGetCurrentContext  wglGetCurrentDC
+ *   wglGetProcAddress  wglMakeCurrent  wglShareLists
  *
  * _recalloc is deliberately NOT here and stays an abort stub. It would have to
  * resize a block whose allocator is unknown: WineD3D structures reaching the

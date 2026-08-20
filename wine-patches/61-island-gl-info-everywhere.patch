@@ -1,0 +1,966 @@
+Patch 61 -- the island's translated gl_info must be used at EVERY GL call site.
+
+WHAT WAS BROKEN
+
+Patch 53 translates a guest `wined3d_gl_info` into a native copy once per device
+and returns it from `MGS2_GL_INFO()`. `GL_EXTCALL(f)` was routed through that
+macro, and patch 55 had converted a handful of individual sites by hand -- but
+only those. Every GL call written as a plain member access --
+`gl_info->gl_ops.gl.p_glFoo(...)`, `gl_info->fbo_ops.glBindFramebuffer(...)`,
+`wined3d_context_gl_get_current()->gl_info->gl_ops...` -- read the GUEST table,
+so in the ARM island it called an x86 address. There were 315 such sites.
+
+`mgs2_island_gl_info()` also translated only `gl_ops`. `translated = *guest`
+copies the whole structure, so `fbo_ops`, `ffp_attrib_ops`, `p_glDisableWINE`,
+`p_glEnableWINE` and `p_wglCreateContextAttribsARB` kept guest pointers too.
+
+HOW IT PRESENTED, AND WHY IT LOOKED LIKE SOMETHING ELSE
+
+Arming island entry 34 (`wined3d_texture_load_location`) on 2026-08-19 killed
+the renderer on the first frame with
+
+    wine: Unhandled illegal instruction at address 4002013B
+
+which is entry 34's own Box86 bridge + 0xB. That address is the bridge's `ret`,
+and it is intact -- box86 prints `x86opcode=C3`. The dynarec parks the emulated
+EIP there (`MOV32(xEIP, addr)` in dynarec_arm_00.c case 0xCC) BEFORE calling the
+wrapper, so any host fault inside native ARM code is reported to Wine at that
+address. With BOX86_SHOWSEGV=1 the real fault reads
+
+    SIGILL @0x7aeccdf0 ... opcode=55 64 8B 0D 18 00 00 00
+
+`55 64 8B 0D 18 00 00 00` is `push ebp; mov ecx, fs:0x18` -- an i386 prologue --
+and 0x7aeccdf0 is inside the mounted `opengl32.dll`, in the unnamed thunk region
+(nearest export `glFrustum` +0xac0). Native ARM had branched into x86 bytes.
+
+Two hypotheses were checked and refuted first, so they need not be checked again:
+
+  markers   entry 34's marker sits at +15 of its function and Box86 matched the
+            function start exactly (`entry 34 matched 0x7b92c6c0`, which is the
+            .eh_frame FDE start). Its duplicate at +68 is outside the 64-byte
+            window and never matches
+  layouts   every structure on the path is byte-identical between the shipping
+            i386 build and the island's armhf build -- wined3d_texture 292,
+            wined3d_texture_gl 468, wined3d_context_gl 1684, wined3d_resource
+            168 -- with a control that trips as documented: texture_stage_op is
+            16 against 12 and ffp_frag_settings 132 against 100
+
+WHAT THIS PATCH DOES
+
+  utils.c        translate fbo_ops by name (position is the name, as for
+                 gl_ops), ffp_attrib_ops through the class A/B/C ladder, the two
+                 glXxxWINE pointers likewise, and CLEAR
+                 p_wglCreateContextAttribsARB so an island call through it fails
+                 loudly -- context creation stays on the x86 side by design
+  5 files        135 call sites rewritten to go through MGS2_GL_INFO():
+                 utils.c 62, context_gl.c 26, texture_gl.c 25, gl_compat.c 21,
+                 view.c 1
+
+`adapter_gl.c` is deliberately NOT rewritten. Its 180 sites are adapter and
+extension-table initialisation, which runs on the x86 side; several of them
+ASSIGN to gl_ops/fbo_ops members through token-pasting macros, and routing those
+through a const-returning accessor would both fail to compile and, if it did
+compile, write native pointers into the guest's own table.
+
+VERIFICATION
+
+The i386 build must be unaffected, because `MGS2_GL_INFO(gi)` is `(gi)` there.
+Checked rather than assumed: all 32 wined3d translation units compiled for i386
+before and after, from the same source path so `__FILE__` cannot differ.
+`.text`, `.rdata` and `.data` are byte-identical in every one; four objects
+differ only in DWARF, because the rewritten expressions moved source columns.
+
+RESULT ON THE DEVICE
+
+The illegal instruction is gone. Entry 34 now fails the way the design intends,
+legibly: `SIGSEGV @(nil) ... for accessing (nil)`, a call through an unresolved
+GL slot left NULL. That is a different, smaller problem -- see
+docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md -- and it is what the
+fail-closed preflight exists to catch before arming.
+
+NOT MEASURED. This patch is on the diagnostic path only. No production binary
+carries it, and no frame-rate claim is attached to it.
+
+--- a/dlls/wined3d/utils.c
++++ b/dlls/wined3d/utils.c
+@@ -2341,7 +2341,7 @@
+             break;
+ 
+         case WINED3D_GL_RES_TYPE_RB:
+-            gl_info->fbo_ops.glDeleteRenderbuffers(1, &object);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteRenderbuffers(1, &object);
+             break;
+ 
+         case WINED3D_GL_RES_TYPE_BUFFER:
+@@ -2368,9 +2368,9 @@
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+ 
+-            gl_info->fbo_ops.glFramebufferTexture1D(GL_FRAMEBUFFER, attach_type, GL_TEXTURE_1D, *object, 0);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture1D(GL_FRAMEBUFFER, attach_type, GL_TEXTURE_1D, *object, 0);
+             if (format_gl->f.stencil_size)
+-                gl_info->fbo_ops.glFramebufferTexture1D(GL_FRAMEBUFFER,
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture1D(GL_FRAMEBUFFER,
+                         GL_STENCIL_ATTACHMENT, GL_TEXTURE_1D, *object, 0);
+             break;
+ 
+@@ -2382,10 +2382,10 @@
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(wined3d_gl_type_to_enum(d3d_type), GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(wined3d_gl_type_to_enum(d3d_type), GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+ 
+-            gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, attach_type,
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, attach_type,
+                     wined3d_gl_type_to_enum(d3d_type), *object, 0);
+             if (format_gl->f.stencil_size)
+-                gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                         wined3d_gl_type_to_enum(d3d_type), *object, 0);
+             break;
+ 
+@@ -2396,9 +2396,9 @@
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+ 
+-            gl_info->fbo_ops.glFramebufferTexture3D(GL_FRAMEBUFFER, attach_type, GL_TEXTURE_3D, *object, 0, 0);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture3D(GL_FRAMEBUFFER, attach_type, GL_TEXTURE_3D, *object, 0, 0);
+             if (format_gl->f.stencil_size)
+-                gl_info->fbo_ops.glFramebufferTexture3D(GL_FRAMEBUFFER,
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture3D(GL_FRAMEBUFFER,
+                         GL_STENCIL_ATTACHMENT, GL_TEXTURE_3D, *object, 0, 0);
+             break;
+ 
+@@ -2420,20 +2420,20 @@
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+             MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+ 
+-            gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, attach_type,
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, attach_type,
+                     GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB, *object, 0);
+             if (format_gl->f.stencil_size)
+-                gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
+                         GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB, *object, 0);
+             break;
+ 
+         case WINED3D_GL_RES_TYPE_RB:
+-            gl_info->fbo_ops.glGenRenderbuffers(1, object);
+-            gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, *object);
+-            gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, internal, 16, 16);
+-            gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, attach_type, GL_RENDERBUFFER, *object);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, object);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, *object);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, internal, 16, 16);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, attach_type, GL_RENDERBUFFER, *object);
+             if (format_gl->f.stencil_size)
+-                gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER,
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER,
+                         GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, *object);
+             break;
+ 
+@@ -2618,20 +2618,20 @@
+ 
+         if (format->f.caps[type] & WINED3D_FORMAT_CAP_DEPTH_STENCIL)
+         {
+-            gl_info->fbo_ops.glGenRenderbuffers(1, &color_rb);
+-            gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, color_rb);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, &color_rb);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, color_rb);
+             if (type == WINED3D_GL_RES_TYPE_TEX_1D)
+-                gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 1);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 1);
+             else
+-                gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 16);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 16);
+ 
+-            gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER,
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER,
+                     GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, color_rb);
+             checkGLcall("Create and attach color rb attachment");
+             type_string = "depth / stencil";
+         }
+ 
+-        status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
++        status = MGS2_GL_INFO(gl_info)->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+         checkGLcall("Framebuffer format check");
+ 
+         if (status == GL_FRAMEBUFFER_COMPLETE)
+@@ -2670,7 +2670,7 @@
+                 delete_fbo_attachment(gl_info, type, object);
+                 create_and_bind_fbo_attachment(gl_info, format, type, &object, format->rt_internal);
+ 
+-                status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
++                status = MGS2_GL_INFO(gl_info)->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                 checkGLcall("Framebuffer format check");
+ 
+                 if (status == GL_FRAMEBUFFER_COMPLETE)
+@@ -2704,14 +2704,14 @@
+ 
+             if (gl_info->supported[EXT_PACKED_DEPTH_STENCIL])
+             {
+-                gl_info->fbo_ops.glGenRenderbuffers(1, &rb);
+-                gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, rb);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, &rb);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, rb);
+                 if (type == WINED3D_GL_RES_TYPE_TEX_1D)
+-                    gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 16, 1);
++                    MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 16, 1);
+                 else
+-                    gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 16, 16);
+-                gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+-                gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
++                    MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, 16, 16);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
+                 checkGLcall("RB attachment");
+             }
+ 
+@@ -2827,9 +2827,9 @@
+ 
+             if (gl_info->supported[EXT_PACKED_DEPTH_STENCIL])
+             {
+-                gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+-                gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+-                gl_info->fbo_ops.glDeleteRenderbuffers(1, &rb);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
++                MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteRenderbuffers(1, &rb);
+                 checkGLcall("RB cleanup");
+             }
+         }
+@@ -2839,7 +2839,7 @@
+             delete_fbo_attachment(gl_info, type, object);
+             create_and_bind_fbo_attachment(gl_info, format, type, &object, format->srgb_internal);
+ 
+-            status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
++            status = MGS2_GL_INFO(gl_info)->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+             checkGLcall("Framebuffer format check");
+ 
+             if (status == GL_FRAMEBUFFER_COMPLETE)
+@@ -2862,8 +2862,8 @@
+ 
+         if (format->f.caps[type] & WINED3D_FORMAT_CAP_DEPTH_STENCIL)
+         {
+-            gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
+-            gl_info->fbo_ops.glDeleteRenderbuffers(1, &color_rb);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteRenderbuffers(1, &color_rb);
+         }
+ 
+         delete_fbo_attachment(gl_info, type, object);
+@@ -3018,8 +3018,8 @@
+         return;
+     }
+ 
+-    gl_info->fbo_ops.glGenFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawBuffer(GL_COLOR_ATTACHMENT0);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glReadBuffer(GL_COLOR_ATTACHMENT0);
+ 
+@@ -3041,7 +3041,7 @@
+         check_fbo_compat(ctx, format);
+     }
+ 
+-    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteFramebuffers(1, &fbo);
+ }
+ 
+ static GLenum lookup_gl_view_class(GLenum internal_format)
+@@ -3516,9 +3516,9 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glEnable(GL_TEXTURE_2D);
+ 
+-    gl_info->fbo_ops.glGenFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+-    gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, buffer, 0);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDrawBuffer(GL_COLOR_ATTACHMENT0);
+ 
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glViewport(0, 0, 16, 1);
+@@ -3559,8 +3559,8 @@
+         ret = TRUE;
+     }
+ 
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+-    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteFramebuffers(1, &fbo);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDeleteTextures(1, &tex);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDeleteTextures(1, &buffer);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_TEXTURE_2D);
+@@ -4037,7 +4037,7 @@
+ {
+     unsigned int i, j;
+ 
+-    if (!gl_info->fbo_ops.glGenerateMipmap)
++    if (!MGS2_GL_INFO(gl_info)->fbo_ops.glGenerateMipmap)
+         return;
+ 
+     for (i = 0; i < WINED3D_FORMAT_COUNT; ++i)
+@@ -4064,9 +4064,9 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ARRAY_SIZE(readback), 1, 0,
+             GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
+-    gl_info->fbo_ops.glGenFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+-    gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+             GL_TEXTURE_2D, texture, 0);
+     checkGLcall("create resources");
+ 
+@@ -4085,8 +4085,8 @@
+             readback[0], readback[1], readback[2], readback[3]);
+ 
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDeleteTextures(1, &texture);
+-    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+     checkGLcall("delete resources");
+ 
+     for (i = 0; i < ARRAY_SIZE(readback); ++i)
+@@ -4147,9 +4147,9 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0,
+             GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL);
+-    gl_info->fbo_ops.glGenFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+-    gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+             GL_TEXTURE_2D, texture, 0);
+     checkGLcall("create resources");
+ 
+@@ -4166,8 +4166,8 @@
+     checkGLcall("readback");
+ 
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDeleteTextures(1, &texture);
+-    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+     checkGLcall("delete resources");
+ 
+     /* We expect that exactly one fragment is generated. */
+@@ -4247,14 +4247,14 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 1, 0, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, 0);
+ 
+-    gl_info->fbo_ops.glGenRenderbuffers(1, &depth);
+-    gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, depth);
+-    gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, format, 256, 1);
+-
+-    gl_info->fbo_ops.glGenFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+-    gl_info->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+-    gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, &depth);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, depth);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, format, 256, 1);
++
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+     checkGLcall("Setup framebuffer");
+ 
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glClearColor(0.0f, 0.0f, 0.5f, 0.0f);
+@@ -4301,9 +4301,9 @@
+     }
+ 
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDeleteTextures(1, &color);
+-    gl_info->fbo_ops.glDeleteRenderbuffers(1, &depth);
+-    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteRenderbuffers(1, &depth);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+     checkGLcall("Delete framebuffer");
+ 
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_DEPTH_TEST);
+@@ -7568,6 +7568,41 @@
+ #undef USE_GL_FUNC
+ };
+ 
++/*
++ * gl_ops is not the only table of pointers in a wined3d_gl_info.
++ *
++ * `translated = *guest` copies the WHOLE structure, and only gl_ops was walked
++ * afterwards, so fbo_ops, ffp_attrib_ops, p_glDisableWINE, p_glEnableWINE and
++ * p_wglCreateContextAttribsARB kept their guest x86 values. Native ARM code
++ * calling through any of them branches straight into x86 bytes.
++ *
++ * That is not hypothetical: arming island entry 34
++ * (wined3d_texture_load_location) on 2026-08-19 died on the first frame at
++ * host pc 0x7aeccdf0, which is inside the MOUNTED opengl32.dll -- the bytes
++ * there are 55 64 8B 0D 18 00 00 00, an i386 prologue reading fs:0x18 -- while
++ * the guest EIP was parked on its bridge's `ret`, which made the report read
++ * as bridge corruption. It was an untranslated fbo_ops call: the texture
++ * location path sets up framebuffers, and none of those pointers had been
++ * touched.
++ *
++ * fbo_ops carries GL entry points, so it resolves the same way gl_ops does --
++ * by name, position being the name. Wine's opengl32 builds the extension
++ * entries as internal wglGetProcAddress thunks that no export table names,
++ * which is why the by-name path exists at all.
++ */
++static const char *const mgs2_fbo_slot_name[] =
++{
++    "glIsRenderbuffer", "glBindRenderbuffer", "glDeleteRenderbuffers",
++    "glGenRenderbuffers", "glRenderbufferStorage",
++    "glRenderbufferStorageMultisample", "glGetRenderbufferParameteriv",
++    "glIsFramebuffer", "glBindFramebuffer", "glDeleteFramebuffers",
++    "glGenFramebuffers", "glCheckFramebufferStatus", "glFramebufferTexture",
++    "glFramebufferTexture1D", "glFramebufferTexture2D",
++    "glFramebufferTexture3D", "glFramebufferTextureLayer",
++    "glFramebufferRenderbuffer", "glGetFramebufferAttachmentParameteriv",
++    "glBlitFramebuffer", "glGenerateMipmap",
++};
++
+ const struct wined3d_gl_info *mgs2_island_gl_info(const struct wined3d_gl_info *guest)
+ {
+     static struct wined3d_gl_info translated;
+@@ -7608,6 +7643,67 @@
+             if (slot[i]) ++ok;
+             else { ++failed; mgs2_island_report_unresolved((unsigned int)i, before); }
+         }
++
++        /* fbo_ops: same treatment, same key. Reported with the slot index
++         * offset by the gl_ops count so a number in a log names one table
++         * unambiguously. */
++        C_ASSERT(sizeof(mgs2_fbo_slot_name) / sizeof(mgs2_fbo_slot_name[0])
++                == sizeof(struct wined3d_fbo_ops) / sizeof(void *));
++        slot = (void **)&translated.fbo_ops;
++        for (i = 0; i < sizeof(translated.fbo_ops) / sizeof(void *); ++i)
++        {
++            void *before = slot[i];
++
++            if (!before) { ++null_in; continue; }
++            slot[i] = mgs2_island_gl_by_name(mgs2_fbo_slot_name[i]);
++            if (!slot[i])
++                slot[i] = mgs2_island_try_resolve(before);
++            if (slot[i]) ++ok;
++            else
++            {
++                ++failed;
++                mgs2_island_report_unresolved((unsigned int)(count + i), before);
++            }
++        }
++
++        /* ffp_attrib_ops.generic[] holds WineD3D's own attribute emitters, so
++         * these are class-B names rather than GL entry points -- there is no
++         * driver symbol to ask for. try_resolve covers A, B and C in that
++         * order, which is exactly right here. */
++        slot = (void **)&translated.ffp_attrib_ops;
++        for (i = 0; i < sizeof(translated.ffp_attrib_ops) / sizeof(void *); ++i)
++        {
++            void *before = slot[i];
++
++            if (!before) { ++null_in; continue; }
++            if ((slot[i] = mgs2_island_try_resolve(before))) ++ok;
++            else
++            {
++                ++failed;
++                mgs2_island_report_unresolved((unsigned int)(count + 0x100 + i), before);
++            }
++        }
++
++        /* The three loose pointers. glDisableWINE/glEnableWINE are Wine's own,
++         * so by name against the driver would be wrong; try_resolve is the
++         * whole ladder. A failure leaves NULL on purpose: native ARM must fault
++         * on the call rather than enter x86 bytes, which is the failure this
++         * whole function exists to remove. */
++        if (translated.p_glDisableWINE
++                && !(translated.p_glDisableWINE = mgs2_island_try_resolve(
++                        (void *)translated.p_glDisableWINE)))
++            { ++failed; mgs2_island_report_unresolved((unsigned int)(count + 0x200), NULL); }
++        if (translated.p_glEnableWINE
++                && !(translated.p_glEnableWINE = mgs2_island_try_resolve(
++                        (void *)translated.p_glEnableWINE)))
++            { ++failed; mgs2_island_report_unresolved((unsigned int)(count + 0x201), NULL); }
++
++        /* Context creation stays on the x86 side by design (section 13.6 of the
++         * reinforcement frame-budget brief), so this one is not translated at
++         * all -- it is cleared, so that an island call through it fails loudly
++         * instead of appearing to work. */
++        translated.p_wglCreateContextAttribsARB = NULL;
++
+         mgs2_island_report_gl_info(count, null_in, ok, failed);
+     }
+     cached = guest;
+--- a/dlls/wined3d/texture_gl.c
++++ b/dlls/wined3d/texture_gl.c
+@@ -1048,7 +1048,7 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
+     context_invalidate_state(context, STATE_RASTERIZER);
+ 
+-    gl_info->fbo_ops.glBlitFramebuffer(src_rect->left, src_rect->top, src_rect->right, src_rect->bottom,
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBlitFramebuffer(src_rect->left, src_rect->top, src_rect->right, src_rect->bottom,
+             dst_rect->left, dst_rect->top, dst_rect->right, dst_rect->bottom, GL_COLOR_BUFFER_BIT, gl_filter);
+     checkGLcall("glBlitFramebuffer()");
+ 
+@@ -1150,7 +1150,7 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
+     context_invalidate_state(context, STATE_RASTERIZER);
+ 
+-    gl_info->fbo_ops.glBlitFramebuffer(src_rect->left, src_rect->top, src_rect->right, src_rect->bottom,
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBlitFramebuffer(src_rect->left, src_rect->top, src_rect->right, src_rect->bottom,
+             dst_rect->left, dst_rect->top, dst_rect->right, dst_rect->bottom, gl_mask, GL_NEAREST);
+     checkGLcall("glBlitFramebuffer()");
+ }
+@@ -1903,16 +1903,16 @@
+         return FALSE;
+ 
+     wined3d_texture_get_pitch(&texture_gl->t, level, &row_pitch, &ignored_slice_pitch);
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_READ_BUFFER, &old_read_buffer);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_READ_BUFFER, &old_read_buffer);
+     wined3d_context_gl_apply_fbo_state_explicit(context_gl, GL_READ_FRAMEBUFFER,
+             &texture_gl->t.resource, sub_resource_idx, NULL, 0, WINED3D_LOCATION_TEXTURE_RGB);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glReadBuffer(GL_COLOR_ATTACHMENT0);
+-    status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
++    status = MGS2_GL_INFO(gl_info)->fbo_ops.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+     if (status != GL_FRAMEBUFFER_COMPLETE)
+     {
+         ERR("GLES texture readback FBO is incomplete: %#x.\n", status);
+-        gl_info->fbo_ops.glBindFramebuffer(GL_READ_FRAMEBUFFER, old_read_fbo);
+-        gl_info->fbo_ops.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, old_draw_fbo);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_READ_FRAMEBUFFER, old_read_fbo);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, old_draw_fbo);
+         context_gl->fbo_read_binding = old_read_fbo;
+         context_gl->fbo_draw_binding = old_draw_fbo;
+         context_gl->current_fbo = old_current_fbo;
+@@ -1921,11 +1921,11 @@
+         free(pixels);
+         return FALSE;
+     }
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_PACK_ALIGNMENT, &old_pack_alignment);
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_PACK_ROW_LENGTH, &old_pack_row_length);
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_PACK_SKIP_ROWS, &old_pack_skip_rows);
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_pack_skip_pixels);
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &old_pack_buffer);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_PACK_ALIGNMENT, &old_pack_alignment);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_PACK_ROW_LENGTH, &old_pack_row_length);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_PACK_SKIP_ROWS, &old_pack_skip_rows);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_PACK_SKIP_PIXELS, &old_pack_skip_pixels);
++    MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &old_pack_buffer);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, 1);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+@@ -1976,8 +1976,8 @@
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_PACK_SKIP_ROWS, old_pack_skip_rows);
+     MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glPixelStorei(GL_PACK_SKIP_PIXELS, old_pack_skip_pixels);
+     GL_EXTCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, old_pack_buffer));
+-    gl_info->fbo_ops.glBindFramebuffer(GL_READ_FRAMEBUFFER, old_read_fbo);
+-    gl_info->fbo_ops.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, old_draw_fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_READ_FRAMEBUFFER, old_read_fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, old_draw_fbo);
+     context_gl->fbo_read_binding = old_read_fbo;
+     context_gl->fbo_draw_binding = old_draw_fbo;
+     context_gl->current_fbo = old_current_fbo;
+@@ -2604,9 +2604,9 @@
+         if (texture_gl->rb_multisample)
+             return;
+ 
+-        gl_info->fbo_ops.glGenRenderbuffers(1, &texture_gl->rb_multisample);
+-        gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, texture_gl->rb_multisample);
+-        gl_info->fbo_ops.glRenderbufferStorageMultisample(GL_RENDERBUFFER,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, &texture_gl->rb_multisample);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, texture_gl->rb_multisample);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorageMultisample(GL_RENDERBUFFER,
+                 wined3d_resource_get_sample_count(&texture_gl->t.resource),
+                 format_gl->internal, texture_gl->t.resource.width, texture_gl->t.resource.height);
+         checkGLcall("glRenderbufferStorageMultisample()");
+@@ -2617,9 +2617,9 @@
+         if (texture_gl->rb_resolved)
+             return;
+ 
+-        gl_info->fbo_ops.glGenRenderbuffers(1, &texture_gl->rb_resolved);
+-        gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, texture_gl->rb_resolved);
+-        gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, format_gl->internal,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, &texture_gl->rb_resolved);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, texture_gl->rb_resolved);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, format_gl->internal,
+                 texture_gl->t.resource.width, texture_gl->t.resource.height);
+         checkGLcall("glRenderbufferStorage()");
+         TRACE("Created resolved rb %u.\n", texture_gl->rb_resolved);
+@@ -2881,7 +2881,7 @@
+             {
+                 TRACE("Deleting multisample renderbuffer %u.\n", texture_gl->rb_multisample);
+                 context_gl_resource_released(texture_gl->t.resource.device, texture_gl->rb_multisample, TRUE);
+-                context_gl->gl_info->fbo_ops.glDeleteRenderbuffers(1, &texture_gl->rb_multisample);
++                MGS2_GL_INFO(context_gl->gl_info)->fbo_ops.glDeleteRenderbuffers(1, &texture_gl->rb_multisample);
+                 texture_gl->rb_multisample = 0;
+             }
+             break;
+@@ -2891,7 +2891,7 @@
+                     struct wined3d_renderbuffer_entry, entry)
+             {
+                 context_gl_resource_released(texture_gl->t.resource.device, entry->id, TRUE);
+-                context_gl->gl_info->fbo_ops.glDeleteRenderbuffers(1, &entry->id);
++                MGS2_GL_INFO(context_gl->gl_info)->fbo_ops.glDeleteRenderbuffers(1, &entry->id);
+                 list_remove(&entry->entry);
+                 free(entry);
+             }
+@@ -2902,7 +2902,7 @@
+             {
+                 TRACE("Deleting resolved renderbuffer %u.\n", texture_gl->rb_resolved);
+                 context_gl_resource_released(texture_gl->t.resource.device, texture_gl->rb_resolved, TRUE);
+-                context_gl->gl_info->fbo_ops.glDeleteRenderbuffers(1, &texture_gl->rb_resolved);
++                MGS2_GL_INFO(context_gl->gl_info)->fbo_ops.glDeleteRenderbuffers(1, &texture_gl->rb_resolved);
+                 texture_gl->rb_resolved = 0;
+             }
+             break;
+@@ -3320,9 +3320,9 @@
+         const struct wined3d_format_gl *format_gl;
+ 
+         format_gl = wined3d_format_gl(texture_gl->t.resource.format);
+-        gl_info->fbo_ops.glGenRenderbuffers(1, &renderbuffer);
+-        gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+-        gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, format_gl->internal, width, height);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGenRenderbuffers(1, &renderbuffer);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, format_gl->internal, width, height);
+ 
+         entry = malloc(sizeof(*entry));
+         entry->width = width;
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -121,7 +121,7 @@
+             break;
+     }
+ 
+-    gl_info->fbo_ops.glBindFramebuffer(target, fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glBindFramebuffer(target, fbo);
+     checkGLcall("glBindFramebuffer()");
+ }
+ 
+@@ -132,13 +132,13 @@
+ 
+     for (i = 0; i < gl_info->limits.buffers; ++i)
+     {
+-        gl_info->fbo_ops.glFramebufferTexture2D(target, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, 0, 0);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(target, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, 0, 0);
+         checkGLcall("glFramebufferTexture2D()");
+     }
+-    gl_info->fbo_ops.glFramebufferTexture2D(target, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(target, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+     checkGLcall("glFramebufferTexture2D()");
+ 
+-    gl_info->fbo_ops.glFramebufferTexture2D(target, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(target, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+     checkGLcall("glFramebufferTexture2D()");
+ }
+ 
+@@ -151,7 +151,7 @@
+     context_clean_fbo_attachments(gl_info, GL_FRAMEBUFFER);
+     wined3d_context_gl_bind_fbo(context_gl, GL_FRAMEBUFFER, 0);
+ 
+-    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glDeleteFramebuffers(1, &fbo);
+     checkGLcall("glDeleteFramebuffers()");
+ }
+ 
+@@ -160,13 +160,13 @@
+ {
+     if (flags & WINED3D_FBO_ENTRY_FLAG_DEPTH)
+     {
+-        gl_info->fbo_ops.glFramebufferRenderbuffer(fbo_target, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(fbo_target, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb);
+         checkGLcall("glFramebufferRenderbuffer()");
+     }
+ 
+     if (flags & WINED3D_FBO_ENTRY_FLAG_STENCIL)
+     {
+-        gl_info->fbo_ops.glFramebufferRenderbuffer(fbo_target, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(fbo_target, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rb);
+         checkGLcall("glFramebufferRenderbuffer()");
+     }
+ }
+@@ -178,39 +178,39 @@
+ 
+     if (!resource)
+     {
+-        gl_info->fbo_ops.glFramebufferTexture2D(fbo_target, attachment, GL_TEXTURE_2D, 0, 0);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(fbo_target, attachment, GL_TEXTURE_2D, 0, 0);
+     }
+     else if (resource->layer == WINED3D_ALL_LAYERS)
+     {
+-        if (!gl_info->fbo_ops.glFramebufferTexture)
++        if (!MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture)
+         {
+             FIXME("OpenGL implementation doesn't support glFramebufferTexture().\n");
+             return;
+         }
+ 
+-        gl_info->fbo_ops.glFramebufferTexture(fbo_target, attachment,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture(fbo_target, attachment,
+                 resource->object, resource->level);
+     }
+     else if (resource->target == GL_TEXTURE_1D_ARRAY || resource->target == GL_TEXTURE_2D_ARRAY
+             || resource->target == GL_TEXTURE_3D)
+     {
+-        if (!gl_info->fbo_ops.glFramebufferTextureLayer)
++        if (!MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTextureLayer)
+         {
+             FIXME("OpenGL implementation doesn't support glFramebufferTextureLayer().\n");
+             return;
+         }
+ 
+-        gl_info->fbo_ops.glFramebufferTextureLayer(fbo_target, attachment,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTextureLayer(fbo_target, attachment,
+                 resource->object, resource->level, resource->layer);
+     }
+     else if (resource->target == GL_TEXTURE_1D)
+     {
+-        gl_info->fbo_ops.glFramebufferTexture1D(fbo_target, attachment,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture1D(fbo_target, attachment,
+                 resource->target, resource->object, resource->level);
+     }
+     else
+     {
+-        gl_info->fbo_ops.glFramebufferTexture2D(fbo_target, attachment,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferTexture2D(fbo_target, attachment,
+                 resource->target, resource->object, resource->level);
+     }
+     checkGLcall("attach texture to fbo");
+@@ -268,7 +268,7 @@
+     {
+         if (rb_namespace)
+         {
+-            gl_info->fbo_ops.glFramebufferRenderbuffer(fbo_target, GL_COLOR_ATTACHMENT0 + idx,
++            MGS2_GL_INFO(gl_info)->fbo_ops.glFramebufferRenderbuffer(fbo_target, GL_COLOR_ATTACHMENT0 + idx,
+                     GL_RENDERBUFFER, resource->object);
+             checkGLcall("glFramebufferRenderbuffer()");
+         }
+@@ -308,29 +308,29 @@
+     const char *tex_type_str = NULL;
+     unsigned int i;
+ 
+-    gl_info->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
+             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+-    gl_info->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
+             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+ 
+     if (type == GL_RENDERBUFFER)
+     {
+-        gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, name);
+-        gl_info->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &width);
+-        gl_info->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &height);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, name);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &width);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &height);
+         if (gl_info->limits.samples > 1)
+-            gl_info->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &samples);
++            MGS2_GL_INFO(gl_info)->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_SAMPLES, &samples);
+         else
+             samples = 1;
+-        gl_info->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &fmt);
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &fmt);
+         FIXME("    %s: renderbuffer %d, %dx%d, %d samples, format %#x.\n",
+                 debug_fboattachment(attachment), name, width, height, samples, fmt);
+     }
+     else if (type == GL_TEXTURE)
+     {
+-        gl_info->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
+                 GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &level);
+-        gl_info->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
++        MGS2_GL_INFO(gl_info)->fbo_ops.glGetFramebufferAttachmentParameteriv(target, attachment,
+                 GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &face);
+ 
+         if (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_glGetTextureParameteriv)
+@@ -427,7 +427,7 @@
+     if (!FIXME_ON(d3d))
+         return;
+ 
+-    status = gl_info->fbo_ops.glCheckFramebufferStatus(target);
++    status = MGS2_GL_INFO(gl_info)->fbo_ops.glCheckFramebufferStatus(target);
+     if (status == GL_FRAMEBUFFER_COMPLETE)
+     {
+         TRACE("FBO complete.\n");
+@@ -592,7 +592,7 @@
+             entry->flags |= WINED3D_FBO_ENTRY_FLAG_STENCIL;
+     }
+     entry->rt_mask = context_generate_rt_mask(GL_COLOR_ATTACHMENT0);
+-    gl_info->fbo_ops.glGenFramebuffers(1, &entry->id);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenFramebuffers(1, &entry->id);
+     checkGLcall("glGenFramebuffers()");
+     TRACE("Created FBO %u.\n", entry->id);
+ 
+--- a/dlls/wined3d/gl_compat.c
++++ b/dlls/wined3d/gl_compat.c
+@@ -34,7 +34,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord1f(s);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord1f(s);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord1fvARB(GLenum target, const GLfloat *v)
+@@ -44,7 +44,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord1fv(v);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord1fv(v);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord2fARB(GLenum target, GLfloat s, GLfloat t)
+@@ -54,7 +54,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord2f(s, t);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord2f(s, t);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord2fvARB(GLenum target, const GLfloat *v)
+@@ -64,7 +64,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord2fv(v);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord2fv(v);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord3fARB(GLenum target, GLfloat s, GLfloat t, GLfloat r)
+@@ -74,7 +74,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord3f(s, t, r);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord3f(s, t, r);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord3fvARB(GLenum target, const GLfloat *v)
+@@ -84,7 +84,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord3fv(v);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord3fv(v);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord4fARB(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q)
+@@ -94,7 +94,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord4f(s, t, r, q);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord4f(s, t, r, q);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord4fvARB(GLenum target, const GLfloat *v)
+@@ -104,7 +104,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord4fv(v);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord4fv(v);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord2svARB(GLenum target, const GLshort *v)
+@@ -114,7 +114,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord2sv(v);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord2sv(v);
+ }
+ 
+ static void WINE_GLAPI wine_glMultiTexCoord4svARB(GLenum target, const GLshort *v)
+@@ -124,7 +124,7 @@
+         ERR("Texture unit > 0 used, but GL_ARB_multitexture is not supported.\n");
+         return;
+     }
+-    wined3d_context_gl_get_current()->gl_info->gl_ops.gl.p_glTexCoord4sv(v);
++    MGS2_GL_INFO(wined3d_context_gl_get_current()->gl_info)->gl_ops.gl.p_glTexCoord4sv(v);
+ }
+ 
+ static void WINE_GLAPI wine_glActiveTexture(GLenum texture)
+@@ -427,7 +427,7 @@
+         case ARB_MULTITEXTURE:
+             if (gl_info->supported[ARB_MULTITEXTURE])
+                 return;
+-            if (gl_info->gl_ops.ext.p_glActiveTexture == wine_glActiveTexture)
++            if (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_glActiveTexture == wine_glActiveTexture)
+             {
+                 FIXME("ARB_multitexture emulation hooks already applied.\n");
+                 return;
+@@ -445,11 +445,11 @@
+             gl_info->gl_ops.ext.p_glMultiTexCoord4fvARB     = wine_glMultiTexCoord4fvARB;
+             gl_info->gl_ops.ext.p_glMultiTexCoord2svARB     = wine_glMultiTexCoord2svARB;
+             gl_info->gl_ops.ext.p_glMultiTexCoord4svARB     = wine_glMultiTexCoord4svARB;
+-            old_multitex_glGetIntegerv = gl_info->gl_ops.gl.p_glGetIntegerv;
++            old_multitex_glGetIntegerv = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetIntegerv;
+             gl_info->gl_ops.gl.p_glGetIntegerv = wine_glGetIntegerv;
+-            old_multitex_glGetFloatv = gl_info->gl_ops.gl.p_glGetFloatv;
++            old_multitex_glGetFloatv = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetFloatv;
+             gl_info->gl_ops.gl.p_glGetFloatv = wine_glGetFloatv;
+-            old_multitex_glGetDoublev = gl_info->gl_ops.gl.p_glGetDoublev;
++            old_multitex_glGetDoublev = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glGetDoublev;
+             gl_info->gl_ops.gl.p_glGetDoublev = wine_glGetDoublev;
+             gl_info->supported[ARB_MULTITEXTURE] = TRUE;
+             return;
+@@ -475,7 +475,7 @@
+              */
+             if (gl_info->supported[EXT_FOG_COORD])
+                 return;
+-            if (gl_info->gl_ops.gl.p_glFogi == wine_glFogi)
++            if (MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFogi == wine_glFogi)
+             {
+                 FIXME("EXT_fog_coord emulation hooks already applied.\n");
+                 return;
+@@ -497,26 +497,26 @@
+                 FIXME("The fog coord emulation will most likely fail\n");
+             }
+ 
+-            old_fogcoord_glFogi = gl_info->gl_ops.gl.p_glFogi;
++            old_fogcoord_glFogi = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFogi;
+             gl_info->gl_ops.gl.p_glFogi = wine_glFogi;
+-            old_fogcoord_glFogiv = gl_info->gl_ops.gl.p_glFogiv;
++            old_fogcoord_glFogiv = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFogiv;
+             gl_info->gl_ops.gl.p_glFogiv = wine_glFogiv;
+-            old_fogcoord_glFogf = gl_info->gl_ops.gl.p_glFogf;
++            old_fogcoord_glFogf = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFogf;
+             gl_info->gl_ops.gl.p_glFogf = wine_glFogf;
+-            old_fogcoord_glFogfv = gl_info->gl_ops.gl.p_glFogfv;
++            old_fogcoord_glFogfv = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glFogfv;
+             gl_info->gl_ops.gl.p_glFogfv = wine_glFogfv;
+             old_fogcoord_glEnable = gl_info->p_glEnableWINE;
+             gl_info->p_glEnableWINE = wine_glEnable;
+             old_fogcoord_glDisable = gl_info->p_glDisableWINE;
+             gl_info->p_glDisableWINE = wine_glDisable;
+ 
+-            old_fogcoord_glVertex4f = gl_info->gl_ops.gl.p_glVertex4f;
++            old_fogcoord_glVertex4f = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glVertex4f;
+             gl_info->gl_ops.gl.p_glVertex4f = wine_glVertex4f;
+             gl_info->gl_ops.gl.p_glVertex4fv = wine_glVertex4fv;
+             gl_info->gl_ops.gl.p_glVertex3f = wine_glVertex3f;
+             gl_info->gl_ops.gl.p_glVertex3fv = wine_glVertex3fv;
+ 
+-            old_fogcoord_glColor4f = gl_info->gl_ops.gl.p_glColor4f;
++            old_fogcoord_glColor4f = MGS2_GL_INFO(gl_info)->gl_ops.gl.p_glColor4f;
+             gl_info->gl_ops.gl.p_glColor4f = wine_glColor4f;
+             gl_info->gl_ops.gl.p_glColor4fv = wine_glColor4fv;
+             gl_info->gl_ops.gl.p_glColor3f = wine_glColor3f;
+--- a/dlls/wined3d/view.c
++++ b/dlls/wined3d/view.c
+@@ -1409,7 +1409,7 @@
+         gl_tex->sampler_desc.srgb_decode = FALSE;
+     }
+ 
+-    gl_info->fbo_ops.glGenerateMipmap(texture_gl->target);
++    MGS2_GL_INFO(gl_info)->fbo_ops.glGenerateMipmap(texture_gl->target);
+     checkGLcall("glGenerateMipMap()");
+ 
+     for (i = 0; i < layer_count; ++i)

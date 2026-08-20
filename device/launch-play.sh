@@ -170,13 +170,40 @@ restore_cpu_state() {
     done
 }
 
+# Arm cleanup before the first bind mount.  A missing or unreadable selected
+# runtime must not leave the earlier mounts active for the next launch.
+cleanup() {
+    [ -n "${THERMAL_PID:-}" ] && kill "$THERMAL_PID" 2>/dev/null || true
+    [ -n "${WINE_PID:-}" ] && kill "$WINE_PID" 2>/dev/null || true
+    [ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
+    killall -9 wineserver services.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
+    pkill -9 -f '[m]gs2_sse_rg353vs_port.exe' 2>/dev/null || true
+    restore_cpu_state
+    unmount_all /usr/lib/wine/i386-windows/wined3d.dll
+    unmount_all /usr/lib/wine/i386-windows/d3d8.dll
+    unmount_all /usr/lib/wine/i386-unix/winewayland.so
+    unmount_all /usr/lib/wine/i386-unix/win32u.so
+    unmount_all /usr/lib/wine/i386-unix/opengl32.so
+    unmount_all /usr/lib/wine/i386-windows/user32.dll
+    unmount_all /usr/lib/wine/i386-windows/dmsynth.dll
+    unmount_all /usr/lib/wine/i386-windows/dsound.dll
+    unmount_all /usr/lib/wine/i386-windows/dmime.dll
+    unmount_all /usr/lib/wine/i386-windows/dmusic.dll
+    unmount_all /usr/lib/wine/i386-unix/ntdll.so
+    unmount_all /usr/bin/box86
+    [ -n "${ESUDO:-}" ] && $ESUDO systemctl restart oga_events >/dev/null 2>&1 || true
+}
+trap cleanup EXIT INT TERM
+
 # FINALPLAY3 also serialises Box86's first-use allocation and publication of
 # an x86 mutex's native ARM backing mutex.  The old two-stage publication was
 # captured leaving Wine's shared-session lock owned forever when concurrent
 # first users selected different native mutexes.  This changes no Wine lock
 # semantics and retains the measured native memmove path from FINALPLAY2.
-# FINALPLAY6 promotes the native ARM WineD3D island. 32 WineD3D sources are
-# compiled for armhf and linked into Box86; 17 entry points are routed to them,
+# FINALPLAY6 promoted the native ARM WineD3D island. FINALPLAY7 keeps that pair's
+# WineD3D DLL and promotes island41 with one additional measured route. 32
+# WineD3D sources are compiled for armhf and linked into Box86; 18 entry points
+# are routed to them,
 # recognised by a marker in the guest prologue. Read this before trusting it:
 #
 #   Entry 10, wined3d_buffer_load, IS routed, and it is the one entry here
@@ -203,6 +230,14 @@ restore_cpu_state() {
 #   island31/p56 pair shares the authoritative guest batch state; do not mix
 #   island31 with an older WineD3D DLL.
 #
+#   Entry 23, wined3d_rendertarget_view_load_location, is the third
+#   performance-promoted route. In the owner's heavy scene its balanced-pair
+#   median was -1.944 ms/frame (about +1.3 fps); the paired mean was -2.614
+#   ms/frame. Do not quote the withdrawn sigma or sign-test p: 20 of the 25
+#   balanced cycles were one deterministic stretch, not independent trials.
+#   A later production-candidate soak presented 6300 frames across normal play,
+#   with correct picture reported by the owner and zero island faults.
+#
 #   The other 15 remain promoted on the owner's judgement, not on a number.
 #   They are exactly those with no reachable abort stub, no NtCurrentTeb read
 #   and no indirect call, from harness/island/full/island_reach.py. Anything
@@ -227,13 +262,16 @@ if [ -n "${MGS2_ISLAND_AB_MEASURE:-}" ]; then
          "MEASUREMENT run, half the frames deliberately run unrouted" >&2
 fi
 #
-# MGS2_BOX86_ISLAND_FULL=0 turns the island off and takes the run back to the
-# previous stack, which is the first thing to try if anything misbehaves.
-export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-0}"
-export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,28,29,32,33}"
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-clean1}" /usr/bin/box86 || exit 1
+# FINALPLAY7 is the measured production pair. Any diagnostic can explicitly
+# set this to 0, but normal play must not silently fall back to NO-ISLAND.
+export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-1}"
+export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33}"
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-island41}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
-mount_bind "$GAMEDIR/winewayland_stall1.so" /usr/lib/wine/i386-unix/winewayland.so || exit 1
+# Diagnostics may select a separate presenter build, but normal play keeps the
+# measured production driver.  This is used by p67 only for a bounded,
+# memory-only frame-content witness; it does not change the production default.
+mount_bind "$GAMEDIR/${MGS2_WAYLAND_SO:-winewayland_stall1.so}" /usr/lib/wine/i386-unix/winewayland.so || exit 1
 mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32.so || exit 1
 # ntdll_fastyield.so is deliberately NOT mounted. Patch 05 consists solely of an
 # NtYieldExecution switch gated on MGS2_YIELD, which production never sets, so the
@@ -290,10 +328,12 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # minutes later; by name it resolves 233, and the 260 still unresolved are not
 # reached by any armed entry.
 #
-# p56 adds the cold guest-batch accessor required by island31. Keep these two
-# binaries paired. p55 + island29 is the exact rollback baseline.
+# p56 adds the cold guest-batch accessor required by the island. Keep it paired
+# with island41. box86-island32-prod + this same p56 DLL + the old 17-entry
+# allow-list is the immediate rollback; p55 + island29 remains the older exact
+# pre-FINALPLAY6 rollback.
 export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
-mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_noisland59.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_p56_batch_state.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the
@@ -304,7 +344,7 @@ mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || 
 # generation the game bumps every frame. Frees 73,760 bytes of BSS and 848 bytes
 # of code, and cannot change a culling decision. The culler itself stays: measured
 # 44.3 fps with it against 37.7 without, over two 400 s windows.
-mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_noisland59.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
 # Patch 31 is OFF. It replaces the culler's per-draw AABB scan -- 349 vertex walks
 # a frame in emulated x86 -- with one conservative box per buffer write. Measured
 # +74% on an autoloaded corridor route (48.68/48.39 against 27.92) with identical
@@ -320,29 +360,6 @@ mount_bind "$GAMEDIR/${MGS2_DMSYNTH_DLL:-dmsynth_p34_interp_reset.dll}" /usr/lib
 mount_bind "$GAMEDIR/${MGS2_DSOUND_DLL:-dsound_p36_native_fir_target.dll}" /usr/lib/wine/i386-windows/dsound.dll || exit 1
 mount_bind "$GAMEDIR/${MGS2_DMIME_DLL:-dmime_transition1.dll}" /usr/lib/wine/i386-windows/dmime.dll || exit 1
 mount_bind "$GAMEDIR/dmusic_shared_lifetime1.dll" /usr/lib/wine/i386-windows/dmusic.dll || exit 1
-
-cleanup() {
-    [ -n "${THERMAL_PID:-}" ] && kill "$THERMAL_PID" 2>/dev/null || true
-    [ -n "${WINE_PID:-}" ] && kill "$WINE_PID" 2>/dev/null || true
-    [ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
-    killall -9 wineserver services.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
-    pkill -9 -f '[m]gs2_sse_rg353vs_port.exe' 2>/dev/null || true
-    restore_cpu_state
-    unmount_all /usr/lib/wine/i386-windows/wined3d.dll
-    unmount_all /usr/lib/wine/i386-windows/d3d8.dll
-    unmount_all /usr/lib/wine/i386-unix/winewayland.so
-    unmount_all /usr/lib/wine/i386-unix/win32u.so
-    unmount_all /usr/lib/wine/i386-unix/opengl32.so
-    unmount_all /usr/lib/wine/i386-windows/user32.dll
-    unmount_all /usr/lib/wine/i386-windows/dmsynth.dll
-    unmount_all /usr/lib/wine/i386-windows/dsound.dll
-    unmount_all /usr/lib/wine/i386-windows/dmime.dll
-    unmount_all /usr/lib/wine/i386-windows/dmusic.dll
-    unmount_all /usr/lib/wine/i386-unix/ntdll.so
-    unmount_all /usr/bin/box86
-    [ -n "${ESUDO:-}" ] && $ESUDO systemctl restart oga_events >/dev/null 2>&1 || true
-}
-trap cleanup EXIT INT TERM
 
 save_cpu_state
 set_final_cpu_cap

@@ -65,12 +65,29 @@ segment or a thread-local by architecture convention.
 
 ## Which stubs are real code, and which must stay stubs
 
-`mgs2_island_natives.c` implements the seven entry points the routed closure
-actually reaches: `mgs2_island_teb`, `_assert`, `_fdclass`, the four
+`mgs2_island_natives.c` implements the guest-ABI entry points the routed closure
+actually reaches: `mgs2_island_teb`, `TlsGetValue`, `TlsSetValue`,
+`WindowFromDC`, `_assert`, `_fdclass`, and the
 `__wine_dbg_*`/`__stdio_common_vsprintf` debug and formatting entries. ERR is
 *not* compiled out of the island -- its channel test is a direct flags read --
 so those are reached in normal operation, and with abort stubs no entry could be
 measured at all.
+
+The TLS pair reads and writes Wine's i386 TEB cells through
+`mgs2_island_teb()`. It must never use host pthread TLS. Expansion cells are
+supported when Wine already allocated the guest array; allocating a missing one
+with host malloc is fail-closed because guest HeapFree would later receive a
+pointer from the wrong allocator.
+
+`WindowFromDC` is deliberately a reverse guest call through Box86. Window/DC
+ownership is mutable win32u state; duplicating it in the island would turn a
+validation into a guess. The guest export address is resolved once and cached.
+The WGL table's `wglGetPixelFormat` slot uses the same boundary, but registers
+the exact guest pointer already present in `wined3d_gl_info`; it is not a driver
+symbol and must not be guessed by name in libmali.
+The seven direct WGL APIs reachable from context setup/restore are likewise
+exact guest opengl32 calls with one cached export address each. They stay guest
+because opengl32 owns the Unix-call and current-context bookkeeping.
 
 `_recalloc` stays an abort stub on purpose. It would resize a block whose
 allocator is unknown: a WineD3D structure reaching the island may have been

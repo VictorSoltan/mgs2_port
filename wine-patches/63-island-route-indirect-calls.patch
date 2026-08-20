@@ -1,0 +1,501 @@
+Patch 63 -- route every audited indirect call in entry 34's closure.
+
+This is the patch that made entry 34 run. It has two halves, developed together:
+the format converters that the last device fault named, and the 37 further calls
+a static audit found before the next launch instead of after it.
+
+## Why an audit and not another launch
+
+Every island wall so far has been the same defect: a function pointer read out of
+a GUEST WineD3D object and called directly, so native ARM branches into i386
+bytes. Each was found by launching, faulting, and looking up an address:
+
+```text
+fbo_ops and plain gl_ops calls        patch 61
+glDrawBuffer, absent from this stack  patch 62
+format->upload / ->download          this patch, first half
+```
+
+`harness/island/full/island_icall_audit.py` finds them statically instead. For the
+closure of one entry it lists every call through a function-pointer FIELD and
+splits routed from unrouted. On entry 34:
+
+```text
+closure                          432 functions
+function-pointer field names     117 (from the module's own headers)
+UNROUTED indirect calls           47
+  of those, real calls            39   routed by this patch (two by the first half)
+  pointer tests and declarations   8   nothing to route
+```
+
+Two of its own bugs were found and fixed while it was being written, both of the
+kind that produce a confident empty answer: `__attribute__((noinline))` was taken
+for a function definition and swallowed the real one below it -- which hid
+`wined3d_texture_load_location` itself -- and the member-call pattern required
+`->name(`, which never matches a site already wrapped as
+`MGS2_P50_CALL(site, x->name)(...)`, so both the routed sites and the ops targets
+behind them were invisible. Its control check (the closure must contain at least
+one ROUTED call) is what caught the second one.
+
+## What is routed, by family
+
+`MGS2_P50_CALL()` already existed for this: it wraps the POINTER expression, so
+the argument list and return value are untouched, and it is the identity macro
+unless MGS2_ISLAND_ARM is defined. One id per family rather than 39 ids -- the
+abort in `mgs2_island_dispatch()` prints the guest pointer, which identifies the
+exact target through the class-B table, so per-site numbering would buy nothing:
+
+```text
+23/24  FORMAT_UPLOAD / FORMAT_DOWNLOAD   texture_gl.c, the converters the device
+                                          fault named: convert_b8g8r8a8_unorm_gles
+25     FORMAT_DECOMPRESS                  the third member of the same triple,
+                                          which the audit found and a launch had not
+26     BLITTER_BLIT                  7    blitter chains, texture_gl/surface/texture_vk
+27     BLITTER_DESTROY               6
+28     CONTEXT_OPS                   6    cs.c submit/finish/require_space/
+                                          reference_resource/map_upload_bo
+29     TEXTURE_UPLOAD_CPU            2    surface.c CPU blit uploads
+30     ADAPTER_OPS                  12    adapter create/destroy across the module
+31     MISC_OPS                      5    allocator chunks, context-data frees,
+                                          swapchain_frontbuffer_updated
+```
+
+Site ids are declared at the END of `wined3d_private.h`, not next to sites 0-22:
+adding lines above line 4115 would move the `assert()` line numbers that the
+shipping DLL bakes into its own code. No call site gained a line either, for the
+same reason.
+
+Fail-closed is inherited, not re-implemented: `mgs2_island_dispatch()` aborts when
+it cannot map a pointer, in every build, so a routed call that turns out to
+target something unmappable stops legibly instead of executing i386 bytes.
+
+## Verification
+
+`MGS2_P50_CALL(site, fp)` is `(fp)` in the guest build, so the shipping DLL must
+not change. All 32 wined3d translation units compiled for i386 before and after,
+from the same source path: `.text`, `.rdata` and `.data` byte-identical in every
+one. Eleven objects differ in DWARF only, because the wrapped expressions moved
+source columns.
+
+## Result on the device
+
+Entry 34 armed, 18 entries, production DLL pair:
+
+```text
+4200+ frames through the whole attract demo, its death and the MISSION FAILED menu
+zero island faults, zero traps, zero unresolved dispatches
+screenshot shows correct rendering
+```
+
+Also verified on a timing-capable build with MGS2_ISLAND_DIAGNOSTICS off
+(`box86-island41`, 02294e0fc53298e9fc02c50ff5a5aa10392e44e78619358359fb6a172d104b71):
+1800 frames, 18 entries armed, no faults.
+
+NOT MEASURED. No frame-rate claim: attract mode cannot measure these entries -- 3
+of 9 A/B cycles balanced, all in the capped window. The measurement needs the
+owner's save and about 20 minutes of real gameplay.
+
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -5224,4 +5224,25 @@
+ void mgs2_p38_gl_draw(unsigned int kind, unsigned int count, unsigned int gl_mode);
+ void mgs2_p38_bypass(unsigned int gl_mode);
+ 
++/* Patch 63. Two more indirect dispatch sites, deliberately declared HERE at the
++ * end of the header rather than next to sites 0-22: adding lines above line 4115
++ * would move the assert() line numbers that the shipping DLL bakes into its own
++ * code, and the point of an island-only change is that the guest object does not
++ * move at all. Same numbering space, same MGS2_P50_CALL(). */
++#define MGS2_P50_FORMAT_UPLOAD                23
++#define MGS2_P50_FORMAT_DOWNLOAD              24
++/* Patch 63, second half: one id per FAMILY of indirect call, not one per site.
++ * The static
++ * audit (harness/island/full/island_icall_audit.py) found 39 direct calls through
++ * guest-held function-pointer fields in entry 34's closure; naming 39 sites would
++ * bury the numbering for no gain, and the abort in mgs2_island_dispatch() prints
++ * the guest pointer, which identifies the exact target through the class-B table. */
++#define MGS2_P50_FORMAT_DECOMPRESS            25
++#define MGS2_P50_BLITTER_BLIT                 26
++#define MGS2_P50_BLITTER_DESTROY              27
++#define MGS2_P50_CONTEXT_OPS                  28
++#define MGS2_P50_TEXTURE_UPLOAD_CPU           29
++#define MGS2_P50_ADAPTER_OPS                  30
++#define MGS2_P50_MISC_OPS                     31
++
+ #endif
+--- a/dlls/wined3d/utils.c
++++ b/dlls/wined3d/utils.c
+@@ -7408,7 +7408,7 @@
+         LIST_FOR_EACH_ENTRY_SAFE(chunk, chunk2, &allocator->pools[i].chunks, struct wined3d_allocator_chunk, entry)
+         {
+             list_remove(&chunk->entry);
+-            allocator->ops->allocator_destroy_chunk(chunk);
++            MGS2_P50_CALL(MGS2_P50_MISC_OPS, allocator->ops->allocator_destroy_chunk)(chunk);
+         }
+     }
+     free(allocator->pools);
+@@ -7489,7 +7489,7 @@
+             return block;
+     }
+ 
+-    if (!(chunk = allocator->ops->allocator_create_chunk(allocator,
++    if (!(chunk = MGS2_P50_CALL(MGS2_P50_MISC_OPS, allocator->ops->allocator_create_chunk)(allocator,
+             context, memory_type, WINED3D_ALLOCATOR_CHUNK_SIZE)))
+         return NULL;
+ 
+--- a/dlls/wined3d/texture_gl.c
++++ b/dlls/wined3d/texture_gl.c
+@@ -208,7 +208,7 @@
+     struct wined3d_blitter *next;
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY, next->ops->blitter_destroy)(next, context);
+ 
+     free(blitter);
+ }
+@@ -591,7 +591,7 @@
+         return dst_location;
+     }
+ 
+-    return next->ops->blitter_blit(next, op, context, src_texture, src_sub_resource_idx, src_location,
++    return MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, next->ops->blitter_blit)(next, op, context, src_texture, src_sub_resource_idx, src_location,
+             src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter,
+             resolve_format);
+ }
+@@ -622,7 +622,7 @@
+     struct wined3d_blitter *next;
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY, next->ops->blitter_destroy)(next, context);
+ 
+     free(blitter);
+ }
+@@ -700,7 +700,7 @@
+         }
+ 
+         TRACE("Forwarding to blitter %p.\n", next);
+-        return next->ops->blitter_blit(next, op, context, src_texture, src_sub_resource_idx, src_location,
++        return MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, next->ops->blitter_blit)(next, op, context, src_texture, src_sub_resource_idx, src_location,
+                 src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter,
+                 resolve_format);
+     }
+@@ -932,7 +932,7 @@
+             if (src_location == WINED3D_LOCATION_DRAWABLE)
+                 FIXME("WINED3D_LOCATION_DRAWABLE not supported for the source of a typeless resolve.\n");
+ 
+-            device->blitter->ops->blitter_blit(device->blitter, WINED3D_BLIT_OP_RAW_BLIT, context,
++            MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, device->blitter->ops->blitter_blit)(device->blitter, WINED3D_BLIT_OP_RAW_BLIT, context,
+                     src_texture, src_sub_resource_idx, src_location, src_rect,
+                     src_staging_texture, 0, src_location, src_rect,
+                     NULL, WINED3D_TEXF_NONE, NULL);
+@@ -1060,7 +1060,7 @@
+         if (dst_location == WINED3D_LOCATION_DRAWABLE)
+             FIXME("WINED3D_LOCATION_DRAWABLE not supported for the destination of a typeless resolve.\n");
+ 
+-        device->blitter->ops->blitter_blit(device->blitter, WINED3D_BLIT_OP_RAW_BLIT, context,
++        MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, device->blitter->ops->blitter_blit)(device->blitter, WINED3D_BLIT_OP_RAW_BLIT, context,
+                 dst_texture, 0, dst_location, dst_rect,
+                 dst_save_texture, dst_save_sub_resource_idx, dst_location, dst_rect,
+                 NULL, WINED3D_TEXF_NONE, NULL);
+@@ -1160,7 +1160,7 @@
+     struct wined3d_blitter *next;
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY, next->ops->blitter_destroy)(next, context);
+ 
+     free(blitter);
+ }
+@@ -1219,7 +1219,7 @@
+         }
+ 
+         TRACE("Forwarding to blitter %p.\n", next);
+-        return next->ops->blitter_blit(next, op, context, src_texture, src_sub_resource_idx, src_location,
++        return MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, next->ops->blitter_blit)(next, op, context, src_texture, src_sub_resource_idx, src_location,
+                 src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter,
+                 resolve_format);
+     }
+@@ -1820,13 +1820,13 @@
+         for (unsigned int z = 0; z < update_d; ++z, src_mem += src_slice_pitch)
+         {
+             if (decompress)
+-                compressed_format->decompress(src_mem, converted_mem, src_row_pitch, src_slice_pitch,
++                MGS2_P50_CALL(MGS2_P50_FORMAT_DECOMPRESS, compressed_format->decompress)(src_mem, converted_mem, src_row_pitch, src_slice_pitch,
+                         dst_row_pitch, dst_slice_pitch, update_w, update_h, 1);
+             else if (alpha_fixup_format_id != WINED3DFMT_UNKNOWN)
+                 wined3d_fixup_alpha(src_format, src_mem, src_row_pitch, converted_mem, dst_row_pitch,
+                         update_w, update_h);
+             else
+-                src_format->upload(src_mem, converted_mem, src_row_pitch, src_slice_pitch,
++                MGS2_P50_CALL(MGS2_P50_FORMAT_UPLOAD, src_format->upload)(src_mem, converted_mem, src_row_pitch, src_slice_pitch,
+                         dst_row_pitch, dst_slice_pitch, update_w, update_h, 1);
+ 
+             wined3d_texture_gl_upload_bo(src_format, target, level, dst_row_pitch, dst_slice_pitch, dst_x,
+@@ -2110,7 +2110,7 @@
+ 
+     if (format_gl->f.download)
+     {
+-        format_gl->f.download(mem, data->addr, src_row_pitch, src_slice_pitch, dst_row_pitch, dst_slice_pitch,
++        MGS2_P50_CALL(MGS2_P50_FORMAT_DOWNLOAD, format_gl->f.download)(mem, data->addr, src_row_pitch, src_slice_pitch, dst_row_pitch, dst_slice_pitch,
+                 wined3d_texture_get_level_width(&texture_gl->t, level),
+                 wined3d_texture_get_level_height(&texture_gl->t, level), 1);
+     }
+@@ -2371,7 +2371,7 @@
+     SetRect(&r, 0, 0, wined3d_texture_get_level_width(texture, level),
+             wined3d_texture_get_level_height(texture, level));
+     wined3d_texture_load_location(texture, sub_resource_idx, context, WINED3D_LOCATION_TEXTURE_RGB);
+-    device->blitter->ops->blitter_blit(device->blitter, WINED3D_BLIT_OP_COLOR_BLIT, context,
++    MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, device->blitter->ops->blitter_blit)(device->blitter, WINED3D_BLIT_OP_COLOR_BLIT, context,
+             texture, sub_resource_idx, WINED3D_LOCATION_TEXTURE_RGB, &r,
+             texture, sub_resource_idx, WINED3D_LOCATION_DRAWABLE, &r,
+             NULL, WINED3D_TEXF_POINT, NULL);
+--- a/dlls/wined3d/surface.c
++++ b/dlls/wined3d/surface.c
+@@ -327,7 +327,7 @@
+         TRACE("Using upload conversion.\n");
+ 
+         wined3d_texture_prepare_location(dst_texture, 0, context, WINED3D_LOCATION_TEXTURE_RGB);
+-        dst_texture->texture_ops->texture_upload_data(context, wined3d_const_bo_address(&src_data),
++        MGS2_P50_CALL(MGS2_P50_TEXTURE_UPLOAD_CPU, dst_texture->texture_ops->texture_upload_data)(context, wined3d_const_bo_address(&src_data),
+                 src_format, &src_box, src_row_pitch, src_slice_pitch,
+                 dst_texture, 0, WINED3D_LOCATION_TEXTURE_RGB, 0, 0, 0);
+ 
+@@ -485,7 +485,7 @@
+     struct wined3d_blitter *next;
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY, next->ops->blitter_destroy)(next, context);
+ 
+     free(blitter);
+ }
+@@ -1122,7 +1122,7 @@
+         texture_level = dst_sub_resource_idx % dst_texture->level_count;
+ 
+         wined3d_texture_prepare_location(dst_texture, texture_level, context, WINED3D_LOCATION_TEXTURE_RGB);
+-        dst_texture->texture_ops->texture_upload_data(context, wined3d_const_bo_address(&data), dst_format,
++        MGS2_P50_CALL(MGS2_P50_TEXTURE_UPLOAD_CPU, dst_texture->texture_ops->texture_upload_data)(context, wined3d_const_bo_address(&data), dst_format,
+                 dst_box, dst_map.row_pitch, dst_map.slice_pitch, dst_texture, texture_level,
+                 WINED3D_LOCATION_TEXTURE_RGB, dst_box->left, dst_box->top, 0);
+ 
+@@ -1145,7 +1145,7 @@
+     {
+         SetRect(&dst_texture->swapchain->front_buffer_update,
+                 dst_box->left, dst_box->top, dst_box->right, dst_box->bottom);
+-        dst_texture->swapchain->swapchain_ops->swapchain_frontbuffer_updated(dst_texture->swapchain);
++        MGS2_P50_CALL(MGS2_P50_MISC_OPS, dst_texture->swapchain->swapchain_ops->swapchain_frontbuffer_updated)(dst_texture->swapchain);
+     }
+     if (converted_texture)
+         wined3d_texture_decref(converted_texture);
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -567,25 +567,25 @@
+ static inline void *wined3d_device_context_require_space(struct wined3d_device_context *context,
+         size_t size, enum wined3d_cs_queue_id queue_id)
+ {
+-    return context->ops->require_space(context, size, queue_id);
++    return MGS2_P50_CALL(MGS2_P50_CONTEXT_OPS, context->ops->require_space)(context, size, queue_id);
+ }
+ 
+ static inline void wined3d_device_context_submit(struct wined3d_device_context *context,
+         enum wined3d_cs_queue_id queue_id)
+ {
+-    context->ops->submit(context, queue_id);
++    MGS2_P50_CALL(MGS2_P50_CONTEXT_OPS, context->ops->submit)(context, queue_id);
+ }
+ 
+ static inline void wined3d_device_context_finish(struct wined3d_device_context *context,
+         enum wined3d_cs_queue_id queue_id)
+ {
+-    context->ops->finish(context, queue_id);
++    MGS2_P50_CALL(MGS2_P50_CONTEXT_OPS, context->ops->finish)(context, queue_id);
+ }
+ 
+ static inline void wined3d_device_context_reference_resource(struct wined3d_device_context *context,
+         struct wined3d_resource *resource)
+ {
+-    context->ops->reference_resource(context, resource);
++    MGS2_P50_CALL(MGS2_P50_CONTEXT_OPS, context->ops->reference_resource)(context, resource);
+ }
+ 
+ static struct wined3d_cs *wined3d_cs_from_context(struct wined3d_device_context *context)
+@@ -4662,7 +4662,7 @@
+     if (resource->type == WINED3D_RTYPE_BUFFER && box->right - box->left == resource->size)
+         invalidate_client_address(resource);
+ 
+-    if (context->ops->map_upload_bo(context, resource, sub_resource_idx, &map_desc, box, WINED3D_MAP_WRITE))
++    if (MGS2_P50_CALL(MGS2_P50_CONTEXT_OPS, context->ops->map_upload_bo)(context, resource, sub_resource_idx, &map_desc, box, WINED3D_MAP_WRITE))
+     {
+         const struct wined3d_format *format = resource->format;
+ 
+@@ -4687,7 +4687,7 @@
+             wined3d_format_copy_data(format, data, row_pitch, slice_pitch, map_desc.data, map_desc.row_pitch,
+                     map_desc.slice_pitch, box->right - box->left, box->bottom - box->top, box->back - box->front);
+         }
+-        context->ops->unmap_upload_bo(context, resource, sub_resource_idx, &dummy_box, &bo);
++        MGS2_P50_CALL(MGS2_P50_CONTEXT_OPS, context->ops->unmap_upload_bo)(context, resource, sub_resource_idx, &dummy_box, &bo);
+         wined3d_device_context_upload_bo(context, resource, sub_resource_idx,
+                 box, &bo, map_desc.row_pitch, map_desc.slice_pitch);
+         return;
+@@ -5073,7 +5073,7 @@
+ 
+         if (flags & WINED3D_MAP_DISCARD)
+         {
+-            if (!device->adapter->adapter_ops->adapter_alloc_bo(device, resource, sub_resource_idx, &addr))
++            if (!MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, device->adapter->adapter_ops->adapter_alloc_bo)(device, resource, sub_resource_idx, &addr))
+                 return false;
+ 
+             /* Limit NOOVERWRITE maps to buffers for now; there are too many
+@@ -6291,7 +6291,7 @@
+     upload = &deferred->uploads[deferred->upload_count++];
+ 
+     if ((flags & WINED3D_MAP_DISCARD)
+-            && device->adapter->adapter_ops->adapter_alloc_bo(device, resource, sub_resource_idx, &addr))
++            && MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, device->adapter->adapter_ops->adapter_alloc_bo)(device, resource, sub_resource_idx, &addr))
+     {
+         upload->bo = addr.buffer_object;
+         upload->sysmem = NULL;
+--- a/dlls/wined3d/device.c
++++ b/dlls/wined3d/device.c
+@@ -123,8 +123,8 @@
+ 
+     TRACE("Removing context %p.\n", context);
+ 
+-    device->adapter->fragment_pipe->free_context_data(context);
+-    device->shader_backend->shader_free_context_data(context);
++    MGS2_P50_CALL(MGS2_P50_MISC_OPS, device->adapter->fragment_pipe->free_context_data)(context);
++    MGS2_P50_CALL(MGS2_P50_MISC_OPS, device->shader_backend->shader_free_context_data)(context);
+ 
+     for (i = 0; i < device->context_count; ++i)
+     {
+@@ -257,7 +257,7 @@
+     if (!refcount)
+     {
+         wined3d_mutex_lock();
+-        device->adapter->adapter_ops->adapter_destroy_device(device);
++        MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, device->adapter->adapter_ops->adapter_destroy_device)(device);
+         TRACE("Destroyed device %p.\n", device);
+         wined3d_mutex_unlock();
+     }
+@@ -1732,7 +1732,7 @@
+         wined3d_cs_emit_unload_resource(device->cs, resource);
+     }
+ 
+-    device->adapter->adapter_ops->adapter_uninit_3d(device);
++    MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, device->adapter->adapter_ops->adapter_uninit_3d)(device);
+     device->d3d_initialized = FALSE;
+ 
+     if ((view = device->auto_depth_stencil_view))
+--- a/dlls/wined3d/texture.c
++++ b/dlls/wined3d/texture.c
+@@ -737,7 +737,7 @@
+                 break;
+             }
+         }
+-        texture->resource.device->adapter->adapter_ops->adapter_destroy_texture(texture);
++        MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, texture->resource.device->adapter->adapter_ops->adapter_destroy_texture)(texture);
+         if (!in_cs_thread)
+             wined3d_mutex_unlock();
+     }
+@@ -1891,7 +1891,7 @@
+         }
+     }
+ 
+-    if (FAILED(hr = device->adapter->adapter_ops->adapter_create_texture(device, desc,
++    if (FAILED(hr = MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, device->adapter->adapter_ops->adapter_create_texture)(device, desc,
+             layer_count, level_count, flags, parent, parent_ops, texture)))
+         return hr;
+ 
+--- a/dlls/wined3d/view.c
++++ b/dlls/wined3d/view.c
+@@ -421,7 +421,7 @@
+         /* Release the resource after destroying the view.
+          * See wined3d_shader_resource_view_decref(). */
+         wined3d_mutex_lock();
+-        resource->device->adapter->adapter_ops->adapter_destroy_rendertarget_view(view);
++        MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, resource->device->adapter->adapter_ops->adapter_destroy_rendertarget_view)(view);
+         wined3d_mutex_unlock();
+         wined3d_resource_decref(resource);
+     }
+@@ -1034,7 +1034,7 @@
+ void wined3d_shader_resource_view_destroy(struct wined3d_shader_resource_view *view)
+ {
+     wined3d_mutex_lock();
+-    view->resource->device->adapter->adapter_ops->adapter_destroy_shader_resource_view(view);
++    MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, view->resource->device->adapter->adapter_ops->adapter_destroy_shader_resource_view)(view);
+     wined3d_mutex_unlock();
+ }
+ 
+@@ -1597,7 +1597,7 @@
+         /* Release the resource after destroying the view.
+          * See wined3d_shader_resource_view_decref(). */
+         wined3d_mutex_lock();
+-        resource->device->adapter->adapter_ops->adapter_destroy_unordered_access_view(view);
++        MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, resource->device->adapter->adapter_ops->adapter_destroy_unordered_access_view)(view);
+         wined3d_mutex_unlock();
+         wined3d_resource_decref(resource);
+     }
+--- a/dlls/wined3d/buffer.c
++++ b/dlls/wined3d/buffer.c
+@@ -487,7 +487,7 @@
+     {
+         wined3d_mutex_lock();
+         buffer->resource.parent_ops->wined3d_object_destroyed(buffer->resource.parent);
+-        buffer->resource.device->adapter->adapter_ops->adapter_destroy_buffer(buffer);
++        MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, buffer->resource.device->adapter->adapter_ops->adapter_destroy_buffer)(buffer);
+         wined3d_mutex_unlock();
+     }
+ 
+--- a/dlls/wined3d/directx.c
++++ b/dlls/wined3d/directx.c
+@@ -210,7 +210,7 @@
+         {
+             struct wined3d_adapter *adapter = wined3d->adapters[i];
+ 
+-            adapter->adapter_ops->adapter_destroy(adapter);
++            MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, adapter->adapter_ops->adapter_destroy)(adapter);
+         }
+         free(wined3d);
+         wined3d_mutex_unlock();
+@@ -2952,7 +2952,7 @@
+     TRACE("device %p.\n", device);
+ 
+     context_no3d = &wined3d_device_no3d(device)->context_no3d;
+-    device->blitter->ops->blitter_destroy(device->blitter, NULL);
++    MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY, device->blitter->ops->blitter_destroy)(device->blitter, NULL);
+     wined3d_cs_finish(device->cs, WINED3D_CS_QUEUE_DEFAULT);
+ 
+     device_context_remove(device, context_no3d);
+--- a/dlls/wined3d/sampler.c
++++ b/dlls/wined3d/sampler.c
+@@ -41,7 +41,7 @@
+     if (!refcount)
+     {
+         sampler->parent_ops->wined3d_object_destroyed(sampler->parent);
+-        sampler->device->adapter->adapter_ops->adapter_destroy_sampler(sampler);
++        MGS2_P50_CALL(MGS2_P50_ADAPTER_OPS, sampler->device->adapter->adapter_ops->adapter_destroy_sampler)(sampler);
+         wined3d_mutex_unlock();
+     }
+ 
+--- a/dlls/wined3d/texture_vk.c
++++ b/dlls/wined3d/texture_vk.c
+@@ -1164,7 +1164,7 @@
+     TRACE("blitter %p, context %p.\n", blitter, context);
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY, next->ops->blitter_destroy)(next, context);
+ 
+     free(blitter);
+ }
+@@ -1942,7 +1942,7 @@
+     }
+ 
+     TRACE("Forwarding to blitter %p.\n", next);
+-    return next->ops->blitter_blit(next, op, context, src_texture, src_sub_resource_idx, src_location,
++    return MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT, next->ops->blitter_blit)(next, op, context, src_texture, src_sub_resource_idx, src_location,
+             src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter, resolve_format);
+ }
+ 

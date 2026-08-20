@@ -12,6 +12,9 @@
  * second definition breaks the link:
  *   _assert  _fdclass  __wine_dbg_get_channel_flags  __wine_dbg_header
  *   __wine_dbg_output  __wine_dbg_strdup  __stdio_common_vsprintf
+ *   TlsGetValue  TlsSetValue  WindowFromDC
+ *   wglCreateContext  wglDeleteContext  wglGetCurrentContext  wglGetCurrentDC
+ *   wglGetProcAddress  wglMakeCurrent  wglShareLists
  * _recalloc is NOT in that set and stays an abort stub on purpose: it would
  * have to resize a block whose allocator is unknown. */
 extern int printf(const char *, ...);
@@ -142,12 +145,9 @@ void StretchBlt(void) { mgs2_island_forbidden("StretchBlt"); }
 void SystemParametersInfoW(void) { mgs2_island_forbidden("SystemParametersInfoW"); }
 void TlsAlloc(void) { mgs2_island_forbidden("TlsAlloc"); }
 void TlsFree(void) { mgs2_island_forbidden("TlsFree"); }
-void TlsGetValue(void) { mgs2_island_forbidden("TlsGetValue"); }
-void TlsSetValue(void) { mgs2_island_forbidden("TlsSetValue"); }
 void UnhookWindowsHookEx(void) { mgs2_island_forbidden("UnhookWindowsHookEx"); }
 void UnregisterClassA(void) { mgs2_island_forbidden("UnregisterClassA"); }
 void WaitForSingleObject(void) { mgs2_island_forbidden("WaitForSingleObject"); }
-void WindowFromDC(void) { mgs2_island_forbidden("WindowFromDC"); }
 void __stdio_common_vsscanf(void) { mgs2_island_forbidden("__stdio_common_vsscanf"); }
 void _putenv(void) { mgs2_island_forbidden("_putenv"); }
 void _recalloc(void) { mgs2_island_forbidden("_recalloc"); }
@@ -165,10 +165,3 @@ void vkd3d_shader_free_shader_code(void) { mgs2_island_forbidden("vkd3d_shader_f
 void vkd3d_shader_parse_dxbc(void) { mgs2_island_forbidden("vkd3d_shader_parse_dxbc"); }
 void vkd3d_shader_scan(void) { mgs2_island_forbidden("vkd3d_shader_scan"); }
 void vkd3d_utils_set_log_callback(void) { mgs2_island_forbidden("vkd3d_utils_set_log_callback"); }
-void wglCreateContext(void) { mgs2_island_forbidden("wglCreateContext"); }
-void wglDeleteContext(void) { mgs2_island_forbidden("wglDeleteContext"); }
-void wglGetCurrentContext(void) { mgs2_island_forbidden("wglGetCurrentContext"); }
-void wglGetCurrentDC(void) { mgs2_island_forbidden("wglGetCurrentDC"); }
-void wglGetProcAddress(void) { mgs2_island_forbidden("wglGetProcAddress"); }
-void wglMakeCurrent(void) { mgs2_island_forbidden("wglMakeCurrent"); }
-void wglShareLists(void) { mgs2_island_forbidden("wglShareLists"); }
