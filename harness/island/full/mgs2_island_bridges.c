@@ -175,6 +175,66 @@ struct mgs2_draw_correctness_public mgs2_p67_draw_correctness =
     ~MGS2_DRAW_CORRECTNESS_MAGIC,
 };
 
+#define MGS2_P69_CORRECTNESS_MAGIC 0x31413950u /* P9A1 */
+
+struct mgs2_p69_correctness_public
+{
+    uint32_t magic, version, size_words, signature;
+    uint32_t enabled, calls, false_returns, guest_fallbacks;
+};
+
+__attribute__((visibility("default")))
+struct mgs2_p69_correctness_public mgs2_p69_correctness =
+{
+    MGS2_P69_CORRECTNESS_MAGIC, 1,
+    sizeof(struct mgs2_p69_correctness_public) / sizeof(uint32_t),
+    ~MGS2_P69_CORRECTNESS_MAGIC,
+};
+
+static int mgs2_p69_correctness_on(void)
+{
+    static int enabled = -1;
+
+    if (enabled == -1)
+    {
+        const char *value = getenv("MGS2_P69_CORRECTNESS");
+
+        enabled = value && strcmp(value, "0");
+        mgs2_p69_correctness.enabled = enabled;
+    }
+    return enabled;
+}
+
+#define MGS2_PHASE_A_CORRECTNESS_MAGIC 0x31413050u /* P0A1 */
+
+struct mgs2_phase_a_correctness_public
+{
+    uint32_t magic, version, size_words, signature;
+    uint32_t enabled, calls, guest_fallbacks;
+};
+
+__attribute__((visibility("default")))
+struct mgs2_phase_a_correctness_public mgs2_phase_a_correctness =
+{
+    MGS2_PHASE_A_CORRECTNESS_MAGIC, 1,
+    sizeof(struct mgs2_phase_a_correctness_public) / sizeof(uint32_t),
+    ~MGS2_PHASE_A_CORRECTNESS_MAGIC,
+};
+
+static int mgs2_phase_a_correctness_on(void)
+{
+    static int enabled = -1;
+
+    if (enabled == -1)
+    {
+        const char *value = getenv("MGS2_PHASE_A_CORRECTNESS");
+
+        enabled = value && strcmp(value, "0");
+        mgs2_phase_a_correctness.enabled = enabled;
+    }
+    return enabled;
+}
+
 static int mgs2_draw_correctness_on(void)
 {
     static int enabled = -1;
@@ -439,6 +499,59 @@ static void mgs2_island_w38_vFp(x86emu_t *emu, uintptr_t fnc)
     }
 }
 
+/* p69 moves only context_apply_draw_state() below an already current guest GL
+ * context. The argument/result object is guest memory and has the same 32-bit
+ * layout on i386 and armhf. Keep this correctness wrapper free of A/B logic. */
+static void mgs2_island_w39_vFp(x86emu_t *emu, uintptr_t fnc)
+{
+    struct mgs2_apply_draw_state_args32
+    {
+        uint32_t context, device, state, indexed, result;
+    };
+    uint32_t esp = GetESP(emu);
+    struct mgs2_apply_draw_state_args32 *a = *(void **)(esp + 4);
+
+    if (mgs2_island_context_tls_sync() == 1)
+    {
+        if (mgs2_p69_correctness_on())
+            ++mgs2_p69_correctness.calls;
+        ((void (*)(void *))fnc)(a);
+        if (mgs2_p69_correctness_on() && a && !a->result)
+            ++mgs2_p69_correctness.false_returns;
+    }
+    else
+    {
+        uintptr_t guest = mgs2_island_entry_guest(39);
+
+        if (mgs2_p69_correctness_on())
+            ++mgs2_p69_correctness.guest_fallbacks;
+        if (guest)
+            RunFunctionFmt(guest, "p", a);
+    }
+}
+
+static void mgs2_island_w40_vFp(x86emu_t *emu, uintptr_t fnc)
+{
+    uint32_t esp = GetESP(emu);
+    void *a = *(void **)(esp + 4);
+
+    if (mgs2_island_context_tls_sync() == 1)
+    {
+        if (mgs2_phase_a_correctness_on())
+            ++mgs2_phase_a_correctness.calls;
+        ((void (*)(void *))fnc)(a);
+    }
+    else
+    {
+        uintptr_t guest = mgs2_island_entry_guest(40);
+
+        if (mgs2_phase_a_correctness_on())
+            ++mgs2_phase_a_correctness.guest_fallbacks;
+        if (guest)
+            RunFunctionFmt(guest, "p", a);
+    }
+}
+
 static void mgs2_island_w_vFppppi(x86emu_t *emu, uintptr_t fnc)
 {
     uint32_t esp = GetESP(emu);
@@ -518,6 +631,8 @@ extern void wined3d_texture_prepare_location(void);
 extern void wined3d_texture_validate_location(void);
 extern void mgs2_cs_exec_draw_one_island(void);
 extern void mgs2_draw_primitive_arrays_island(void);
+extern void mgs2_context_apply_draw_state_island(void);
+extern void mgs2_draw_state_phase_a_island(void);
 
 const struct mgs2_island_entry mgs2_island_entries[] = {
     { 0, (void *)mgs2_island_w_vFpu, (void *)context_invalidate_compute_state },
@@ -557,5 +672,7 @@ const struct mgs2_island_entry mgs2_island_entries[] = {
     { 36, (void *)mgs2_island_w_vFpuu, (void *)wined3d_texture_validate_location },
     { 37, (void *)mgs2_island_w_ab37_vFpuup, (void *)mgs2_cs_exec_draw_one_island },
     { 38, (void *)mgs2_island_w38_vFp, (void *)mgs2_draw_primitive_arrays_island },
+    { 39, (void *)mgs2_island_w39_vFp, (void *)mgs2_context_apply_draw_state_island },
+    { 40, (void *)mgs2_island_w40_vFp, (void *)mgs2_draw_state_phase_a_island },
 };
-const unsigned int mgs2_island_entry_count = 37;
+const unsigned int mgs2_island_entry_count = 39;

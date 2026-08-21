@@ -30,6 +30,7 @@ actually runs, which is the one that matters: an entry's RVA must come from the
 DLL being mounted, not from a rebuild.
 
 usage: gen_entry_identity.py <mounted wined3d.dll> [-o header] [--objdump CMD]
+       [--require-id N ...]
 """
 import argparse
 import bisect
@@ -81,6 +82,8 @@ def main():
     ap.add_argument("dll")
     ap.add_argument("-o", "--out")
     ap.add_argument("--objdump", default="i686-w64-mingw32-objdump")
+    ap.add_argument("--require-id", type=int, action="append", default=[],
+                    help="limit the offset/coverage control to an armed id; repeatable")
     args = ap.parse_args()
 
     data = open(args.dll, "rb").read()
@@ -158,10 +161,22 @@ def main():
     if not rows:
         print("\ncontrol check FAILED: no identities found")
         return 1
-    bad = [r for r in rows if r[1] > 64]
-    print("\ncontrol check: %d identities, %d with marker offset beyond 64"
-          % (len(rows), len(bad)))
-    return 0 if not bad else 1
+    checked = rows
+    missing = []
+    if args.require_id:
+        by_id = {r[0]: r for r in rows}
+        missing = sorted(set(args.require_id) - set(by_id))
+        checked = [by_id[mid] for mid in sorted(set(args.require_id)) if mid in by_id]
+    bad = [r for r in checked if r[1] > 64]
+    scope = "required armed ids" if args.require_id else "identities"
+    print("\ncontrol check: %d %s, %d missing, %d with marker offset beyond 64"
+          % (len(checked), scope, len(missing), len(bad)))
+    if missing:
+        print("control check missing ids: " + ",".join(map(str, missing)))
+    if bad:
+        print("control check out-of-window ids: "
+              + ",".join("%d(+%d)" % (r[0], r[1]) for r in bad))
+    return 0 if not missing and not bad else 1
 
 
 if __name__ == "__main__":

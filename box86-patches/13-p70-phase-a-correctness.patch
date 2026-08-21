@@ -1,0 +1,104 @@
+Patch 13 -- p70 ABI-admitted draw-state phase-A correctness bridge.
+
+Incremental after patch 12 and Wine patch 67. Entry 40 carries one pointer to a
+guest-stack argument object and invokes only the contiguous resource/stream
+preload transaction after the guest has acquired and made the GL context
+current. Guest x86 retains context_apply_draw_state() control flow, phases
+B/C/D, final submission, barriers and release.
+
+MGS2_PHASE_A_CORRECTNESS enables a seven-word exported memory-only record for
+calls and guest fallbacks. It adds no stderr output and is intended only for the
+first correctness run. The wrapper reuses the p67 TLS guard and fails closed to
+the guest body when the guard is unavailable.
+
+Regenerate mgs2_island_entry_identity.h and class B from the exact paired p70
+DLL. The device artifact has entry 40 marker +29 at canonical RVA 0xb9410 and
+1,616 class-B IDs. This patch makes no frame-rate claim.
+
+--- a/src/mgs2_island_bridges.c
++++ b/src/mgs2_island_bridges.c
+@@ -209,6 +209,36 @@
+     return enabled;
+ }
+ 
++#define MGS2_PHASE_A_CORRECTNESS_MAGIC 0x31413050u /* P0A1 */
++
++struct mgs2_phase_a_correctness_public
++{
++    uint32_t magic, version, size_words, signature;
++    uint32_t enabled, calls, guest_fallbacks;
++};
++
++__attribute__((visibility("default")))
++struct mgs2_phase_a_correctness_public mgs2_phase_a_correctness =
++{
++    MGS2_PHASE_A_CORRECTNESS_MAGIC, 1,
++    sizeof(struct mgs2_phase_a_correctness_public) / sizeof(uint32_t),
++    ~MGS2_PHASE_A_CORRECTNESS_MAGIC,
++};
++
++static int mgs2_phase_a_correctness_on(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        const char *value = getenv("MGS2_PHASE_A_CORRECTNESS");
++
++        enabled = value && strcmp(value, "0");
++        mgs2_phase_a_correctness.enabled = enabled;
++    }
++    return enabled;
++}
++
+ static int mgs2_draw_correctness_on(void)
+ {
+     static int enabled = -1;
+@@ -550,6 +580,31 @@
+     }
+ }
+ 
++/* p70 keeps context_apply_draw_state() and phases B/C/D in guest x86. Only
++ * the ABI-admitted contiguous resource/stream preload transaction is native.
++ * There is no A/B logic in this first correctness wrapper. */
++static void mgs2_island_w40_vFp(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++    void *a = *(void **)(esp + 4);
++
++    if (mgs2_island_context_tls_sync() == 1)
++    {
++        if (mgs2_phase_a_correctness_on())
++            ++mgs2_phase_a_correctness.calls;
++        ((void (*)(void *))fnc)(a);
++    }
++    else
++    {
++        uintptr_t guest = mgs2_island_entry_guest(40);
++
++        if (mgs2_phase_a_correctness_on())
++            ++mgs2_phase_a_correctness.guest_fallbacks;
++        if (guest)
++            RunFunctionFmt(guest, "p", a);
++    }
++}
++
+ static void mgs2_island_w_vFppppi(x86emu_t *emu, uintptr_t fnc)
+ {
+     uint32_t esp = GetESP(emu);
+@@ -630,6 +685,7 @@
+ extern void mgs2_cs_exec_draw_one_island(void);
+ extern void mgs2_draw_primitive_arrays_island(void);
+ extern void mgs2_context_apply_draw_state_island(void);
++extern void mgs2_draw_state_phase_a_island(void);
+ 
+ const struct mgs2_island_entry mgs2_island_entries[] = {
+     { 0, (void *)mgs2_island_w_vFpu, (void *)context_invalidate_compute_state },
+@@ -670,5 +726,6 @@
+     { 37, (void *)mgs2_island_w_ab37_vFpuup, (void *)mgs2_cs_exec_draw_one_island },
+     { 38, (void *)mgs2_island_w38_vFp, (void *)mgs2_draw_primitive_arrays_island },
+     { 39, (void *)mgs2_island_w39_vFp, (void *)mgs2_context_apply_draw_state_island },
++    { 40, (void *)mgs2_island_w40_vFp, (void *)mgs2_draw_state_phase_a_island },
+ };
+-const unsigned int mgs2_island_entry_count = 38;
++const unsigned int mgs2_island_entry_count = 39;

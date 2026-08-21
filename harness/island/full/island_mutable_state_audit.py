@@ -4,20 +4,25 @@
 The ARM island links a second copy of WineD3D's translation units into Box86.
 Any mutable file-scope object used by both guest and ARM may therefore diverge.
 This audit starts at an island entry, builds the same direct/source/ops closure
-as the indirect-call audit, then uses a link made with ``--emit-relocs`` plus
-PC-relative literal decoding to find the writable ``.data/.bss/.tbss`` objects
-actually referenced by that closure.
+as the indirect-call audit, then decodes absolute and PC-relative literals in a
+link made with ``--emit-relocs`` to find the writable ``.data/.bss/.tbss``
+objects referenced by that closure.  It does not yet parse the ELF relocation
+tables themselves; a clean root result is therefore a review input, not proof
+that no duplicated mutable state exists.
 
 Zero-storage objects are labelled RUNTIME candidates.  That is deliberately a
 review label, not a claim that every BSS object must be shared: counters, caches
 owned wholly by the ARM closure, and immutable-after-init tables are harmless.
 
-Control: entry 37 must find ``wined3d_context_tls_idx``.  p67 proved that this
-second copy exists and starts at zero, so missing it invalidates the audit.
+Control: an entry-37 run must find both ``wined3d_context_tls_idx`` and
+``mgs2_batch_ptr``.  p67 proved that these copies exist, so missing either
+invalidates the analyser.  A direct ``--root`` run deliberately does not apply
+entry-37-specific mandatory symbols; run entry 37 separately as its self-test.
 """
 
 import argparse
 import collections
+import functools
 import os
 import pathlib
 import re
@@ -80,10 +85,53 @@ def writable_objects(binary, sec):
     return sorted(set(objects))
 
 
-def source_closure(binary, entry, entries, requested_root=None):
+@functools.lru_cache(maxsize=4)
+def source_graph(binary):
+    """Return the reusable direct/source/ops adjacency for one ARM binary."""
     bodies = island_icall_audit.functions_by_file()
     by_addr, by_name = island_reach.symbols(binary)
     calls, _indirect, _teb = island_reach.call_graph(binary, by_addr)
+    call_re = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+    src_calls = {}
+    for fn, (_filename, _line, body) in bodies.items():
+        src_calls[fn] = {m.group(1) for _n, text in body for m in call_re.finditer(text)
+                         if m.group(1) in bodies}
+    targets = island_gl_reach.ops_targets(island_icall_audit.SRC_DIR)
+    member_call = re.compile(r"(?:->|\.)\s*(\w+)\s*(?:\(|\))")
+
+    graph = collections.defaultdict(set)
+    candidates = set(bodies) | set(calls)
+    for fn in candidates:
+        base = CLONE.sub("", fn)
+        for callee in calls.get(fn, ()):
+            normalized = CLONE.sub("", callee)
+            if normalized in bodies:
+                graph[fn].add(normalized)
+        for callee in src_calls.get(base, ()):
+            if callee in by_name or callee in bodies:
+                graph[fn].add(callee)
+        if base in bodies:
+            for _n, text in bodies[base][2]:
+                for match in member_call.finditer(text):
+                    graph[fn].update(target for target in targets.get(match.group(1), ())
+                                     if target in bodies)
+    return {name: frozenset(edges) for name, edges in graph.items()}
+
+
+def source_closure_roots(binary, roots):
+    """Build one closure for one or more roots without reparsing the binary."""
+    graph = source_graph(binary)
+    closure, stack = set(), list(roots)
+    while stack:
+        fn = stack.pop()
+        if fn in closure:
+            continue
+        closure.add(fn)
+        stack.extend(graph.get(fn, ()))
+    return closure
+
+
+def source_closure(binary, entry, entries, requested_root=None):
     root = requested_root
     if not root:
         for line in open(entries):
@@ -93,35 +141,7 @@ def source_closure(binary, entry, entries, requested_root=None):
                 break
     if not root:
         raise RuntimeError("entry %d not found in %s" % (entry, entries))
-
-    call_re = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
-    src_calls = {}
-    for fn, (_filename, _line, body) in bodies.items():
-        src_calls[fn] = {m.group(1) for _n, text in body for m in call_re.finditer(text)
-                         if m.group(1) in bodies}
-    targets = island_gl_reach.ops_targets(island_icall_audit.SRC_DIR)
-    member_call = re.compile(r"(?:->|\.)\s*(\w+)\s*(?:\(|\))")
-
-    closure, stack = set(), [root]
-    while stack:
-        fn = stack.pop()
-        if fn in closure:
-            continue
-        closure.add(fn)
-        base = CLONE.sub("", fn)
-        for callee in calls.get(fn, ()):
-            normalized = CLONE.sub("", callee)
-            if normalized in bodies:
-                stack.append(normalized)
-        for callee in src_calls.get(base, ()):
-            if callee in by_name or callee in bodies:
-                stack.append(callee)
-        if base in bodies:
-            for _n, text in bodies[base][2]:
-                for match in member_call.finditer(text):
-                    stack.extend(target for target in targets.get(match.group(1), ())
-                                 if target in bodies)
-    return root, closure
+    return root, source_closure_roots(binary, [root])
 
 
 def disassembly(binary):
@@ -245,6 +265,10 @@ def main():
         print("%-7s %-38s %s %6d bytes @ %#x  refs=%d" %
               (label, name, section, size, address, len(sites)))
         print("        " + ", ".join(callers[:8]) + (" ..." if len(callers) > 8 else ""))
+
+    if args.root or args.entry != 37:
+        print("\ncontrol: SKIP (entry-37 self-test is separate from this root)")
+        return 0
 
     found = {name for _c, name, *_rest in rows}
     controls = {"wined3d_context_tls_idx", "mgs2_batch_ptr"}

@@ -94,8 +94,11 @@ docs/briefs/MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md
                            START HERE after p67: lower entry 38's exact ABI and
                            correctness proof, the separately captured direct
                            self-owned mutex freeze, debugger recovery, passive
-                           mutex ring + immediate symmetric p68 A/B, and the
-                           isolated native context_apply_draw_state() gate
+                           mutex ring, symmetric p68 A/B, p69's black frame and
+                           transitive shared-heap ABI failure, proven-root
+                           admission controls and offline phase ranking selecting
+                           p70 phase A, whose heavy-save gameplay correctness gate
+                           passes while its symmetric performance A/B remains open
 docs/briefs/MGS2_ISLAND_MEASURED_2026-08-16c.md
                            the entry-10 measurement the ABBA harness exists for:
                            -8.87 ms/frame, and section 4 on the unfinished
@@ -437,13 +440,38 @@ did not close this display-lock self-deadlock. Do not attribute this occurrence
 or its frequency to entry 38, and do not confuse it with the 0x400f alert-futex freeze. Full
 standalone record and next gates:
 `docs/briefs/MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md`
-p66/p67 moved current-context ownership and context_apply_draw_state into ARM
-together; p68 moved both back together. They therefore did NOT prove that state
-apply itself must stay guest. The passive bounded display-lock ring remains
-available; the next renderer action is context_apply_draw_state alone in ARM,
-correctness first, while acquire/current ownership/release stay guest. WINE_NO_TRACE_MSGS is
-not another experiment: the documented production recipe already defines it
-with WINE_NO_DEBUG_MSGS, and brief 29 records TRACE/debug removed
+p69 attempted to isolate that unanswered half: entry 39 moves only
+`context_apply_draw_state()` to ARM while acquire/current ownership, RT/depth
+preparation, final draw, barriers and release stay guest. The stopped correctness
+capture had 1,357,984 calls, zero FALSE and zero fallback, with 1,357,983 final
+array submissions still advancing; nevertheless the last 64 of 6,921 frame
+witnesses were identical and 0/256 lit, and an independent 640x480 grim capture
+was all black. No timing was attempted. The concrete p69 artifact is rejected,
+but it is not an ABI-valid rejection of native state apply. Coarse entry 37 is
+closed and zero-value entry 38 is closed as a performance root. The transitive
+ABI audit found an exact shared-
+heap mismatch: `ffp_frag_settings` is 132 bytes in guest i386 and 100 in ARM;
+`glsl_ffp_fragment_shader` is consequently 164 versus 132 bytes and its
+`id` / `linked_programs` / `source` offsets are 148/152/160 versus 116/120/128.
+The corrected closure is 733 functions; the earlier 526-function mutable audit
+had silently omitted the GLSL backend because its parser counted braces in shader
+strings. ARM can insert a 132-byte cache node where guest x86 expects 164 bytes,
+so correctness modes may not share a process. The ABI admission self-test passes
+proven entries 10/23/38 and fails p69/D; separate phases A resource/preload, B
+dirty-state and C bindings/FBO pass, while D fails. Offline reattribution of the
+existing exact island41/p56 profile ranks their unique shares A 2.878%, B 2.596%
+and C 0.514% of all user cycles. These are not ms/frame. P70 now implements the
+contiguous phase-A root as entry 40: 548 functions, 1,096 aggregate rows with
+zero ABI mismatch, and an indirect-call audit of 53 routed / zero unrouted.
+Its heavy-save device gate reached 2,172,004 phase-A calls and exactly equal
+final array submissions with zero fallback/faults; the retained 64 frames were
+all unique, lit and changing, and an independent CAUTION gameplay screenshot
+was correct. P70 therefore passes gameplay correctness and may proceed to a
+symmetric same-process A/B. No p70 FPS effect is measured or claimed and
+FINALPLAY7 remains production.
+The passive display-lock ring remains available. WINE_NO_TRACE_MSGS is not
+another experiment: the documented production recipe already defines it with
+WINE_NO_DEBUG_MSGS, and brief 29 records TRACE/debug removed
 the first 2026-08-19 attempt to widen past 17 entries was blocked by entry 34
 appearing to fault at its bridge +0xB. That interim diagnosis is superseded by
 sections 11 onward of the same brief: the parked guest EIP hid native ARM calls

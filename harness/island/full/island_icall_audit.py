@@ -64,6 +64,61 @@ CLONE = re.compile(r"\.(isra|part|constprop|cold|lto_priv|localalias)\.?\d*$")
 KEYWORDS = {"if", "for", "while", "switch", "return", "sizeof", "do", "else"}
 
 
+def mask_c_lines(lines):
+    """Remove comments and literals while preserving line/column positions.
+
+    Function extents used to count braces in raw source.  GLSL source strings
+    in ``glsl_shader.c`` contain many literal ``{`` / ``}`` characters; one of
+    those made the parser keep an earlier function open and silently lose
+    ``shader_glsl_apply_draw_state()`` and the functions after it.  Replace
+    non-newline comment/string contents with spaces before counting braces.
+    """
+    block = False
+    quote = None
+    escaped = False
+    for raw in lines:
+        out = list(raw)
+        i = 0
+        while i < len(raw):
+            c = raw[i]
+            n = raw[i + 1] if i + 1 < len(raw) else ""
+            if block:
+                out[i] = " "
+                if c == "*" and n == "/":
+                    out[i + 1] = " "
+                    block = False
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if quote:
+                out[i] = " "
+                if escaped:
+                    escaped = False
+                elif c == "\\":
+                    escaped = True
+                elif c == quote:
+                    quote = None
+                i += 1
+                continue
+            if c == "/" and n == "*":
+                out[i] = out[i + 1] = " "
+                block = True
+                i += 2
+            elif c == "/" and n == "/":
+                for j in range(i, len(raw)):
+                    out[j] = " "
+                break
+            elif c in ('"', "'"):
+                out[i] = " "
+                quote = c
+                escaped = False
+                i += 1
+            else:
+                i += 1
+        yield "".join(out)
+
+
 def field_names():
     """Function-pointer member names, from every header in the module."""
     names = set()
@@ -87,10 +142,11 @@ def functions_by_file():
             continue
         path = os.path.join(SRC_DIR, name)
         lines = open(path, errors="replace").read().splitlines()
+        masked = list(mask_c_lines(lines))
         cur, start, body, depth, seen = None, 0, [], 0, False
-        for i, line in enumerate(lines, 1):
-            m = FUNC_DEF.match(line)
-            cand = (m.group(1) if m and not line.lstrip().startswith(("#", "//", "*", "/*"))
+        for i, (line, syntax) in enumerate(zip(lines, masked), 1):
+            m = FUNC_DEF.match(syntax)
+            cand = (m.group(1) if m and not syntax.lstrip().startswith("#")
                     and not m.group(1).startswith("__")
                     and m.group(1) not in KEYWORDS else None)
             if cur is None:
@@ -108,12 +164,12 @@ def functions_by_file():
                 if cand:
                     cur, start, body, depth = cand, i, [(i, line)], 0
                     continue
-                if line.rstrip().endswith(";"):
+                if syntax.rstrip().endswith(";"):
                     cur = None
                     continue
             body.append((i, line))
-            depth += line.count("{") - line.count("}")
-            if "{" in line:
+            depth += syntax.count("{") - syntax.count("}")
+            if "{" in syntax:
                 seen = True
             if seen and depth <= 0:
                 out.setdefault(cur, (name, start, body))

@@ -41,3 +41,5 @@ MGS2_ISLAND_ENTRY(36, wined3d_texture_validate_location, vFpuu)
 MGS2_ISLAND_ENTRY(37, mgs2_cs_exec_draw_one_island, vFpuup)
 /* p68 correctness boundary: guest owns context acquisition and draw state. */
 MGS2_ISLAND_ENTRY(38, mgs2_draw_primitive_arrays_island, vFp)
+/* p69 correctness boundary: guest owns current-context establishment. */
+MGS2_ISLAND_ENTRY(39, mgs2_context_apply_draw_state_island, vFp)

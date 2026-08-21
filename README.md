@@ -420,10 +420,45 @@ native ARM WineD3D island, routed entry point by entry point
                           The standalone p68 record, exact ABI, hashes, recovery
                           and revised queue are in
                           `MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md`.
-                          The passive `display_lock` ring remains available. The
-                          next renderer action is correctness-only native
-                          context_apply_draw_state() while context ownership
-                          remains guest; p66/p68 never separated those two halves.
+                          The passive `display_lock` ring remains available.
+                          p69 then attempted to isolate the remaining half: only
+                          `context_apply_draw_state()` became native entry 39,
+                          while acquire/current ownership, RT/depth preparation,
+                          final draw and release stayed guest. At the stopped
+                          correctness capture 1,357,984 calls had zero FALSE and
+                          zero fallback and final array submissions were still
+                          advancing at 1,357,983, but the last 64 of 6,921 frame
+                          witnesses were identical and 0/256 lit; an independent
+                          grim screenshot was all black. No FPS A/B was run.
+                          The concrete p69 artifact is rejected, but the run is
+                          not an ABI-valid rejection of native state apply. A
+                          new transitive ABI audit found the shared-heap wall:
+                          embedded
+                          `ffp_frag_settings` is 132 bytes in i386 and 100 in ARM,
+                          making `glsl_ffp_fragment_shader` 164 versus 132 bytes
+                          and moving its `id` / `linked_programs` / `source` from
+                          148/152/160 to 116/120/128. The corrected closure is 733
+                          functions; the old 526-function mutable audit had lost
+                          the GLSL backend by counting braces in shader strings.
+                          ARM can also insert a 132-byte node into the guest's
+                          164-byte cache, so correctness phases require clean
+                          processes. The admission self-test now passes measured
+                          entries 10/23 and correct entry 38, while p69/D fails;
+                          phases A resource/preload, B dirty-state and C
+                          bindings/FBO pass, D fails. Offline attribution of the
+                          exact existing island41/p56 profile ranks unique safe
+                          work A 2.878%, B 2.596%, C 0.514% of all user cycles.
+                          These are not ms/frame. Contiguous phase A is now p70
+                          entry 40: 548 functions, 1,096 aggregate rows with zero
+                          ABI mismatch, and 53 routed versus zero unrouted
+                          indirect calls. Its heavy-save device gate reached
+                          2,172,004 calls and exactly 2,172,004 final array
+                          submissions with zero fallback/faults; the retained
+                          64 frames were all unique, lit and changing, and an
+                          independent CAUTION gameplay capture was correct.
+                          P70 therefore passes correctness and may proceed to a
+                          symmetric same-process A/B. No FPS effect is claimed;
+                          production is unchanged.
 WINE_D3D_CONFIG=csmt=0    the game does not start (page fault at 0x3C), twice
 suspending EmulationStation      ~1 fps, and it can leave the menu frozen
 PChannel disjoint allocation, group→channel remapping, DLS gain boost,

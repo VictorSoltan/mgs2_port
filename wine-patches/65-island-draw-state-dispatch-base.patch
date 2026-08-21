@@ -1,0 +1,178 @@
+WineD3D island: record the draw-state indirect-call base used by p66--p69.
+
+The p66 native DRAW experiment exposed four callback families that patch 63 did
+not yet record: shader backend, vertex pipe, fragment pipe, and state apply
+(including the multistate arrays). Route all of them through the existing
+fail-closed class A/B/C dispatcher as sites 32--35.
+
+The separable-shader cache was the second exposed boundary defect. Native ARM
+must not cache a guest x86 pointer returned by wglGetProcAddress(); resolve it
+through the translated native GL table instead. NULL preserves the established
+monolithic-program fallback.
+
+This patch is an incremental source-of-record prerequisite for p69. It records
+code already exercised by p66/p67/p68; it makes no new correctness or frame-rate
+claim by itself.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4120,7 +4120,8 @@
+         {
+             unsigned int state_id = base + wined3d_bit_scan(&dirty_mask);
+ 
+-            state_table[state_id].apply(context, state, state_id);
++            MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
++                    state_table[state_id].apply)(context, state, state_id);
+         }
+         base += sizeof(dirty_mask) * CHAR_BIT;
+     }
+@@ -4148,7 +4149,8 @@
+     }
+ 
+     wined3d_context_gl_check_fbo_status(context_gl, GL_FRAMEBUFFER);
+-    device->shader_backend->shader_apply_draw_state(device->shader_priv, context, state);
++    MGS2_P50_CALL(MGS2_P50_SHADER_BACKEND,
++            device->shader_backend->shader_apply_draw_state)(device->shader_priv, context, state);
+     context->shader_update_mask &= 1u << WINED3D_SHADER_TYPE_COMPUTE;
+     context->constant_update_mask = 0;
+ 
+--- a/dlls/wined3d/context_vk.c
++++ b/dlls/wined3d/context_vk.c
+@@ -4009,7 +4009,8 @@
+ 
+     if (context_vk->c.shader_update_mask & ~(1u << WINED3D_SHADER_TYPE_COMPUTE))
+     {
+-        device_vk->d.shader_backend->shader_apply_draw_state(device_vk->d.shader_priv, &context_vk->c, state);
++        MGS2_P50_CALL(MGS2_P50_SHADER_BACKEND,
++                device_vk->d.shader_backend->shader_apply_draw_state)(device_vk->d.shader_priv, &context_vk->c, state);
+         if (!context_vk->graphics.vk_pipeline_layout)
+         {
+             ERR("No pipeline layout set.\n");
+--- a/dlls/wined3d/ffp_gl.c
++++ b/dlls/wined3d/ffp_gl.c
+@@ -1568,15 +1568,20 @@
+ 
+ static void multistate_apply_2(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+ {
+-    context->device->multistate_funcs[state_id][0](context, state, state_id);
+-    context->device->multistate_funcs[state_id][1](context, state, state_id);
++    MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
++            context->device->multistate_funcs[state_id][0])(context, state, state_id);
++    MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
++            context->device->multistate_funcs[state_id][1])(context, state, state_id);
+ }
+ 
+ static void multistate_apply_3(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+ {
+-    context->device->multistate_funcs[state_id][0](context, state, state_id);
+-    context->device->multistate_funcs[state_id][1](context, state, state_id);
+-    context->device->multistate_funcs[state_id][2](context, state, state_id);
++    MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
++            context->device->multistate_funcs[state_id][0])(context, state, state_id);
++    MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
++            context->device->multistate_funcs[state_id][1])(context, state, state_id);
++    MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
++            context->device->multistate_funcs[state_id][2])(context, state, state_id);
+ }
+ 
+ static void prune_invalid_states(struct wined3d_state_entry *state_table, const struct wined3d_d3d_info *d3d_info)
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -415,6 +415,10 @@
+ static PFN_glGetProgramPipelineiv mgs2_glGetProgramPipelineiv;
+ static PFN_glGetProgramPipelineInfoLog mgs2_glGetProgramPipelineInfoLog;
+ 
++#ifdef MGS2_ISLAND_ARM
++void *mgs2_island_gl_by_name(const char *name);
++#endif
++
+ /* wined3d fills gl_ops.ext from a hand-maintained list in load_gl_funcs(), and
+  * the ARB_separate_shader_objects entry points are not in it -- reading the
+  * table alone returned NULL for all eight, so the candidate disabled itself on
+@@ -424,6 +428,14 @@
+  * exports. */
+ static void *mgs2_get_gl_func(const char *name)
+ {
++#ifdef MGS2_ISLAND_ARM
++    /* wglGetProcAddress() is a reverse guest call in the island and therefore
++     * returns an x86 opengl32 thunk.  Caching that address in these file-local
++     * separable pointers made the next native DRAW branch into x86 bytes.
++     * Resolve against the host GL exactly like the translated gl_ops table;
++     * NULL keeps the existing monolithic-program fallback intact. */
++    return mgs2_island_gl_by_name(name);
++#else
+     static HMODULE opengl32;
+     void *pointer;
+ 
+@@ -433,6 +445,7 @@
+     if (!opengl32)
+         opengl32 = GetModuleHandleA("opengl32.dll");
+     return opengl32 ? (void *)GetProcAddress(opengl32, name) : NULL;
++#endif
+ }
+ 
+ #define MGS2_RESOLVE_GL(f) \
+@@ -11746,8 +11759,10 @@
+     LONGLONG probe_bind, probe_us;
+     GLuint program_id;
+ 
+-    priv->vertex_pipe->vp_apply_draw_state(&context_gl->c, state);
+-    priv->fragment_pipe->fp_apply_draw_state(&context_gl->c, state);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_apply_draw_state)(&context_gl->c, state);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_apply_draw_state)(&context_gl->c, state);
+     /* Only when the candidate is enabled, so that a production build never
+      * resolves the pipeline entry points and every guarded call below stays a
+      * NULL test. */
+--- a/dlls/wined3d/shader.c
++++ b/dlls/wined3d/shader.c
+@@ -1970,8 +1970,10 @@
+ {
+     struct shader_none_priv *priv = shader_priv;
+ 
+-    priv->vertex_pipe->vp_apply_draw_state(context, state);
+-    priv->fragment_pipe->fp_apply_draw_state(context, state);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_apply_draw_state)(context, state);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_apply_draw_state)(context, state);
+ }
+ 
+ /* Context activation is done by the caller. */
+--- a/dlls/wined3d/shader_spirv.c
++++ b/dlls/wined3d/shader_spirv.c
+@@ -913,8 +913,10 @@
+     enum wined3d_shader_type shader_type;
+     struct wined3d_shader *shader;
+ 
+-    priv->vertex_pipe->vp_apply_draw_state(context, state);
+-    priv->fragment_pipe->fp_apply_draw_state(context, state);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_apply_draw_state)(context, state);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_apply_draw_state)(context, state);
+ 
+     bindings = &priv->bindings;
+     memcpy(binding_base, bindings->binding_base, sizeof(bindings->binding_base));
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -4773,7 +4773,7 @@
+ {
+     const struct wined3d_state_entry *state_table = context->state_table;
+     unsigned int rep = state_table[state_id].representative;
+-    state_table[rep].apply(context, state, rep);
++    MGS2_P50_CALL(35 /* MGS2_P50_STATE_APPLY */, state_table[rep].apply)(context, state, rep);
+ }
+ 
+ static inline BOOL needs_separate_srgb_gl_texture(const struct wined3d_context *context,
+@@ -5244,5 +5244,9 @@
+ #define MGS2_P50_TEXTURE_UPLOAD_CPU           29
+ #define MGS2_P50_ADAPTER_OPS                  30
+ #define MGS2_P50_MISC_OPS                     31
++#define MGS2_P50_SHADER_BACKEND               32
++#define MGS2_P50_VERTEX_PIPE                  33
++#define MGS2_P50_FRAGMENT_PIPE                34
++#define MGS2_P50_STATE_APPLY                  35
+ 
+ #endif

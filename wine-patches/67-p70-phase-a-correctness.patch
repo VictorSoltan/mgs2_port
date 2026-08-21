@@ -1,0 +1,241 @@
+WineD3D island p70: route only ABI-admitted draw-state phase A.
+
+The p69 whole context_apply_draw_state() boundary rendered black and the
+transitive shared-heap audit explains why it was not an admissible root:
+glsl_ffp_fragment_shader is 164 bytes in guest i386 and 132 bytes in ARM.
+Keep the guest as owner of context_apply_draw_state(), dirty-state application,
+bindings/FBO and the ABI-unsafe shader backend.  Move only the contiguous
+resource/stream preload transaction into entry 40, including stream-info and
+index-buffer maintenance.
+
+This patch restores draw_primitive() to the direct guest
+context_apply_draw_state() call added around by patch 66; entry 39 remains only
+as a rejected historical symbol and is not armed.  The phase comments are
+analysis boundaries, not runtime selectors.
+
+The independent indirect-call audit found nine remaining callbacks reachable
+from the conservative phase-A closure. Route them through the existing class
+A/B/C dispatch families; the final p70 audit reports zero unrouted calls.  The
+transitive ABI admission matrix reports entry 10/23/38 PASS, p69/D FAIL, and
+phase A PASS with 1,096 TU-qualified aggregate rows, zero mismatches and zero
+hard failures.
+
+The first run is correctness-only.  It makes no frame-rate claim.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -3212,7 +3212,8 @@
+     context->viewport_count = WINED3D_MAX_VIEWPORTS;
+     context_invalidate_state(context, STATE_VIEWPORT);
+ 
+-    device->shader_backend->shader_disable(device->shader_priv, context);
++    MGS2_P50_CALL(MGS2_P50_SHADER_BACKEND,
++            device->shader_backend->shader_disable)(device->shader_priv, context);
+ 
+     context_gl->blit_size = rt_size;
+ 
+@@ -4025,27 +4026,28 @@
+     }
+ }
+ 
+-/* Context activation is done by the caller. */
+-static BOOL context_apply_draw_state(struct wined3d_context *context,
+-        const struct wined3d_device *device, const struct wined3d_state *state, BOOL indexed)
++struct mgs2_draw_state_phase_a_args
+ {
+-    const struct wined3d_state_entry *state_table = context->state_table;
++    struct wined3d_context *context;
++    const struct wined3d_device *device;
++    const struct wined3d_state *state;
++    uint32_t indexed;
++};
++
++/* p70 phase A is one contiguous transaction from texture/resource preload
++ * through stream-info and index-buffer maintenance. Guest x86 remains the
++ * owner of context_apply_draw_state() control flow and runs dirty state,
++ * bindings/FBO and the ABI-unsafe shader backend after this returns. */
++DECLSPEC_NOINLINE void mgs2_draw_state_phase_a_island(
++        struct mgs2_draw_state_phase_a_args *args)
++{
++    struct wined3d_context *context = args->context;
++    const struct wined3d_device *device = args->device;
++    const struct wined3d_state *state = args->state;
+     struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+-    const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+-    const struct wined3d_fb_state *fb = &state->fb;
+-    unsigned int i, base;
+     uint32_t map;
+ 
+-    context->uses_fbo_attached_resources = 0;
+-
+-    if (!have_framebuffer_attachment(gl_info->limits.buffers, fb->render_targets, fb->depth_stencil))
+-    {
+-        if (!gl_info->supported[ARB_FRAMEBUFFER_NO_ATTACHMENTS])
+-        {
+-            FIXME("OpenGL implementation does not support framebuffers with no attachments.\n");
+-            return FALSE;
+-        }
+-    }
++    MGS2_ISLAND_MARK(0x28);
+ 
+     /* Preload resources before FBO setup. Texture preload in particular may
+      * result in changes to the current FBO, due to using e.g. FBO blits for
+@@ -4095,7 +4097,7 @@
+         wined3d_context_gl_reference_buffer(context_gl, buffer);
+     }
+ 
+-    if (indexed && state->index_buffer)
++    if (args->indexed && state->index_buffer)
+     {
+         struct wined3d_buffer *buffer = state->index_buffer;
+ 
+@@ -4111,7 +4113,37 @@
+             wined3d_buffer_load_sysmem(buffer, context);
+         }
+     }
++}
++
++/* Context activation is done by the caller. */
++static BOOL context_apply_draw_state(struct wined3d_context *context,
++        const struct wined3d_device *device, const struct wined3d_state *state, BOOL indexed)
++{
++    const struct wined3d_state_entry *state_table = context->state_table;
++    struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
++    const struct wined3d_gl_info *gl_info = context_gl->gl_info;
++    const struct wined3d_fb_state *fb = &state->fb;
++    unsigned int i, base;
++    struct mgs2_draw_state_phase_a_args phase_a;
++
++    context->uses_fbo_attached_resources = 0;
++
++    if (!have_framebuffer_attachment(gl_info->limits.buffers, fb->render_targets, fb->depth_stencil))
++    {
++        if (!gl_info->supported[ARB_FRAMEBUFFER_NO_ATTACHMENTS])
++        {
++            FIXME("OpenGL implementation does not support framebuffers with no attachments.\n");
++            return FALSE;
++        }
++    }
++
++    phase_a.context = context;
++    phase_a.device = device;
++    phase_a.state = state;
++    phase_a.indexed = indexed;
++    mgs2_draw_state_phase_a_island(&phase_a);
+ 
++    /* MGS2_PHASE_B_BEGIN: dirty-state transaction, including bitmap clear. */
+     for (i = 0, base = 0; i < ARRAY_SIZE(context->dirty_graphics_states); ++i)
+     {
+         uint32_t dirty_mask = context->dirty_graphics_states[i];
+@@ -4127,6 +4159,9 @@
+     }
+ 
+     memset(context->dirty_graphics_states, 0, sizeof(context->dirty_graphics_states));
++    /* MGS2_PHASE_B_END */
++
++    /* MGS2_PHASE_C_BEGIN: resource bindings and FBO validation. */
+     if (context->update_shader_resource_bindings)
+     {
+         for (i = 0; i < WINED3D_SHADER_TYPE_GRAPHICS_COUNT; ++i)
+@@ -4148,10 +4183,13 @@
+     }
+ 
+     wined3d_context_gl_check_fbo_status(context_gl, GL_FRAMEBUFFER);
++    /* MGS2_PHASE_C_END */
++    /* MGS2_PHASE_D_BEGIN: ABI-unsafe FFP shader/cache path stays guest. */
+     MGS2_P50_CALL(MGS2_P50_SHADER_BACKEND,
+             device->shader_backend->shader_apply_draw_state)(device->shader_priv, context, state);
+     context->shader_update_mask &= 1u << WINED3D_SHADER_TYPE_COMPUTE;
+     context->constant_update_mask = 0;
++    /* MGS2_PHASE_D_END */
+ 
+     context->last_was_blit = FALSE;
+     context->last_was_ffp_blit = FALSE;
+@@ -5246,7 +5284,6 @@
+     unsigned int i, idx_size = 0;
+     const void *idx_data = NULL;
+     struct mgs2_draw_primitive_arrays_args mgs2_draw_args;
+-    struct mgs2_apply_draw_state_args mgs2_apply_args;
+ 
+     TRACE("device %p, state %p, parameters %p.\n", device, state, parameters);
+ 
+@@ -5332,13 +5369,7 @@
+         mgs2_batch_flush();
+     }
+ 
+-    mgs2_apply_args.context = context;
+-    mgs2_apply_args.device = device;
+-    mgs2_apply_args.state = state;
+-    mgs2_apply_args.indexed = parameters->indexed;
+-    mgs2_apply_args.result = FALSE;
+-    mgs2_context_apply_draw_state_island(&mgs2_apply_args);
+-    if (!mgs2_apply_args.result)
++    if (!context_apply_draw_state(context, device, state, parameters->indexed))
+     {
+         context_release(context);
+         WARN("Unable to apply draw state, skipping draw.\n");
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -11945,8 +11945,10 @@
+     GL_EXTCALL(glUseProgram(0));
+     checkGLcall("glUseProgram");
+ 
+-    priv->vertex_pipe->vp_disable(context);
+-    priv->fragment_pipe->fp_disable(context);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_disable)(context);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_disable)(context);
+ 
+     if (needs_legacy_glsl_syntax(gl_info) && gl_info->supported[ARB_COLOR_BUFFER_FLOAT])
+     {
+@@ -13329,7 +13331,8 @@
+     struct wined3d_blitter *next;
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY,
++                next->ops->blitter_destroy)(next, context);
+ 
+     glsl_blitter = CONTAINING_RECORD(blitter, struct wined3d_glsl_blitter, blitter);
+ 
+@@ -14015,7 +14018,8 @@
+         }
+ 
+         TRACE("Forwarding to blitter %p.\n", next);
+-        return next->ops->blitter_blit(next, op, context, src_texture, src_sub_resource_idx, src_location,
++        return MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT,
++                next->ops->blitter_blit)(next, op, context, src_texture, src_sub_resource_idx, src_location,
+                 src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter,
+                 resolve_format);
+     }
+--- a/dlls/wined3d/shader.c
++++ b/dlls/wined3d/shader.c
+@@ -1981,8 +1981,10 @@
+ {
+     struct shader_none_priv *priv = shader_priv;
+ 
+-    priv->vertex_pipe->vp_disable(context);
+-    priv->fragment_pipe->fp_disable(context);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_disable)(context);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_disable)(context);
+ 
+     context->shader_update_mask = (1u << WINED3D_SHADER_TYPE_PIXEL)
+             | (1u << WINED3D_SHADER_TYPE_VERTEX)
+--- a/dlls/wined3d/shader_spirv.c
++++ b/dlls/wined3d/shader_spirv.c
+@@ -993,8 +993,10 @@
+     struct wined3d_context_vk *context_vk = wined3d_context_vk(context);
+     struct shader_spirv_priv *priv = shader_priv;
+ 
+-    priv->vertex_pipe->vp_disable(context);
+-    priv->fragment_pipe->fp_disable(context);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_disable)(context);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_disable)(context);
+ 
+     context_vk->compute.vk_pipeline = VK_NULL_HANDLE;
+     context->shader_update_mask = (1u << WINED3D_SHADER_TYPE_PIXEL)

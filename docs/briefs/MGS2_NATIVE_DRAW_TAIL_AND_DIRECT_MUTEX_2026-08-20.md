@@ -6,7 +6,11 @@ post-batching DRAW boundary after p66 and p67 both produced an empty picture.
 This brief begins after that decision. It records the lower p68 boundary, its
 successful picture-correctness gate, the separate direct-mutex freeze exposed
 during the same session, its exact `win32u` object identity, the debugger
-recovery, the symmetric p68 A/B implementation, and the revised bounded queue.
+recovery, the symmetric p68 A/B result, and p69's black-frame result under a
+guest-owned current context. The final passes show that the concrete p69 build
+was never ABI-safe, validate the new admission gate against three proven native
+roots, use the existing FINALPLAY7 profile to select one safe next phase, and
+record p70's completed gameplay correctness gate.
 
 ```text
 CORRECTNESS       p68 entry 38 runs only the final
@@ -41,12 +45,43 @@ RECOVERY          pthread_mutex_unlock(0x6040623c) on the recorded owner thread
                   Source/final counts and frames advanced together afterward
 PRODUCTION        unchanged: FINALPLAY7, box86-island41 + unchanged p56, the
                   previous 17 entries plus measured entry 23. Entry 38 is
-                  research-only; entry 37 remains closed
-NEXT              p69 correctness only: test native context_apply_draw_state()
-                  separately while context acquisition/current ownership and
-                  release remain guest. Keep the passive display_lock ring, but
-                  do not wait for another freeze and do not spend more timing
-                  work on entry 38
+                  closed; entry 37 and the concrete ABI-invalid p69 artifact
+                  are rejected. Native state apply as an architecture is not
+                  closed by that invalid experiment
+P69               entry 39 isolated context_apply_draw_state() while guest x86
+                  retained acquire/current ownership/RT-depth/final draw/release.
+                  At the stopped capture, 1,357,984 p69 calls produced zero
+                  FALSE and zero fallback; 1,357,983 final array submissions
+                  had advanced. Yet the last 64 of 6,921 frames were identical
+                  and 0/256 lit, and an independent grim capture was all black.
+                  No timing was attempted
+ABI                the transitive p69 shared-heap audit now finds the concrete
+                  blind spot: glsl_ffp_fragment_shader is 164 bytes in i386
+                  and 132 in ARM. Its id / linked_programs / source fields move
+                  from 148/152/160 to 116/120/128 because embedded
+                  ffp_frag_settings is 132 versus 100 bytes. The root is not
+                  ABI-safe even though its top-level objects match. ARM can
+                  also allocate a 132-byte node into the guest's 164-byte
+                  shared cache, so phases may never share a correctness process
+ADMISSION          self-test passes: measured entries 10 and 23 and correct
+                  entry 38 are ABI-safe; p69 / shader phase D fails. Separate
+                  phase audits admit A resource/preload, B dirty-state and C
+                  bindings/FBO, and reject D
+PROFILE            the existing exact island41/p56 capture ranks unique safe
+                  work A 2.878%, B 2.596%, C 0.514% of all user cycles. These
+                  are attribution shares, not ms/frame; D's 4.176% is excluded
+P70               contiguous phase A is now entry 40: ABI PASS (1,096 rows,
+                  zero mismatch), zero unrouted indirect calls, marker +29 at
+                  RVA 0xb9410, and 1,616 class-B IDs. The clean gameplay run
+                  reached 2,172,004 phase-A calls and exactly 2,172,004 final
+                  array submissions with zero fallback; its last 64 of 5,087
+                  frames were unique, lit and changing. An independent capture
+                  shows correct live CAUTION gameplay with enemies and HUD.
+                  Fault/unresolved lines: zero. This completes correctness;
+                  the run was not A/B and makes no FPS claim
+NEXT              build a symmetric guest-side A/B for phase A and measure one
+                  process at the owner's fixed heavy spot. Do not run D or
+                  repair the FFP ABI before safe-phase results
 ```
 
 ## 1. Why the boundary moved below entry 37
@@ -78,9 +113,10 @@ this brief said. Entry 37 moved current-context ownership **and** draw-state
 application into ARM together; p68 moved both back to guest together. Those two
 experiments do not isolate which half caused the black frame. Current-context
 ownership must stay guest in the next experiment as the controlled half; this
-does not identify it independently as the cause. The status of
-`context_apply_draw_state()` is still undecided and should be tested separately.
-Entry 37 remains closed, and none of its raw or calibrated timing deltas is an
+does not identify it independently as the cause. The later p69 run tested that
+combination, but its transitive shared-heap layout was incompatible. It rejects
+that concrete artifact, not the concept of native state application. Entry 37
+remains closed, and none of its raw or calibrated timing deltas is an
 optimisation result.
 
 ## 2. Exact p68 cut and ABI
@@ -144,9 +180,12 @@ p68 run, so the observed path was native after the one successful TLS sync.
 The existing fallback is not a valid performance control at this frequency:
 it calls `RunFunctionFmt(guest, "p", args)` once per tail call, whereas the
 normal guest path does not. The earlier empty-entry calibration measured this
-kind of re-entry at about 2.854 microseconds per call, already several
-milliseconds per frame at this route's call rate. Section 10 therefore does not
-propose timing the current wrapper.
+kind of re-entry at about 2.854 microseconds per call. The p68 correctness run
+recorded 4,982,735 calls over 17,832 displayed frames, or 279.43 calls/frame;
+linear scaling therefore estimates about 0.797 ms/frame of asymmetric fallback
+cost here, not the several-ms entry-37 cost carried by roughly 1,000 calls/frame.
+That is still larger than p68's later measured zero and invalidates the old
+wrapper as its control; section 10 uses the symmetric guest selector instead.
 
 ## 3. Static checks before device time
 
@@ -401,7 +440,8 @@ freeze happened after a long correct p68 run, entry 38 was not the owner/waiter
 boundary, and the capture does not make p68 causal. The reliability witness is
 now built and was passively armed in the completed p68b run. That run did not
 freeze, although its final ring read was lost as recorded in section 10.2. The
-renderer result closes entry 38; the next implementation gate is p69 correctness.
+renderer result closes entry 38. The p69 gate below has now also completed and
+failed picture correctness; section 10.5 is the active renderer branch.
 
 ### 10.1 Built and passively armed: bounded display-lock history
 
@@ -519,7 +559,7 @@ records already emitted by the guest control block.
 inside the pre-registered <=0.3 ms/frame gate and is closed as a performance
 root. It is not a production candidate and receives no further timing work.
 
-### 10.3 p69 correctness only: native state apply under guest-owned context
+### 10.3 Complete but inadmissible: the concrete p69 state-apply build
 
 The highest-value untested combination is not another coarse CS handler. Keep
 context acquisition, activation/current-context ownership and release in guest
@@ -538,10 +578,16 @@ guest x86   remaining bookkeeping and final DRAW tail
 guest x86   barriers, cleanup and context_release()
 ```
 
-Use a new entry, provisionally 39. Prefer the same one-pointer argument-object
-ABI as p68, including a result field, unless the generated mounted-DLL identity
-proves a direct four-argument/return ABI keeps its marker inside the canonical
-witness. Do not hand-assign its RVA or marker offset.
+The built entry is 39 and uses the one-pointer argument/result ABI. Its identity
+was generated from the paired DLL rather than entered by hand:
+
+```text
+ABI                  vFp: context, device, state, indexed, BOOL result in object
+marker / RVA         +9 / 0x000b8ae0
+armed identities     all 19 required ids present and within the 64-byte witness
+class B              1,614 native IDs; registration control passed
+ARM marker control   no x86 island marker bytes in the ARM objects
+```
 
 This boundary is materially larger than entry 38. It contains resource preload,
 shader-resource and UAV loads, stream-output and stream-buffer loads,
@@ -550,10 +596,10 @@ validation and `shader_apply_draw_state()`. It also begins only after guest code
 has established the current context, separating the two halves that p66/p67
 changed together.
 
-The first run is always-routed correctness only, not FPS. Reuse the existing
+The first run was always-routed correctness only, not FPS. It reused the existing
 TLS sync, translated GL table, unresolved-slot trap, class-B state/backend
-callbacks, mutable-state audit, final-submission census and frame witness. Run
-the direct-root mutable-state audit before the device launch.
+callbacks, mutable-state audit, final-submission census and frame witness. The
+direct-root mutable-state audit ran before the device launch.
 
 ```text
 capture     p69 calls and FALSE returns, final submissions, fallback/faults,
@@ -563,54 +609,272 @@ success     correct changing picture, zero fallback/fault and final submissions
             advancing consistently with the guest path
 ```
 
-Do not hard-code source calls == final GL submissions as a universal invariant
-for this higher boundary: state apply may fail a draw and the existing batcher
-may change the submission ratio. Record both counts and compare their behaviour
-with the guest control. If the observed route remains one-to-one, equality is a
-useful additional witness.
+The corrected mutable-global audit procedure passed before deployment: entry 37
+separately found both mandatory controls, TLS and `mgs2_batch_ptr`; the direct
+p69 root then ran without importing that entry-37-only requirement. It found a
+526-function closure and 45 referenced writable objects. Review found the
+already synchronised TLS/batch state plus ARM-owned GL translation/census/cache
+state, not another authoritative guest object to copy.
 
-### 10.4 If p69 is correct, measure it and then test one fused draw core
+That count is superseded by section 10.5. The source-extent parser counted
+braces inside GLSL strings and silently lost `shader_glsl_apply_draw_state()`
+and later functions. After literal/comment masking, the closure is 733 functions
+and the writable-object census is 63. It adds the expected shader-side native
+GL/cache/census objects but still does not identify another authoritative guest
+global. More importantly, that audit never answered whether ARM and i386 assign
+the same offsets inside guest-owned heap objects.
 
-After a correct p69 smoke, build the same guest-side symmetric selector: both
-arms take the same branch/tick path, the routed arm calls the island entry and
-the guest arm calls `context_apply_draw_state()` directly. Only a same-process
-heavy-save A/B can decide its magnitude.
-
-If p69 is useful, combine it with p68 in one post-acquire native boundary so the
-game does not pay two x86/ARM crossings per DRAW:
+The exact live Box86, WineD3D and Wayland targets were `cmp`-identical. One
+process armed FINALPLAY7's 18 entries plus 39, excluding 34/37/38; both class-B
+witnesses agreed on guest base `0x7a280000`, and entry 39 canonically matched
+`0x7a338ae0`. The stopped bounded capture was:
 
 ```text
-guest x86   acquire and establish the current GL context; prepare RT/depth
-ARM p70     apply draw state; prepare/submit the final draw; post-draw cleanup
-guest x86   context_release()
+p69 calls / FALSE / fallback       1,357,984 / 0 / 0
+final GL submissions               1,357,983, all arrays
+frame witness                      6,921 frames; retained 6,858..6,921
+retained content                   1 unique hash, 0/256 lit, 0/255 changed
+independent grim screenshot        640x480, all black
+fault / unresolved-call trap       none
+CPU                                performance, current=max=1992000 kHz
 ```
 
-p70 starts again at correctness: source/final accounting, valid changing frame
-witness and screenshot before any timing. It does not reopen entry 37 because
-context acquisition/current ownership and release remain guest.
+The one-call source/final difference is expected from stopping the process
+between the entry counter and its final submission; it is evidence that work
+was still advancing, not a lost draw. More importantly, advancing final GL
+submissions did not produce picture content. The log contains 23 complete
+300-frame PRESENT windows and the stopped witness is already at frame 6,921, so
+this is not a brief black transition. The independent screenshot confirms the
+memory witness rather than relying on counters alone.
 
-### 10.5 If p69 is black, close that boundary and profile inside it
+**Decision:** the concrete p69 artifact is rejected and has no FPS A/B or
+performance claim. Its black picture remains valid observation, but section
+10.5 shows that this build was not an ABI-valid test of native draw-state apply;
+it cannot close that architecture. The diagnostic build also emits dispatch
+lines, which independently forbids timing this run. The process was stopped,
+all research mounts were removed, and the byte-checked FINALPLAY7 files remained
+unchanged.
 
-A black or wrong p69 frame establishes the useful boundary that p66/p68 could
-not:
+### 10.4 No timing or fused draw core follows the invalid p69 artifact
+
+The concrete build has no positive branch: a symmetric A/B cannot rescue a wrong
+picture, and combining it with the zero-value p68 tail would only widen an
+ABI-invalid boundary. This does not forbid a future state-apply design whose
+guest-owned heap layouts pass admission. The next design leaves guest x86 in
+control and moves only separately admitted phases.
+
+### 10.5 Complete: the shared-heap ABI audit finds the exact 32-byte shift
+
+The p69 run plus the ABI audit establish a narrower result than the first
+version of this section claimed:
 
 ```text
-native context_apply_draw_state()   unsafe
+concrete p69 ARM artifact           not ABI-safe and picture-incorrect
 native final arrays tail            safe
 ```
 
-Do not iterate another guessed shared-state correction. Profile the guest
-subfunctions inside `context_apply_draw_state()` and move only the heaviest
-bounded subroot, for example shader constants, shader-resource loads,
-shader-backend apply paths, or remaining buffer/texture helpers. Choose from the
-profile rather than from source size.
+`harness/island/full/island_abi_closure_audit.py` now starts at
+`context_apply_draw_state()`, uses the corrected 733-function direct/source/ops
+closure, finds aggregate types named by those functions, follows their member
+types transitively and compares the matching i386 and ARM DWARF per translation
+unit. Private types remain TU-qualified. It reports size, inferred alignment,
+all member byte/bit offsets, referencing functions and a conservative ownership
+classification. UNKNOWN is not treated as safe; a mismatch classified
+guest-owned or shared is a hard failure.
+The default output is the bounded mismatch report; `--all` emits every
+TU-qualified row and every member offset as `i386/ARM`.
 
-The p69 closure already naturally reaches resource, texture and buffer loads.
-That makes repair of entry 34's asymmetric A/B a lower priority: p69 can answer
-the larger architectural question first. Entry 34 is not reclassified as
-measured or closed.
+The audit's controls both pass: `shader_glsl_apply_draw_state()` is in the
+closure, and all four known MS-bitfield propagation points are detected. The
+result is 3,967 TU-qualified aggregate rows, nine mismatches and nine hard
+failures. The decisive `glsl_shader.c` chain is:
 
-### 10.6 Do not schedule a `WINE_NO_TRACE_MSGS` A/B
+```text
+type                              i386   ARM    decisive later fields
+texture_stage_op                    16    12
+ffp_frag_settings                  132   100
+ffp_frag_desc                      148   116
+glsl_ffp_fragment_shader           164   132    id              148 / 116
+                                                linked_programs 152 / 120
+                                                source          160 / 128
+```
+
+This is the exact 32-byte displacement proposed by review, verified against the
+configured i386 objects and fresh ARM objects built with the island flags. The
+top-level controls still agree -- `shader_glsl_priv` 144/144,
+`glsl_shader_prog_link` 2968/2968, `glsl_context_data` 20/20,
+`wined3d_context` 1020/1020 and `wined3d_state` 7276/7276 -- so checking only
+those types would have missed it.
+
+The static result does not alone prove which wrong value p69 read at runtime,
+but it proves the root is not ABI-safe: native code interprets a shared FFP
+cache node's `id` 32 bytes before the guest field. Worse, on a cache miss ARM
+allocates a 132-byte `glsl_ffp_fragment_shader` and can insert it into the same
+tree where guest x86 expects 164-byte nodes. One process can therefore acquire
+mixed-layout cache nodes. That fits the observed shape without requiring a
+fault or a missing draw, and it makes a clean process mandatory for every
+correctness phase. It does **not** prove that an ABI-safe native state-apply
+design would be picture-incorrect.
+
+### 10.6 Complete admission and offline ranking; phase A is next
+
+The new audit is now a pre-device gate rather than a post-mortem. Its first
+control is deliberately positive: stopping pointer-pointee expansion was needed
+because the earlier conservative graph falsely pulled teardown-only FFP types
+into measured entry 23. Embedded structs and arrays still propagate
+transitively; a pointee actually dereferenced by native code is independently
+seeded by the type named in that function body. The mandatory self-test is:
+
+```text
+entry 10   wined3d_buffer_load                         PASS
+entry 23   wined3d_rendertarget_view_load_location     PASS
+entry 38   wined3d_context_gl_draw_primitive_arrays    PASS
+p69 / D    context_apply_draw_state                    FAIL
+```
+
+The four phase descriptions are one source of truth shared by ABI admission and
+profile attribution. Each is a contiguous original control-flow span, including
+its bookkeeping:
+
+```text
+A  native resource/stream preload
+   tex-unit map; shader resources; textures/constant buffers/UAVs;
+   stream-output, vertex/index buffers; stream-info maintenance
+B  native dirty-state apply only
+   the whole dirty-state loop, every GL state-table callback and bitmap clear
+C  native resource bindings and FBO validation only
+D  native shader_apply_draw_state() only
+   known ABI-unsafe shader/cache phase; excluded from FPS work
+```
+
+Against the same configured i386 DWARF and fresh ARM objects, the phase matrix
+is:
+
+```text
+phase   closure functions   aggregate rows   mismatches / hard   admission
+A              548              1,096               0 / 0          PASS
+B              167                372               0 / 0          PASS
+C               21                171               0 / 0          PASS
+D              235                468               9 / 9          FAIL
+```
+
+No new device profile was needed. `harness/island_phase_profile.py` reads the
+existing exact island41/p56 capture, recovers its embedded 1,616-entry class-B
+RVA/name table from the byte-checked Box86, uses 4,315 FDEs from the exact
+stripped p56 to name only exact function starts, and applies the same phase
+closures. Unique cycle-weighted attribution is:
+
+```text
+bucket              cycles        % all user   % guest WineD3D
+A                 1,681,154,014       2.878          10.87
+B                 1,516,423,719       2.596           9.81
+C                   300,105,357       0.514           1.94
+D                 2,439,081,450       4.176          15.78   ABI-unsafe; excluded
+shared/ambiguous    981,425,107       1.680           6.35
+other             6,974,836,149      11.941          45.11
+unresolved        1,568,189,974       2.685          10.14
+```
+
+The denominator is the profile's 58,409,426,072 user cycles; guest WineD3D is
+15,461,215,770. These are CPU-cycle shares, not ms/frame. The large parent
+`draw_primitive()` block and work inlined into `context_apply_draw_state()`
+cannot be divided offline, while functions reachable from several phases stay
+`shared/ambiguous`. The report is nevertheless sufficient to rank the three
+admitted candidates: A first, B close behind, C distant.
+
+This ranking selected only contiguous phase A as the next research entry. Guest
+x86 keeps `context_apply_draw_state()` control flow, acquire/current ownership,
+phases B/C/D, final draw and release. Section 10.7 records its implementation
+and completed gameplay correctness gate. That result permits a symmetric
+same-process A/B and the existing roughly 1 ms/frame priority gate. Only a
+useful phase-A result justifies phase B or a later fused ABI-safe pre-shader
+root. D receives no FPS run; its optional program witness is causality work
+only. Entry 34 remains unmeasured and is not reclassified.
+
+### 10.7 Complete: p70 phase A passes the gameplay correctness gate
+
+Wine patch 67 makes entry 40 the whole original resource/stream preload
+transaction, including stream-info and index-buffer bookkeeping. It restores
+`draw_primitive()` to the direct guest `context_apply_draw_state()` path; the
+historical p69 entry remains compiled but is not armed. The exact device list is
+FINALPLAY7's 18 entries plus 40, excluding 34/37/38/39.
+
+Static admission completed before deployment:
+
+```text
+entry 40 identity       marker +29, canonical RVA 0x000b9410
+class B                 1,616 native IDs, all registered
+ABI closure             548 functions / 27 TUs / 1,096 aggregate rows
+ABI mismatch / hard     0 / 0 -- PASS
+indirect calls          53 routed, 0 unrouted -- PASS
+ARM marker control      no x86 island marker bytes in ARM objects
+```
+
+The first final Box86 link accidentally omitted the saved libm compatibility
+wrap flags and requested `GLIBC_2.43`; the device rejected it before Wine or the
+game started. No game process or mount survived that failed start. The rebuilt
+artifact retains `MGS2_GLIBC24_COMPAT` and the eight established libm wrappers;
+its newest libm requirement is `GLIBC_2.4`, and `box86 -v` runs on the device.
+
+The compatible p70 pair was deployed only under separate research filenames
+and verified byte-for-byte. The first process armed 19 of 39 entries, both
+class-B witnesses agreed on guest base `0x7a280000`, entry 40 matched
+canonically, TLS became READY and PRESENT advanced. Its title-screen read was
+the early non-gameplay gate.
+
+The requested manual run then started from a clean process with the same exact
+pair and entry list. After the owner loaded and exercised the gameplay scene,
+the final bounded snapshot was:
+
+```text
+phase-A calls / guest fallback     2,172,004 / 0
+final GL submissions               2,172,004, all arrays
+frame witness                      5,087 frames
+retained range                     5,024..5,087
+retained content                   64 / 64 unique
+minimum lit / changed              252 / 256; 255 / 255
+last retained hash                 c1d485b0
+fault / unresolved-call lines      0
+CPU                                performance, current=max=1992000 kHz
+temperature                        62.777 C at the final capture
+```
+
+The independent 640x480 capture shows the real game scene: Raiden, several
+guards, lit geometry, the CAUTION/radar HUD and dialogue. It is neither the
+title/attract route nor a black/static presenter. Source and final counts agree
+exactly, so the native phase does not drop work; the 64 unique witnesses and
+the screenshot prove that equal calls are not submitting an empty image.
+
+All three live targets were `cmp`-identical to their named files: p70 Box86,
+p70 WineD3D and the p67 Wayland frame witness. The display-lock recorder was
+enabled but its exact target callsite did not execute (`writes=0`); this run
+therefore says nothing new about the intermittent mutex deadlock. No freeze was
+reported or captured.
+
+The log contains scene-dependent 300-frame windows, including the later heavy
+7.4--7.6 fps stretch. They are one always-routed correctness configuration,
+not timestamp-paired against guest WineD3D. They must not be quoted as a p70
+performance effect in either direction. Correctness PASS only authorises the
+next symmetric same-process A/B.
+
+After every memory read, screenshot and map/hash capture had completed, only
+the recorded PID 2911 was sent TERM. The process and wineserver exited and no
+p70/Wayland research bind mount remained. Production defaults were never
+changed.
+
+Exact research artifacts:
+
+```text
+box86-island49-p70-phase-a      ceee8c9118e9db6dd96ac912cef264973340b9ade5f6423cc162d584e1b5ee7b
+wined3d_p70_phase_a.dll         198f4d04bca5b2132ae8c2c4e924487831b6a1370b479e63c617223085094486
+launch-p70-phase-a-correctness  8a4cbf3649c2eba07549dcd39f4933208749ec24d7a578ef076db87d05481513
+p70 correctness reader          f2c282576691fabb1f620e149010adaec20fa07eed1ceee264d886e65a1ccb00
+```
+
+Production launch defaults and the byte-checked FINALPLAY7 files were not
+changed.
+
+### 10.8 Do not schedule a `WINE_NO_TRACE_MSGS` A/B
 
 That proposed cheap experiment is already the documented build state, not a new
 arm. The production recipe in `README.md` defines both
@@ -630,16 +894,37 @@ decided       the frozen mutex is win32u display_lock; exact symbols exclude
               session_lock, whose address in the same mapping is 0x60426284
 decided       p66/p67 did not isolate draw-state apply from context ownership
 decided       WINE_NO_TRACE_MSGS is already in the production build recipe
+observed      concrete p69 produces an advancing all-black frame even though
+              acquire/current ownership/final draw stay guest; because its ABI
+              is invalid, this does not reject native state apply as a concept
+decided       p69 is not ABI-safe: shared glsl_ffp_fragment_shader.id and its
+              following fields are 32 bytes earlier in ARM than in guest i386
 implemented   bounded display_lock history and symmetric p68b guest selector
+implemented   transitive TU-qualified shared-heap ABI audit; corrected source
+              closure is 733 functions, not the earlier incomplete 526
+validated     ABI admission self-test: proven entries 10/23/38 PASS; p69/D FAIL
+admitted      phases A/B/C have zero layout mismatch; shader phase D has nine
+              hard failures and is excluded from device FPS work
+profiled      existing FINALPLAY7 capture: unique A/B/C shares are 2.878% /
+              2.596% / 0.514% of all user cycles; A is the next candidate
+implemented   p70 entry 40: contiguous phase A, generated identity, 1,616
+              class-B IDs, zero ABI mismatches and zero unrouted indirect calls
+validated     p70 gameplay correctness: 2,172,004 calls equal 2,172,004 final
+              arrays, fallback/faults zero, 64/64 lit unique retained frames
+              and an independent correct gameplay capture
 measured      p68b symmetric A/B: balanced median +0.002 ms/frame; entry 38 is
               closed as a performance root by its pre-registered <=0.3 gate
-not decided   whether context_apply_draw_state() is safe or useful in ARM when
-              context acquisition/current ownership/release remain guest
+rejected      concrete ABI-invalid p69 entry-39 artifact; no timing or
+              performance claim exists, but an ABI-safe split remains open
+not decided   whether the 32-byte shader-cache misread is the sole runtime cause
+              of p69's black frame; phase D + bounded program witness can prove it
+not decided   any p70 phase-A FPS effect; its always-routed correctness log is
+              scene-dominated and has no guest control arm
 not decided   whether p68 changes freeze frequency or caused this occurrence
 not decided   the exact recursive call chain into display_lock
 not decided   a production mutex fix; the debugger unlock is recovery only
-production    FINALPLAY7 remains unchanged; p68 is closed and p69 is not
-              production yet
+production    FINALPLAY7 remains unchanged; entry 37 and concrete p69 are
+              rejected; entry 38 is closed as a zero-value performance root
 ```
 
 ## 12. Artifacts
@@ -651,6 +936,18 @@ binaries/wined3d_p68_draw_tail.dll
 binaries/winewayland_p67_frame_witness.so
 harness/p67_correctness_read.py
 harness/island/full/island_mutable_state_audit.py   --root support
+harness/island/full/island_abi_closure_audit.py
+  transitive TU-qualified i386/ARM layout admission + proven-root self-test
+  5a05a92389fae331db2173f8b0bb04d98605d91daed40fe81c14e83b3d8fec04
+harness/island/full/island_draw_phases.py
+  one reviewed definition of contiguous A/B/C/D spans and callback families
+  66056a03960a20becc4d18769857ef360fcc44e1b275822f1246fd54253e4371
+harness/island_phase_profile.py
+  exact embedded class-B + p56 FDE offline phase attribution
+  4a51c72c1984d0e845cac51c047a63363d02a3867fb694794bc27644f64a4d24
+harness/island/full/island_mutable_state_audit.py
+  reusable multi-root source graph for phase closures
+  07c5d18e4d0f6d61c91a9bffd12a8758af92ebb17ce7cf41f2470a3a6abc1e31
 
 device/launch-p68-ab.sh
   3c61679eef9cd3903a8fa9c4a1614ac602b670a7ae0095fec08aa99e67c7a123
@@ -667,6 +964,55 @@ harness/island/full/build_island_objects.sh
   unavailable; refusing to substitute a different local DLL
 wine-patches/64-p68-symmetric-guest-ab.patch
 box86-patches/11-p68-symmetric-ab-and-display-lock-history.patch
+
+device/launch-p69-correctness.sh
+  a946e81ac6df67b1ca1b8a7f3a8c0ef35c69517cfc476f52ac590c3df49213fd
+binaries/box86-island48-p69-state
+  4fcfa4ac8f14c38f7633be9b7199204b074183bffc38ea284ad5476d1b684902
+binaries/wined3d_p69_apply_state.dll
+  d8bb5f42eb6fb4455b39c6eb8f1c7d6f74e552f5d63d82ca683af57c553b39c6
+harness/p69_correctness_read.py
+  a3818b635f95459f5e161237992c6211e2ad62beeaadaa1a720edf61d6c9525e
+wine-patches/65-island-draw-state-dispatch-base.patch
+wine-patches/66-p69-context-apply-draw-state.patch
+box86-patches/12-p69-context-apply-correctness.patch
+
+device/launch-p70-phase-a-correctness.sh
+  8a4cbf3649c2eba07549dcd39f4933208749ec24d7a578ef076db87d05481513
+binaries/box86-island49-p70-phase-a
+  ceee8c9118e9db6dd96ac912cef264973340b9ade5f6423cc162d584e1b5ee7b
+binaries/wined3d_p70_phase_a.dll
+  198f4d04bca5b2132ae8c2c4e924487831b6a1370b479e63c617223085094486
+harness/p70_phase_a_correctness_read.py
+  f2c282576691fabb1f620e149010adaec20fa07eed1ceee264d886e65a1ccb00
+wine-patches/67-p70-phase-a-correctness.patch
+  cb44a6beaf815115fcc34588b114fe76345dfb738c285d6d2e106ec2daa59852
+box86-patches/13-p70-phase-a-correctness.patch
+  2ed07174d0f5cd48b03b2badf6a849b389fbf4baa843d00e4446094cd022bb0a
+
+logs/rg353vs/p70-phase-a-20260821/
+  p70-phase-a-heavy-20260821.png
+    b70f3d02540cf206d61b5c5080459ad4899e50f0987229512c70926c2ddb1035
+  p70-phase-a-heavy-20260821.correctness.txt
+    1ce9a8eb2dc5f192be83a0cd8074d945dbce0fce68df06eb511111e84968901a
+  p70-phase-a-heavy-20260821.maps
+    fe676ba968e113f5ea8f07f9c1ba527a6299f6e44134ee7cc52ef037537ce989
+  p70-phase-a-heavy-20260821.status.txt
+    2f6c8a1f0925344cc8b400152fbca4c2ca70e1c21a51a327d150d871a9059b65
+  p70-phase-a-heavy-20260821.display-lock.txt
+    d6d2e93ee4406585f83eae5a61b20ea5e79e416a341d81ebaf21becc1b6c73cb
+  p70-phase-a-heavy-20260821.faults.txt
+    e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  p70-phase-a-manual-20260821.log
+    8eed19b94e66b34326b171c76f78c8cec9ffb7b00acff857d08c4383f626481f
+  p70-phase-a-live.png / p70-phase-a-live2.png / p70-phase-a-live3.png
+    earlier independent title-screen captures; non-gameplay controls
+
+logs/rg353vs/p69-context-apply-20260820/
+  p69-correctness-20260820.log
+    7d7d47f8bb5bc5d3a2fa68fb76fbb45588d7b0eb82ba45cdddf3b3431d22d7bc
+  p69-live.png
+    441da7236f6ffdd8fb4cdfa2d9ce7b8d8df8cf2f7a8e82c530714d92266ce613
 
 logs/rg353vs/cs-draw-p68-20260820/
   p68-correctness-3.log
@@ -706,6 +1052,9 @@ Source-of-record edits live in the shared trees:
 ../box86-src/src/libtools/threads.c
 ```
 
-Production defaults were not changed by any p68/p68b artifact, the passive
-ring, the A/B run or the debugger recovery. The p68b result closes entry 38 as a
-performance root; it does not promote it.
+Production defaults were not changed by any p68/p68b/p69 artifact, the passive
+ring, the A/B run, the offline audit/profile work or the debugger recovery. The
+p68b result closes entry 38 as a performance root. The concrete p69 artifact is
+ABI-invalid and rejected, but does not close an ABI-safe split of state apply.
+P70 phase A passes its gameplay correctness gate, but every performance question
+remains open until a symmetric same-process A/B. Nothing is promoted.

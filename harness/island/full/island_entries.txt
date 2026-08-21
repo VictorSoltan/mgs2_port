@@ -37,3 +37,5 @@ wined3d_texture_prepare_location
 wined3d_texture_validate_location
 mgs2_cs_exec_draw_one_island
 mgs2_draw_primitive_arrays_island
+mgs2_context_apply_draw_state_island
+mgs2_draw_state_phase_a_island

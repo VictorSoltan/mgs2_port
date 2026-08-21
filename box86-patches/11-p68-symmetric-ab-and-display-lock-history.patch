@@ -26,9 +26,10 @@ opengl32 DLL is unavailable; do not substitute a different local DLL.
   * or the guest's own body under the emulator. So the gate's own cost appears in
   * both arms and cancels.
   *
-+ * Entry 38 is the deliberate exception. At roughly a thousand calls per
-+ * displayed frame, its guest arm's RunFunctionFmt() trampoline measured in
-+ * whole milliseconds per frame. That entry registers one tiny control block
++ * Entry 38 is the deliberate exception. The p68 correctness run measured
++ * 4,982,735 calls across 17,832 displayed frames (279.43 calls/frame), so its
++ * guest arm's 2.854 us RunFunctionFmt() trampoline is about 0.797 ms/frame.
++ * That entry registers one tiny control block
 + * in guest WineD3D memory. The frame tick publishes route / settle there, and
 + * guest x86 chooses either the island bridge or its direct body. Both arms
 + * execute the same guest branch and counter; the guest arm never re-enters

@@ -1,0 +1,111 @@
+Patch 12 -- p69 context_apply_draw_state correctness bridge.
+
+Incremental after patch 11 and Wine patches 65--66. Entry 39 carries one pointer
+to a guest-stack argument/result object and invokes only
+context_apply_draw_state() after the guest has acquired and made the GL context
+current. The wrapper reuses the p67 TLS guard and fails closed to the guest body
+if that guard is unavailable.
+
+MGS2_P69_CORRECTNESS enables a small exported memory-only record for calls,
+FALSE results and guest fallbacks. It adds no stderr output and is intended only
+for the first correctness run. Regenerate mgs2_island_entry_identity.h and class
+B from the exact paired p69 DLL; the built artifact used for the first run has
+entry 39 marker +9 at canonical RVA 0xb8ae0 and 1614 class-B IDs.
+
+No A/B logic is added. If picture correctness passes, a later timing build must
+disable this record, draw/frame witnesses, display-lock history and island
+diagnostics before adding a symmetric guest-side selector.
+
+--- a/src/mgs2_island_bridges.c
++++ b/src/mgs2_island_bridges.c
+@@ -179,6 +179,36 @@
+     ~MGS2_DRAW_CORRECTNESS_MAGIC,
+ };
+ 
++#define MGS2_P69_CORRECTNESS_MAGIC 0x31413950u /* P9A1 */
++
++struct mgs2_p69_correctness_public
++{
++    uint32_t magic, version, size_words, signature;
++    uint32_t enabled, calls, false_returns, guest_fallbacks;
++};
++
++__attribute__((visibility("default")))
++struct mgs2_p69_correctness_public mgs2_p69_correctness =
++{
++    MGS2_P69_CORRECTNESS_MAGIC, 1,
++    sizeof(struct mgs2_p69_correctness_public) / sizeof(uint32_t),
++    ~MGS2_P69_CORRECTNESS_MAGIC,
++};
++
++static int mgs2_p69_correctness_on(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        const char *value = getenv("MGS2_P69_CORRECTNESS");
++
++        enabled = value && strcmp(value, "0");
++        mgs2_p69_correctness.enabled = enabled;
++    }
++    return enabled;
++}
++
+ static int mgs2_draw_correctness_on(void)
+ {
+     static int enabled = -1;
+@@ -489,6 +519,37 @@
+     }
+ }
+ 
++/* p69 moves only context_apply_draw_state() below an already current guest GL
++ * context. The argument/result object is guest memory and has the same 32-bit
++ * layout on i386 and armhf. Keep this correctness wrapper free of A/B logic. */
++static void mgs2_island_w39_vFp(x86emu_t *emu, uintptr_t fnc)
++{
++    struct mgs2_apply_draw_state_args32
++    {
++        uint32_t context, device, state, indexed, result;
++    };
++    uint32_t esp = GetESP(emu);
++    struct mgs2_apply_draw_state_args32 *a = *(void **)(esp + 4);
++
++    if (mgs2_island_context_tls_sync() == 1)
++    {
++        if (mgs2_p69_correctness_on())
++            ++mgs2_p69_correctness.calls;
++        ((void (*)(void *))fnc)(a);
++        if (mgs2_p69_correctness_on() && a && !a->result)
++            ++mgs2_p69_correctness.false_returns;
++    }
++    else
++    {
++        uintptr_t guest = mgs2_island_entry_guest(39);
++
++        if (mgs2_p69_correctness_on())
++            ++mgs2_p69_correctness.guest_fallbacks;
++        if (guest)
++            RunFunctionFmt(guest, "p", a);
++    }
++}
++
+ static void mgs2_island_w_vFppppi(x86emu_t *emu, uintptr_t fnc)
+ {
+     uint32_t esp = GetESP(emu);
+@@ -568,6 +629,7 @@
+ extern void wined3d_texture_validate_location(void);
+ extern void mgs2_cs_exec_draw_one_island(void);
+ extern void mgs2_draw_primitive_arrays_island(void);
++extern void mgs2_context_apply_draw_state_island(void);
+ 
+ const struct mgs2_island_entry mgs2_island_entries[] = {
+     { 0, (void *)mgs2_island_w_vFpu, (void *)context_invalidate_compute_state },
+@@ -607,5 +669,6 @@
+     { 36, (void *)mgs2_island_w_vFpuu, (void *)wined3d_texture_validate_location },
+     { 37, (void *)mgs2_island_w_ab37_vFpuup, (void *)mgs2_cs_exec_draw_one_island },
+     { 38, (void *)mgs2_island_w38_vFp, (void *)mgs2_draw_primitive_arrays_island },
++    { 39, (void *)mgs2_island_w39_vFp, (void *)mgs2_context_apply_draw_state_island },
+ };
+-const unsigned int mgs2_island_entry_count = 37;
++const unsigned int mgs2_island_entry_count = 38;

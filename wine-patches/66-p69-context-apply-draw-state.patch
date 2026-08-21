@@ -1,0 +1,65 @@
+WineD3D island p69: route context_apply_draw_state below guest context ownership.
+
+The rejected entry 37 moved context acquisition/current-context ownership and
+draw-state application into ARM together, so its black frame did not isolate
+which half was unsafe. Entry 39 keeps acquire, current ownership, render-target
+and depth preparation, final draw submission, barriers, cleanup and release in
+guest x86. Only context_apply_draw_state() crosses into ARM.
+
+Use one pointer to a guest-stack argument/result object. This keeps the marker
+inside the canonical witness window and returns BOOL without adding a second
+ABI. The first device run is correctness-only; this patch makes no FPS claim.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -5130,6 +5130,27 @@
+     struct mgs2_draw_tail_ab_control *ab_control;
+ };
+ 
++struct mgs2_apply_draw_state_args
++{
++    struct wined3d_context *context;
++    const struct wined3d_device *device;
++    const struct wined3d_state *state;
++    uint32_t indexed;
++    uint32_t result;
++};
++
++/* p69 correctness cut. The guest caller has already acquired and made the GL
++ * context current and loaded render targets/depth. Only WineD3D draw-state
++ * application crosses into ARM; final draw submission, barriers and release
++ * remain guest. The BOOL result is returned through shared guest memory. */
++DECLSPEC_NOINLINE void mgs2_context_apply_draw_state_island(
++        struct mgs2_apply_draw_state_args *args)
++{
++    MGS2_ISLAND_MARK(0x27);
++    args->result = context_apply_draw_state(args->context, args->device,
++            args->state, args->indexed);
++}
++
+ /* p68 correctness cut.  The guest draw path has already acquired and validated
+  * the current context, loaded its render targets and applied draw state before
+  * crossing this boundary.  The guest also retains barriers and context_release()
+@@ -5226,6 +5247,7 @@
+     unsigned int i, idx_size = 0;
+     const void *idx_data = NULL;
+     struct mgs2_draw_primitive_arrays_args mgs2_draw_args;
++    struct mgs2_apply_draw_state_args mgs2_apply_args;
+ 
+     TRACE("device %p, state %p, parameters %p.\n", device, state, parameters);
+ 
+@@ -5311,7 +5333,13 @@
+         mgs2_batch_flush();
+     }
+ 
+-    if (!context_apply_draw_state(context, device, state, parameters->indexed))
++    mgs2_apply_args.context = context;
++    mgs2_apply_args.device = device;
++    mgs2_apply_args.state = state;
++    mgs2_apply_args.indexed = parameters->indexed;
++    mgs2_apply_args.result = FALSE;
++    mgs2_context_apply_draw_state_island(&mgs2_apply_args);
++    if (!mgs2_apply_args.result)
+     {
+         context_release(context);
+         WARN("Unable to apply draw state, skipping draw.\n");
