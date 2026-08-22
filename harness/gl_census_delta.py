@@ -36,6 +36,7 @@ EXT_SITE = EXT_NAME + 4
 SHADOW_MAGIC = 0x314C4753   # 'SGL1' -- the shadow simulator
 SHADOW_NAME = 48
 SHADOW_SITE = SHADOW_NAME + 8
+ATTRIB_MAGIC = 0x31485341   # 'ASH1' -- the real vertex-attribute shadow
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
           "program_selects texture_binds sampler_applies shader_resource_binds "
           "fbo_checks").split()
@@ -120,6 +121,31 @@ def find_ext_records(pid):
                     continue
                 hits.append((lo + i, name))
     return hits
+
+
+def read_attrib_stats(pid):
+    """The real shadow's own counters: enabled, attempted, skipped,
+    invalidations. attempted - skipped is what still reached the driver."""
+    pat = struct.pack("<IIII", ATTRIB_MAGIC, 1, 15, (~ATTRIB_MAGIC) & 0xFFFFFFFF)
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            if i < 0:
+                continue
+            mem.seek(lo + i)
+            w = struct.unpack("<15I", mem.read(60))
+            d = {"addr": lo + i, "enabled": w[4], "attempted": w[5],
+                 "skipped": w[6], "invalidations": w[7]}
+            for n, k in enumerate(("invalid", "buffer", "size", "type",
+                                   "norm", "stride", "pointer")):
+                d["miss_" + k] = w[8 + n]
+            return d
+    return None
 
 
 def find_shadow_records(pid):
@@ -229,10 +255,12 @@ def main():
     before = sample(a.pid, addrs)
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
     sbefore = sample_shadow(a.pid, saddrs) if saddrs else {}
+    a0 = read_attrib_stats(a.pid)
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
     eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
     safter = sample_shadow(a.pid, saddrs) if saddrs else {}
+    a1 = read_attrib_stats(a.pid)
     f1 = frames(a.log) if a.log else None
 
     nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
@@ -265,6 +293,26 @@ def main():
         if tot and total.get("ext_calls"):
             print("  (family counter said %d; histogram sums to %d)"
                   % (total["ext_calls"], tot))
+
+    if a0 is not None and a1 is not None:
+        att = a1["attempted"] - a0["attempted"]
+        skp = a1["skipped"] - a0["skipped"]
+        inv = a1["invalidations"] - a0["invalidations"]
+        exe = att - skp
+        print("\nREAL ATTRIBUTE SHADOW (enabled=%d)" % a1["enabled"])
+        print("  attempted %d | skipped %d (%.1f%%) | executed %d | invalidations %d"
+              % (att, skp, 100.0 * skp / att if att else 0.0, exe, inv))
+        if nframes:
+            print("  per frame: attempted %.1f, skipped %.1f, still executed %.1f"
+                  % (att / nframes, skp / nframes, exe / nframes))
+        print("  identity attempted == skipped + executed: %s"
+              % ("PASS" if att == skp + exe else "FAIL"))
+        misses = [(k[5:], a1[k] - a0[k]) for k in a1 if k.startswith("miss_")]
+        misses = [(k, v) for k, v in misses if v]
+        if misses:
+            print("  what vetoed the skip: " + ", ".join(
+                "%s %d (%.0f%%)" % (k, v, 100.0 * v / att) for k, v in
+                sorted(misses, key=lambda kv: -kv[1])))
 
     if saddrs:
         print("\nSHADOW SIMULATOR -- what a real shadow WOULD have skipped")
