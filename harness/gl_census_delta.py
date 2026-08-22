@@ -36,7 +36,9 @@ EXT_SITE = EXT_NAME + 4
 SHADOW_MAGIC = 0x314C4753   # 'SGL1' -- the shadow simulator
 SHADOW_NAME = 48
 SHADOW_SITE = SHADOW_NAME + 8
-ATTRIB_MAGIC = 0x31485341   # 'ASH1' -- the real vertex-attribute shadow
+ATTRIB_MAGIC = 0x31485341   # 'ASH1' -- the real vertex-attribute shadow (closed)
+TXM_MAGIC = 0x314D5854      # 'TXM1' -- the FFP texture-matrix program cache
+TXM_TEX = 8
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
           "program_selects texture_binds sampler_applies shader_resource_binds "
           "fbo_checks").split()
@@ -121,6 +123,42 @@ def find_ext_records(pid):
                     continue
                 hits.append((lo + i, name))
     return hits
+
+
+def read_txm_stats(pid):
+    """Every TXM1 record: the guest wined3d.dll has one and the island links a
+    second copy into Box86, so both must be summed -- and both must be flipped
+    by the A/B, or an arm is only half applied."""
+    pat = struct.pack("<I", TXM_MAGIC)
+    inv = struct.pack("<I", (~TXM_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            start = 0
+            while True:
+                i = blob.find(pat, start)
+                if i < 0:
+                    break
+                start = i + 4
+                if blob[i + 12:i + 16] != inv:
+                    continue
+                n = 10 + 2 * TXM_TEX
+                if len(blob) - i < n * 4:
+                    continue
+                w = struct.unpack("<%dI" % n, blob[i:i + n * 4])
+                out.append({
+                    "addr": lo + i, "where": name or "(anon)",
+                    "enabled": w[4], "attempted": w[5], "skipped": w[6],
+                    "executed": w[7], "cold_miss": w[8], "changed_miss": w[9],
+                    "per_tex_attempted": list(w[10:10 + TXM_TEX]),
+                    "per_tex_skipped": list(w[10 + TXM_TEX:10 + 2 * TXM_TEX]),
+                })
+    return out
 
 
 def read_attrib_stats(pid):
@@ -238,10 +276,10 @@ def main():
     a = ap.parse_args()
 
     addrs = find_records(a.pid)
-    if not addrs:
-        print("REFUSAL: no census record found. Wrong wined3d.dll -- the build "
-              "must be one compiled with MGS2_GL_CENSUS.")
-        return 2
+    # The family census only exists in a MGS2_GL_CENSUS build. A production DLL
+    # carries the texture-matrix record and nothing else, and that must still be
+    # readable -- refusing here is how the first version of this tool made the
+    # production A/B unreadable.
     print("census records found: %d" % len(addrs))
     for addr, name in addrs:
         print("  %#x  %s" % (addr, name or "(anonymous)"))
@@ -256,23 +294,28 @@ def main():
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
     sbefore = sample_shadow(a.pid, saddrs) if saddrs else {}
     a0 = read_attrib_stats(a.pid)
+    t0 = read_txm_stats(a.pid)
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
     eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
     safter = sample_shadow(a.pid, saddrs) if saddrs else {}
     a1 = read_attrib_stats(a.pid)
+    t1 = read_txm_stats(a.pid)
     f1 = frames(a.log) if a.log else None
 
     nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
     print("\nwindow %.1f s, displayed frames %s"
           % (a.seconds, nframes if nframes else "UNKNOWN (no --log, or no stats lines)"))
 
-    print("\n%-24s %12s %12s %10s" % ("counter", "delta", "per second",
-                                      "per frame" if nframes else ""))
     total = {}
+    if addrs:
+        print("\n%-24s %12s %12s %10s" % ("counter", "delta", "per second",
+                                          "per frame" if nframes else ""))
     for f in FIELDS:
         d = sum(after[i][f] - before[i][f] for i in range(len(addrs)))
         total[f] = d
+        if not addrs:
+            continue
         per_s = d / a.seconds
         per_f = ("%10.1f" % (d / nframes)) if nframes else ""
         print("%-24s %12d %12.0f %s" % (f, d, per_s, per_f))
@@ -293,6 +336,35 @@ def main():
         if tot and total.get("ext_calls"):
             print("  (family counter said %d; histogram sums to %d)"
                   % (total["ext_calls"], tot))
+
+    if t1:
+        print("\nFFP TEXTURE-MATRIX PROGRAM CACHE (%d record%s: %s)"
+              % (len(t1), "" if len(t1) == 1 else "s",
+                 ", ".join("%s enabled=%d" % (r["where"].split("/")[-1], r["enabled"])
+                           for r in t1)))
+        def tot(rs, k):
+            return sum(r[k] for r in rs)
+        att = tot(t1, "attempted") - tot(t0, "attempted")
+        skp = tot(t1, "skipped") - tot(t0, "skipped")
+        exe = tot(t1, "executed") - tot(t0, "executed")
+        cold = tot(t1, "cold_miss") - tot(t0, "cold_miss")
+        chg = tot(t1, "changed_miss") - tot(t0, "changed_miss")
+        print("  attempted %d | skipped %d (%.1f%%) | executed %d"
+              % (att, skp, 100.0 * skp / att if att else 0.0, exe))
+        print("  misses: cold %d, changed %d" % (cold, chg))
+        if nframes:
+            print("  per frame: attempted %.1f, skipped %.1f, executed %.1f"
+                  % (att / nframes, skp / nframes, exe / nframes))
+        print("  identity attempted == skipped + executed: %s"
+              % ("PASS" if att == skp + exe else "FAIL"))
+        pa = [sum(r["per_tex_attempted"][i] for r in t1)
+              - sum(r["per_tex_attempted"][i] for r in t0) for i in range(TXM_TEX)]
+        ps = [sum(r["per_tex_skipped"][i] for r in t1)
+              - sum(r["per_tex_skipped"][i] for r in t0) for i in range(TXM_TEX)]
+        live = [(i, pa[i], ps[i]) for i in range(TXM_TEX) if pa[i]]
+        if live:
+            print("  per texture stage: " + ", ".join(
+                "%d: %d/%d" % (i, s, a) for i, a, s in live) + "  (skipped/attempted)")
 
     if a0 is not None and a1 is not None:
         att = a1["attempted"] - a0["attempted"]
