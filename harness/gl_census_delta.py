@@ -29,7 +29,10 @@ import struct
 import sys
 import time
 
-MAGIC = 0x314C4743          # 'CGL1'
+MAGIC = 0x314C4743          # 'CGL1' -- the family record
+EXT_MAGIC = 0x314C4758      # 'XGL1' -- the per-function histogram
+EXT_NAME = 40               # sizeof(mgs2_ext_site.name)
+EXT_SITE = EXT_NAME + 4
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
           "program_selects texture_binds sampler_applies shader_resource_binds "
           "fbo_checks").split()
@@ -88,6 +91,50 @@ def find_records(pid):
     return hits
 
 
+def find_ext_records(pid):
+    """The per-function histogram. Its header is magic, version, capacity, used
+    -- no inverted-magic tail -- so the match is on magic plus a version and a
+    capacity that make sense, which is enough given the magic is 4 bytes."""
+    head = struct.pack("<I", EXT_MAGIC)
+    hits = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            start = 0
+            while True:
+                i = blob.find(head, start)
+                if i < 0:
+                    break
+                start = i + 4
+                if len(blob) - i < 16:
+                    continue
+                ver, cap, used = struct.unpack("<III", blob[i + 4:i + 16])
+                if ver != 1 or not (1 <= cap <= 4096) or used > cap:
+                    continue
+                hits.append((lo + i, name))
+    return hits
+
+
+def sample_ext(pid, addrs):
+    """{function name: call count} summed over every record found."""
+    out = {}
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for a, _ in addrs:
+            mem.seek(a)
+            _, _, _, used = struct.unpack("<IIII", mem.read(16))
+            blob = mem.read(used * EXT_SITE)
+            for i in range(used):
+                rec = blob[i * EXT_SITE:(i + 1) * EXT_SITE]
+                name = rec[:EXT_NAME].split(b"\0")[0].decode("ascii", "replace")
+                calls = struct.unpack("<I", rec[EXT_NAME:EXT_NAME + 4])[0]
+                out[name] = out.get(name, 0) + calls
+    return out
+
+
 def sample(pid, addrs):
     vals = []
     with open("/proc/%d/mem" % pid, "rb", 0) as mem:
@@ -129,10 +176,15 @@ def main():
     for addr, name in addrs:
         print("  %#x  %s" % (addr, name or "(anonymous)"))
 
+    eaddrs = find_ext_records(a.pid)
+    print("per-function histogram records: %d" % len(eaddrs))
+
     f0 = frames(a.log) if a.log else None
     before = sample(a.pid, addrs)
+    ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
+    eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
     f1 = frames(a.log) if a.log else None
 
     nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
@@ -148,6 +200,23 @@ def main():
         per_s = d / a.seconds
         per_f = ("%10.1f" % (d / nframes)) if nframes else ""
         print("%-24s %12d %12.0f %s" % (f, d, per_s, per_f))
+
+    if eaddrs:
+        delta = {k: eafter.get(k, 0) - before_v
+                 for k, before_v in ((k, ebefore.get(k, 0)) for k in eafter)}
+        delta = {k: v for k, v in delta.items() if v > 0}
+        tot = sum(delta.values())
+        print("\nWHICH ext calls (%d distinct sites active, %d calls total)" %
+              (len(delta), tot))
+        print("  %-42s %10s %9s %7s" % ("function", "calls",
+                                        "per frame" if nframes else "per sec", "share"))
+        for k in sorted(delta, key=delta.get, reverse=True)[:22]:
+            v = delta[k]
+            rate = (v / nframes) if nframes else (v / a.seconds)
+            print("  %-42s %10d %9.1f %6.1f%%" % (k, v, rate, 100.0 * v / tot))
+        if tot and total.get("ext_calls"):
+            print("  (family counter said %d; histogram sums to %d)"
+                  % (total["ext_calls"], tot))
 
     if len(addrs) > 1:
         print("\nper record (island copies are separate and MUST be summed):")
