@@ -33,6 +33,9 @@ MAGIC = 0x314C4743          # 'CGL1' -- the family record
 EXT_MAGIC = 0x314C4758      # 'XGL1' -- the per-function histogram
 EXT_NAME = 40               # sizeof(mgs2_ext_site.name)
 EXT_SITE = EXT_NAME + 4
+SHADOW_MAGIC = 0x314C4753   # 'SGL1' -- the shadow simulator
+SHADOW_NAME = 48
+SHADOW_SITE = SHADOW_NAME + 8
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
           "program_selects texture_binds sampler_applies shader_resource_binds "
           "fbo_checks").split()
@@ -119,6 +122,47 @@ def find_ext_records(pid):
     return hits
 
 
+def find_shadow_records(pid):
+    head = struct.pack("<I", SHADOW_MAGIC)
+    hits = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            start = 0
+            while True:
+                i = blob.find(head, start)
+                if i < 0:
+                    break
+                start = i + 4
+                if len(blob) - i < 16:
+                    continue
+                ver, cap, used = struct.unpack("<III", blob[i + 4:i + 16])
+                if ver != 1 or not (1 <= cap <= 1024) or used > cap:
+                    continue
+                hits.append((lo + i, name))
+    return hits
+
+
+def sample_shadow(pid, addrs):
+    out = {}
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for a, _ in addrs:
+            mem.seek(a)
+            _, _, _, used = struct.unpack("<IIII", mem.read(16))
+            blob = mem.read(used * SHADOW_SITE)
+            for i in range(used):
+                rec = blob[i * SHADOW_SITE:(i + 1) * SHADOW_SITE]
+                name = rec[:SHADOW_NAME].split(b"\0")[0].decode("ascii", "replace")
+                att, red = struct.unpack("<II", rec[SHADOW_NAME:SHADOW_NAME + 8])
+                a0, r0 = out.get(name, (0, 0))
+                out[name] = (a0 + att, r0 + red)
+    return out
+
+
 def sample_ext(pid, addrs):
     """{function name: call count} summed over every record found."""
     out = {}
@@ -177,14 +221,18 @@ def main():
         print("  %#x  %s" % (addr, name or "(anonymous)"))
 
     eaddrs = find_ext_records(a.pid)
-    print("per-function histogram records: %d" % len(eaddrs))
+    saddrs = find_shadow_records(a.pid)
+    print("per-function histogram records: %d, shadow simulator records: %d"
+          % (len(eaddrs), len(saddrs)))
 
     f0 = frames(a.log) if a.log else None
     before = sample(a.pid, addrs)
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
+    sbefore = sample_shadow(a.pid, saddrs) if saddrs else {}
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
     eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
+    safter = sample_shadow(a.pid, saddrs) if saddrs else {}
     f1 = frames(a.log) if a.log else None
 
     nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
@@ -217,6 +265,30 @@ def main():
         if tot and total.get("ext_calls"):
             print("  (family counter said %d; histogram sums to %d)"
                   % (total["ext_calls"], tot))
+
+    if saddrs:
+        print("\nSHADOW SIMULATOR -- what a real shadow WOULD have skipped")
+        print("  %-34s %10s %10s %7s %10s"
+              % ("site", "attempted", "redundant", "pct", "per frame"))
+        tot_a = tot_r = 0
+        for k in sorted(safter, key=lambda k: safter[k][1] - sbefore.get(k, (0, 0))[1],
+                        reverse=True):
+            att = safter[k][0] - sbefore.get(k, (0, 0))[0]
+            red = safter[k][1] - sbefore.get(k, (0, 0))[1]
+            if att <= 0:
+                continue
+            tot_a += att
+            tot_r += red
+            per_f = ("%10.1f" % (red / nframes)) if nframes else ""
+            print("  %-34s %10d %10d %6.1f%% %s"
+                  % (k[:34], att, red, 100.0 * red / att, per_f))
+        if tot_a:
+            print("  %-34s %10d %10d %6.1f%% %s"
+                  % ("TOTAL instrumented", tot_a, tot_r, 100.0 * tot_r / tot_a,
+                     ("%10.1f" % (tot_r / nframes)) if nframes else ""))
+            if nframes and total.get("ext_calls"):
+                print("  removable share of ALL ext calls: %.1f%%"
+                      % (100.0 * tot_r / total["ext_calls"]))
 
     if len(addrs) > 1:
         print("\nper record (island copies are separate and MUST be summed):")
