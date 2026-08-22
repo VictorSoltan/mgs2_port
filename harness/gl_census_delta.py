@@ -372,6 +372,7 @@ def main():
         avs = st(s1, "avoided_vs") - st(s0, "avoided_vs")
         aps = st(s1, "avoided_ps") - st(s0, "avoided_ps")
         mvs = st(s1, "missed_vs") - st(s0, "missed_vs")
+        mps = st(s1, "missed_ps") - st(s0, "missed_ps")
         print("\nSEPARABLE STAGE SELECTOR (%d record%s, lazy=%s)"
               % (len(s1), "" if len(s1) == 1 else "s",
                  "/".join(str(r["lazy"]) for r in s1)))
@@ -387,8 +388,8 @@ def main():
             print("  per frame: selector calls %.1f -> %.1f, avoided %.1f"
                   % (2 * loads / nframes, (nvs + nps) / nframes,
                      (avs + aps) / nframes))
-        print("  mirror self-check MISSED (must be 0): %d -- %s"
-              % (mvs, "PASS" if mvs == 0 else "FAIL, run is void"))
+        print("  mirror self-check MISSED (both must be 0): VS %d, PS %d -- %s"
+              % (mvs, mps, "PASS" if not (mvs or mps) else "FAIL, run is void"))
 
     if t1:
         print("\nFFP TEXTURE-MATRIX PROGRAM CACHE (%d record%s: %s)"

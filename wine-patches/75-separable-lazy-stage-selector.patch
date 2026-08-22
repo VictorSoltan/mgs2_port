@@ -1,6 +1,6 @@
 --- a/dlls/wined3d/glsl_shader.c
 +++ b/dlls/wined3d/glsl_shader.c
-@@ -268,8 +268,231 @@
+@@ -268,8 +268,242 @@
      DWORD shader_controlled_clip_distances : 1;
      DWORD clip_distance_mask : 8; /* WINED3D_MAX_CLIP_DISTANCES, 8 */
      DWORD padding : 23;
@@ -134,7 +134,18 @@
 + */
 +static const BOOL mgs2_asp_ab_enabled = FALSE;
 +static unsigned int mgs2_asp_witness;
-+static BOOL mgs2_asp_need_vs;
++
++/*
++ * Every uniform upload in this file raises the witness, which is what makes the
++ * need_vs/need_ps mirror checkable rather than merely plausible. The first
++ * version raised it in ONE helper (the texture matrix) and checked only the VS
++ * side, so "MISSED = 0" was a far weaker statement than it looked.
++ *
++ * GL_EXTCALL takes the whole call as its argument, so the wrapper takes it too
++ * and uses the comma operator: safe inside an `if` with no braces.
++ */
++#define MGS2_UNIFORM_CALL(call) ((void)(++mgs2_asp_witness), GL_EXTCALL(call))
++static BOOL mgs2_asp_need_vs, mgs2_asp_need_ps;
 +
 +/*
 + * `enabled` has exactly one owner: mgs2_texmatrix_ab_present(). An earlier
@@ -232,7 +243,115 @@
  struct glsl_program_key
  {
      GLuint vs_id;
-@@ -1826,14 +2049,43 @@
+@@ -1107,7 +1341,7 @@
+ 
+         string_buffer_sprintf(name, "block_%s_cb%u", prefix, i);
+         block_idx = GL_EXTCALL(glGetUniformBlockIndex(program_id, name->buffer));
+-        GL_EXTCALL(glUniformBlockBinding(program_id, block_idx, base + i));
++        MGS2_UNIFORM_CALL(glUniformBlockBinding(program_id, block_idx, base + i));
+     }
+     checkGLcall("glUniformBlockBinding");
+     string_buffer_release(&priv->string_buffers, name);
+@@ -1137,7 +1371,7 @@
+         }
+ 
+         TRACE("Loading sampler %s on unit %u.\n", sampler_name->buffer, mapped_unit);
+-        GL_EXTCALL(glUniform1i(name_loc, mapped_unit));
++        MGS2_UNIFORM_CALL(glUniform1i(name_loc, mapped_unit));
+     }
+     checkGLcall("Load sampler bindings");
+     string_buffer_release(&priv->string_buffers, sampler_name);
+@@ -1202,7 +1436,7 @@
+ 
+         string_buffer_sprintf(icb_name, "%s_icb", prefix);
+         icb_location = GL_EXTCALL(glGetUniformLocation(program_id, icb_name->buffer));
+-        GL_EXTCALL(glUniform4fv(icb_location, icb->vec4_count, (const GLfloat *)icb->data));
++        MGS2_UNIFORM_CALL(glUniform4fv(icb_location, icb->vec4_count, (const GLfloat *)icb->data));
+         checkGLcall("Load immediate constant buffer");
+ 
+         string_buffer_release(&priv->string_buffers, icb_name);
+@@ -1233,7 +1467,7 @@
+             continue;
+ 
+         TRACE("Loading image %s on unit %u.\n", name->buffer, i);
+-        GL_EXTCALL(glUniform1i(location, i));
++        MGS2_UNIFORM_CALL(glUniform1i(location, i));
+     }
+     checkGLcall("Load image bindings");
+     string_buffer_release(&priv->string_buffers, name);
+@@ -1537,7 +1771,7 @@
+         }
+     }
+     if (start <= end)
+-        GL_EXTCALL(glUniform4fv(constant_locations[start], end - start + 1, &constants[start].x));
++        MGS2_UNIFORM_CALL(glUniform4fv(constant_locations[start], end - start + 1, &constants[start].x));
+     checkGLcall("walk_constant_heap()");
+ }
+ 
+@@ -1554,7 +1788,7 @@
+     clamped_constant[2] = data->z < -1.0f ? -1.0f : data->z > 1.0f ? 1.0f : data->z;
+     clamped_constant[3] = data->w < -1.0f ? -1.0f : data->w > 1.0f ? 1.0f : data->w;
+ 
+-    GL_EXTCALL(glUniform4fv(location, 1, clamped_constant));
++    MGS2_UNIFORM_CALL(glUniform4fv(location, 1, clamped_constant));
+ }
+ 
+ /* Context activation is done by the caller. */
+@@ -1645,7 +1879,7 @@
+     /* Immediate constants are clamped to [-1;1] at shader creation time if needed */
+     LIST_FOR_EACH_ENTRY(lconst, &shader->constantsF, struct wined3d_shader_lconst, entry)
+     {
+-        GL_EXTCALL(glUniform4fv(constant_locations[lconst->idx], 1, (const GLfloat *)lconst->value));
++        MGS2_UNIFORM_CALL(glUniform4fv(constant_locations[lconst->idx], 1, (const GLfloat *)lconst->value));
+     }
+     checkGLcall("glUniform4fv()");
+ }
+@@ -1666,7 +1900,7 @@
+         {
+             /* We found this uniform name in the program - go ahead and send the data */
+             i = wined3d_bit_scan(&constants_set);
+-            GL_EXTCALL(glUniform4iv(locations[i], 1, &constants[i].x));
++            MGS2_UNIFORM_CALL(glUniform4iv(locations[i], 1, &constants[i].x));
+         }
+     }
+ 
+@@ -1679,7 +1913,7 @@
+         const GLint *values = (const GLint *)lconst->value;
+ 
+         /* We found this uniform name in the program - go ahead and send the data */
+-        GL_EXTCALL(glUniform4iv(locations[idx], 1, values));
++        MGS2_UNIFORM_CALL(glUniform4iv(locations[idx], 1, values));
+         ptr = list_next(&shader->constantsI, ptr);
+     }
+     checkGLcall("glUniform4iv()");
+@@ -1700,7 +1934,7 @@
+         while (constants_set)
+         {
+             i = wined3d_bit_scan(&constants_set);
+-            GL_EXTCALL(glUniform1iv(locations[i], 1, &constants[i]));
++            MGS2_UNIFORM_CALL(glUniform1iv(locations[i], 1, &constants[i]));
+         }
+     }
+ 
+@@ -1712,7 +1946,7 @@
+         unsigned int idx = lconst->idx;
+         const GLint *values = (const GLint *)lconst->value;
+ 
+-        GL_EXTCALL(glUniform1iv(locations[idx], 1, values));
++        MGS2_UNIFORM_CALL(glUniform1iv(locations[idx], 1, values));
+         ptr = list_next(&shader->constantsB, ptr);
+     }
+     checkGLcall("glUniform1iv()");
+@@ -1816,7 +2050,7 @@
+     if (prog->vs.normal_matrix_location == -1)
+         return;
+ 
+-    GL_EXTCALL(glUniformMatrix4fv(prog->vs.normal_matrix_location,
++    MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.normal_matrix_location,
+             1, FALSE, &constants->modelview.not_blended.normal_matrix._11));
+     checkGLcall("glUniformMatrix4fv");
+ }
+@@ -1826,14 +2060,42 @@
  {
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
  
@@ -244,10 +363,11 @@
      if (prog->vs.texture_matrix_location[tex] == -1)
          return;
  
+-    GL_EXTCALL(glUniformMatrix4fv(prog->vs.texture_matrix_location[tex],
+-            1, FALSE, &constants->texture_matrices[tex]._11));
 +    matrix = &constants->texture_matrices[tex];
 +    bit = 1u << tex;
 +
-+    ++mgs2_asp_witness;
 +    ++mgs2_texmatrix_stats.attempted;
 +    ++mgs2_texmatrix_stats.per_tex_attempted[tex];
 +
@@ -263,8 +383,7 @@
 +        return;
 +    }
 +
-     GL_EXTCALL(glUniformMatrix4fv(prog->vs.texture_matrix_location[tex],
--            1, FALSE, &constants->texture_matrices[tex]._11));
++    MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.texture_matrix_location[tex],
 +            1, FALSE, &matrix->_11));
      checkGLcall("glUniformMatrix4fv");
 +
@@ -277,7 +396,124 @@
  }
  
  static void shader_glsl_ffp_vertex_material_uniform(struct wined3d_context_gl *context_gl,
-@@ -1985,12 +2237,44 @@
+@@ -1845,11 +2107,11 @@
+     constants = wined3d_buffer_load_sysmem(
+             context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], &context_gl->c);
+ 
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_specular_location, 1, &constants->material.specular.r));
+-    GL_EXTCALL(glUniform1f(prog->vs.material_shininess_location, constants->material.power));
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_ambient_location, 1, &constants->material.ambient.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_diffuse_location, 1, &constants->material.diffuse.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_emissive_location, 1, &constants->material.emissive.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_specular_location, 1, &constants->material.specular.r));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.material_shininess_location, constants->material.power));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_ambient_location, 1, &constants->material.ambient.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_diffuse_location, 1, &constants->material.diffuse.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_emissive_location, 1, &constants->material.emissive.r));
+     checkGLcall("setting FFP material uniforms");
+ }
+ 
+@@ -1859,40 +2121,40 @@
+ {
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
+-    GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].diffuse, 1, &constants->diffuse.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].specular, 1, &constants->specular.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].ambient, 1, &constants->ambient.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].diffuse, 1, &constants->diffuse.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].specular, 1, &constants->specular.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].ambient, 1, &constants->ambient.r));
+ 
+     switch (type)
+     {
+         case WINED3D_LIGHT_POINT:
+-            GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
+             break;
+ 
+         case WINED3D_LIGHT_SPOT:
+-            GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
+ 
+-            GL_EXTCALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
++            MGS2_UNIFORM_CALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
+ 
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].falloff, constants->falloff));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].cos_htheta, constants->cos_half_theta));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].cos_hphi, constants->cos_half_phi));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].falloff, constants->falloff));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].cos_htheta, constants->cos_half_theta));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].cos_hphi, constants->cos_half_phi));
+             break;
+ 
+         case WINED3D_LIGHT_DIRECTIONAL:
+-            GL_EXTCALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
++            MGS2_UNIFORM_CALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
+             break;
+ 
+         case WINED3D_LIGHT_PARALLELPOINT:
+-            GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
+             break;
+ 
+         default:
+@@ -1910,18 +2172,18 @@
+     constants = wined3d_buffer_load_sysmem(
+             context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], &context_gl->c);
+ 
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_min_location, constants->point_clamp.min));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_min_location, constants->point_clamp.min));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_max_location, constants->point_clamp.max));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_max_location, constants->point_clamp.max));
+     checkGLcall("glUniform1f");
+ 
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_location, constants->point.size));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_location, constants->point.size));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_c_att_location, constants->point.scale_const));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_c_att_location, constants->point.scale_const));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_l_att_location, constants->point.scale_linear));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_l_att_location, constants->point.scale_linear));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_q_att_location, constants->point.scale_quad));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_q_att_location, constants->point.scale_quad));
+     checkGLcall("glUniform1f");
+ }
+ 
+@@ -1932,10 +2194,10 @@
+             context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
+-    GL_EXTCALL(glUniform4fv(prog->ps.fog_color_location, 1, &constants->fog.colour.r));
+-    GL_EXTCALL(glUniform1f(prog->ps.fog_density_location, constants->fog.density));
+-    GL_EXTCALL(glUniform1f(prog->ps.fog_end_location, constants->fog.end));
+-    GL_EXTCALL(glUniform1f(prog->ps.fog_scale_location, constants->fog.scale));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.fog_color_location, 1, &constants->fog.colour.r));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->ps.fog_density_location, constants->fog.density));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->ps.fog_end_location, constants->fog.end));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->ps.fog_scale_location, constants->fog.scale));
+     checkGLcall("fog emulation uniforms");
+ }
+ 
+@@ -1985,12 +2247,44 @@
      if (prog->separable)
          mgs2_resolve_separable(gl_info);
  
@@ -325,7 +561,74 @@
      if (vshader && vshader->is_ffp_vs)
      {
          /* The shader's constant update mask is WINED3D_SHADER_CONST_VS_F.
-@@ -2172,7 +2456,33 @@
+@@ -2033,7 +2327,7 @@
+         if (gl_info->supported[WINED3D_GLSL_130])
+         {
+             for (i = 0; i < gl_info->limits.user_clip_distances; ++i)
+-                GL_EXTCALL(glUniform4fv(prog->vs.clip_planes_location + i, 1, &constants->clip_planes[i].x));
++                MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.clip_planes_location + i, 1, &constants->clip_planes[i].x));
+         }
+         else
+         {
+@@ -2050,17 +2344,17 @@
+                 max(state->viewport_count, 1) : 1;
+         shader_get_position_fixup(context, state, fixup_count, position_fixup);
+         if (state->shader[WINED3D_SHADER_TYPE_GEOMETRY])
+-            GL_EXTCALL(glUniform4fv(prog->gs.pos_fixup_location, fixup_count, position_fixup));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->gs.pos_fixup_location, fixup_count, position_fixup));
+         else if (state->shader[WINED3D_SHADER_TYPE_DOMAIN])
+-            GL_EXTCALL(glUniform4fv(prog->ds.pos_fixup_location, 1, position_fixup));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->ds.pos_fixup_location, 1, position_fixup));
+         else
+-            GL_EXTCALL(glUniform4fv(prog->vs.pos_fixup_location, 1, position_fixup));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.pos_fixup_location, 1, position_fixup));
+         checkGLcall("glUniform4fv");
+     }
+ 
+     if (update_mask & WINED3D_SHADER_CONST_BASE_VERTEX_ID)
+     {
+-        GL_EXTCALL(glUniform1i(prog->vs.base_vertex_id_location, state->base_vertex_index));
++        MGS2_UNIFORM_CALL(glUniform1i(prog->vs.base_vertex_id_location, state->base_vertex_index));
+         checkGLcall("base vertex id");
+     }
+ 
+@@ -2070,7 +2364,7 @@
+ 
+         constants = wined3d_buffer_load_sysmem(context->device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], context);
+ 
+-        GL_EXTCALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[0], 1,
++        MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[0], 1,
+                 FALSE, &constants->modelview.modelview_matrices[0]._11));
+         checkGLcall("glUniformMatrix4fv");
+ 
+@@ -2088,7 +2382,7 @@
+             if (prog->vs.modelview_matrix_location[i] == -1)
+                 break;
+ 
+-            GL_EXTCALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[i],
++            MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[i],
+                     1, FALSE, &constants->modelview.modelview_matrices[i]._11));
+             checkGLcall("glUniformMatrix4fv");
+         }
+@@ -2102,7 +2396,7 @@
+         constants = wined3d_buffer_load_sysmem(context->device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], context);
+ 
+         get_projection_matrix(context, constants, state, &projection);
+-        GL_EXTCALL(glUniformMatrix4fv(prog->vs.projection_matrix_location, 1, FALSE, &projection._11));
++        MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.projection_matrix_location, 1, FALSE, &projection._11));
+         checkGLcall("glUniformMatrix4fv");
+     }
+ 
+@@ -2154,7 +2448,7 @@
+             }
+         }
+ 
+-        GL_EXTCALL(glUniform3fv(prog->vs.light_ambient_location, 1, &constants->light.ambient.r));
++        MGS2_UNIFORM_CALL(glUniform3fv(prog->vs.light_ambient_location, 1, &constants->light.ambient.r));
+         checkGLcall("glUniform3fv");
+ 
+         for (i = 0; i < point_count; ++i)
+@@ -2172,7 +2466,35 @@
      }
  
      if (prog->separable)
@@ -354,12 +657,118 @@
 +        if (need_ps) ++mgs2_asp_stats.need_ps;
 +        else ++mgs2_asp_stats.avoided_ps;
 +
++        mgs2_asp_need_ps = need_ps;
 +        if (need_ps || !mgs2_asp_stats.lazy)
 +            mgs2_glActiveShaderProgram(prog->pipeline_id, prog->ps_program_id);
++        mgs2_asp_witness = 0;
 +    }
  
      if (pshader && pshader->is_ffp_ps)
      {
+@@ -2210,14 +2532,14 @@
+             if (prog->ps.bumpenv_mat_location[i] == -1)
+                 continue;
+ 
+-            GL_EXTCALL(glUniformMatrix2fv(prog->ps.bumpenv_mat_location[i], 1, GL_FALSE,
++            MGS2_UNIFORM_CALL(glUniformMatrix2fv(prog->ps.bumpenv_mat_location[i], 1, GL_FALSE,
+                     &constants->bumpenv.matrices[i]._00));
+ 
+             if (prog->ps.bumpenv_lum_scale_location[i] != -1)
+             {
+-                GL_EXTCALL(glUniform1fv(prog->ps.bumpenv_lum_scale_location[i], 1,
++                MGS2_UNIFORM_CALL(glUniform1fv(prog->ps.bumpenv_lum_scale_location[i], 1,
+                         &constants->bumpenv.lscale[i]));
+-                GL_EXTCALL(glUniform1fv(prog->ps.bumpenv_lum_offset_location[i], 1,
++                MGS2_UNIFORM_CALL(glUniform1fv(prog->ps.bumpenv_lum_offset_location[i], 1,
+                         &constants->bumpenv.loffset[i]));
+             }
+         }
+@@ -2230,7 +2552,7 @@
+         const struct wined3d_ffp_ps_constants *constants = wined3d_buffer_load_sysmem(
+                 context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+ 
+-        GL_EXTCALL(glUniform4fv(prog->ps.color_key_location, 2, &constants->color_key[0].r));
++        MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.color_key_location, 2, &constants->color_key[0].r));
+     }
+ 
+     if (update_mask & WINED3D_SHADER_CONST_FFP_PS)
+@@ -2241,16 +2563,16 @@
+                 context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+ 
+         if (prog->ps.tex_factor_location != -1)
+-            GL_EXTCALL(glUniform4fv(prog->ps.tex_factor_location, 1, &constants->texture_factor.r));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.tex_factor_location, 1, &constants->texture_factor.r));
+ 
+-        GL_EXTCALL(glUniform4fv(prog->ps.specular_enable_location, 1, &constants->specular_enable.r));
++        MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.specular_enable_location, 1, &constants->specular_enable.r));
+ 
+         for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
+         {
+             if (prog->ps.tss_constant_location[i] == -1)
+                 continue;
+ 
+-            GL_EXTCALL(glUniform4fv(prog->ps.tss_constant_location[i], 1, &constants->texture_constants[i].r));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.tss_constant_location[i], 1, &constants->texture_constants[i].r));
+         }
+ 
+         checkGLcall("fixed function uniforms");
+@@ -2264,7 +2586,7 @@
+         const struct wined3d_ffp_ps_constants *constants = wined3d_buffer_load_sysmem(
+                 context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+ 
+-        GL_EXTCALL(glUniform1f(prog->ps.alpha_test_ref_location, constants->alpha_test_ref));
++        MGS2_UNIFORM_CALL(glUniform1f(prog->ps.alpha_test_ref_location, constants->alpha_test_ref));
+         checkGLcall("alpha test emulation uniform");
+     }
+ 
+@@ -2278,6 +2600,12 @@
+     {
+         prog->constant_version = priv->next_constant_version++;
+     }
++    /* The PS block has finished. Same check as the VS side: an upload while
++     * need_ps said there would be none means the mirror is wrong, and the run
++     * is void. Without this the "MISSED = 0" line spoke for the VS side only. */
++    if (prog && prog->separable && mgs2_asp_witness && !mgs2_asp_need_ps)
++        ++mgs2_asp_stats.missed_ps;
++
+ }
+ 
+ static void update_heap_entry(struct constant_heap *heap, unsigned int idx, DWORD new_version)
+@@ -13816,11 +14144,11 @@
+ 
+     GL_EXTCALL(glUseProgram(program));
+     loc = GL_EXTCALL(glGetUniformLocation(program, "sampler"));
+-    GL_EXTCALL(glUniform1i(loc, 0));
++    MGS2_UNIFORM_CALL(glUniform1i(loc, 0));
+     if (complex_fixup == COMPLEX_FIXUP_P8)
+     {
+         loc = GL_EXTCALL(glGetUniformLocation(program, "sampler_palette"));
+-        GL_EXTCALL(glUniform1i(loc, 1));
++        MGS2_UNIFORM_CALL(glUniform1i(loc, 1));
+     }
+ 
+     return program;
+@@ -14116,7 +14444,7 @@
+         case COMPLEX_FIXUP_YUV:
+             src_level = src_sub_resource_idx % src_texture->level_count;
+             location = GL_EXTCALL(glGetUniformLocation(program->id, "size"));
+-            GL_EXTCALL(glUniform2f(location, wined3d_texture_get_level_width(src_texture, src_level),
++            MGS2_UNIFORM_CALL(glUniform2f(location, wined3d_texture_get_level_width(src_texture, src_level),
+                     wined3d_texture_get_level_height(src_texture, src_level)));
+             break;
+ 
+@@ -14129,9 +14457,9 @@
+ 
+         wined3d_format_get_float_color_key(src_texture->resource.format, colour_key, float_key);
+         location = GL_EXTCALL(glGetUniformLocation(program->id, "colour_key.low"));
+-        GL_EXTCALL(glUniform4fv(location, 1, &float_key[0].r));
++        MGS2_UNIFORM_CALL(glUniform4fv(location, 1, &float_key[0].r));
+         location = GL_EXTCALL(glGetUniformLocation(program->id, "colour_key.high"));
+-        GL_EXTCALL(glUniform4fv(location, 1, &float_key[1].r));
++        MGS2_UNIFORM_CALL(glUniform4fv(location, 1, &float_key[1].r));
+     }
+     wined3d_context_gl_draw_shaded_quad(context_gl, src_texture_gl, src_sub_resource_idx, src_rect, dst_rect, filter);
+     GL_EXTCALL(glUseProgram(0));
 --- a/dlls/wined3d/swapchain.c
 +++ b/dlls/wined3d/swapchain.c
 @@ -214,6 +214,12 @@

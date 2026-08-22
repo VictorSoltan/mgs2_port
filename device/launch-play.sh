@@ -200,7 +200,7 @@ trap cleanup EXIT INT TERM
 # captured leaving Wine's shared-session lock owned forever when concurrent
 # first users selected different native mutexes.  This changes no Wine lock
 # semantics and retains the measured native memmove path from FINALPLAY2.
-# FINALPLAY6 promoted the native ARM WineD3D island. FINALPLAY7 keeps that pair's
+# FINALPLAY6 promoted the native ARM WineD3D island. FINALPLAY8 keeps that pair's
 # WineD3D DLL and promotes island41 with one additional measured route. 32
 # WineD3D sources are compiled for armhf and linked into Box86; 18 entry points
 # are routed to them,
@@ -262,7 +262,7 @@ if [ -n "${MGS2_ISLAND_AB_MEASURE:-}" ]; then
          "MEASUREMENT run, half the frames deliberately run unrouted" >&2
 fi
 #
-# FINALPLAY7 is the measured production pair. Any diagnostic can explicitly
+# FINALPLAY8 is the measured production pair. Any diagnostic can explicitly
 # set this to 0, but normal play must not silently fall back to NO-ISLAND.
 export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-1}"
 # Entry 41 is the fused A+B+C draw-state root (p72c). It ships here because

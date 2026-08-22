@@ -8,9 +8,9 @@ hand-built command line.
 
 ```text
 box86      box86-island58-p75a-steady
-           9ad81a9d69b2f26acc8f89b1d7bfc8c1969731dce683ba209b7eaa5ef6686977
+           2d7547b2671e16810ed31a7306aaea6b01a7dbe129f206468cf7d841a19dee4b
 wined3d    wined3d_p75a_steady.dll
-           9d91e320b94fb0d497d3ed415966d214768abf088af7daf560524123f5118acf
+           382649257b754d88adb27af02a2b447a43a38adfea5b359ec55bbb874bfa9a0d
 presenter  winewayland_stall1.so   (unchanged)
 island     0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41
 ```
@@ -39,8 +39,15 @@ combat, same-process ABBA, 12-frame blocks
     p95/p99          -15.35 ms  (tails improve with the mean, not against it)
     sign test        14 of 14 cycles, p=0.0001
     negative control +0.000 ms, CI [-0.015, +0.018]
-    mirror check     MISSED = 0
+    mirror check     MISSED VS 0 / PS 0
 ```
+
+The mirror check was weaker than it read at first and was corrected before this
+record was written: the witness was raised in ONE helper and only the VS side was
+compared, so "MISSED = 0" spoke for a fraction of the uploads. It now covers all
+69 uniform-upload sites in glsl_shader.c and both stages, and reads VS 0 / PS 0.
+The -14.80 ms is unaffected -- the instrumentation was symmetric across arms, so
+the timing was never in question, only the strength of the correctness claim.
 
 Entry 41, the fused A+B+C draw-state root (p72c), ships with it. It was a
 candidate before today and is promoted here only because the validated session
@@ -55,6 +62,9 @@ STALL    a 144-minute session logged five frames over 500 ms: three at startup
          differs from production has NOT been measured -- it needs a paired soak
          counting stalls per hour, and until then the hitches are neither
          attributed to this patch nor cleared of it
+counters the shipped DLL still carries the ASP1 counters and the witness. They
+         are symmetric across the A/B arms, so the -14.80 ms stands, but stripping
+         them is a small free gain that has not been taken
 freezes  one hang was captured during the P75A A/B with cs_deadlock_census
          VERDICT B (queues empty, consumer correctly asleep, main thread waiting
          in ntsync) -- a different signature from the verdict-C hangs seen
