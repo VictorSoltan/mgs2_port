@@ -30,7 +30,10 @@ set -u
 G=/storage/roms/ports/MGS2-Substance
 OUT="${1:-/tmp/autoload}"
 CONFIRM="${2:-z}"
-LOG=/tmp/autoload-game.log
+# /tmp is tmpfs on a 1 GB device and does not survive a reboot; a run that is
+# going to be read afterwards must put its log on /storage.  MGS2_AUTOLOAD_LOG
+# overrides the default for exactly that case.
+LOG="${MGS2_AUTOLOAD_LOG:-/tmp/autoload-game.log}"
 export XDG_RUNTIME_DIR=/var/run/0-runtime-dir WAYLAND_DISPLAY=wayland-1
 
 mkdir -p "$OUT"

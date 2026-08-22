@@ -1,0 +1,813 @@
+--- /dev/fd/63	2026-08-22 10:27:29.968839341 +0300
++++ /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/winewayland.drv/opengl.c	2026-08-22 10:25:40.509364634 +0300
+@@ -74,6 +74,11 @@
+ #include <stdio.h>
+ #include <stdarg.h>
+ #include <time.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <stdint.h>
++#include <sys/ioctl.h>
++#include <unistd.h>
+ 
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+@@ -124,6 +129,96 @@
+ 
+ #define MGS_MAX_SHM_BUFFERS 4
+ #define MGS_MAX_PBOS 3
++#define MGS_AB_MAX 1024   /* frametime samples kept per A/B block */
++#define MGS_MAX_DMABUF 4
++
++#define MGS_FOURCC(a,b,c,d) ((unsigned int)(a) | ((unsigned int)(b) << 8) | \
++                             ((unsigned int)(c) << 16) | ((unsigned int)(d) << 24))
++#define MGS_DRM_FORMAT_XRGB8888 MGS_FOURCC('X','R','2','4')
++
++#ifndef EGL_LINUX_DMA_BUF_EXT
++#define EGL_LINUX_DMA_BUF_EXT           0x3270
++#define EGL_LINUX_DRM_FOURCC_EXT        0x3271
++#define EGL_DMA_BUF_PLANE0_FD_EXT       0x3272
++#define EGL_DMA_BUF_PLANE0_OFFSET_EXT   0x3273
++#define EGL_DMA_BUF_PLANE0_PITCH_EXT    0x3274
++#endif
++#ifndef GL_READ_FRAMEBUFFER
++#define GL_READ_FRAMEBUFFER             0x8CA8
++#define GL_DRAW_FRAMEBUFFER             0x8CA9
++#define GL_READ_FRAMEBUFFER_BINDING     0x8CAA
++#define GL_DRAW_FRAMEBUFFER_BINDING     0x8CA6
++#endif
++#ifndef GL_NEAREST
++#define GL_NEAREST                      0x2600
++#endif
++
++/* linux/dma-heap.h, inlined: no kernel headers in this build, and the layout is
++ * identical for 32- and 64-bit userspace. */
++struct mgs_dma_heap_alloc
++{
++    UINT64 len;
++    UINT32 fd;
++    UINT32 fd_flags;
++    UINT64 heap_flags;
++};
++#define MGS_DMA_HEAP_IOCTL_ALLOC _IOWR('H', 0x0, struct mgs_dma_heap_alloc)
++
++/*
++ * zwp_linux_dmabuf_v1 and zwp_linux_buffer_params_v1, hand-rolled.
++ *
++ * winewayland.drv generates its protocol code with wayland-scanner at build
++ * time from the XML files sitting next to this one, and linux-dmabuf is not one
++ * of them. Rather than add a protocol file and a build rule for two interfaces
++ * with six requests between them, the tables are written out here in exactly the
++ * shape the scanner emits. They were validated against the live compositor by
++ * harness/dmabuf/scm_rights_probe.c before any of this was written.
++ */
++static const struct wl_interface mgs_zwp_linux_buffer_params_v1_interface;
++static const struct wl_interface mgs_zwp_linux_dmabuf_v1_interface;
++
++static const struct wl_interface *mgs_dmabuf_types[] = {
++    NULL, NULL, NULL,
++    &mgs_zwp_linux_buffer_params_v1_interface,   /* create_params -> params */
++    &wl_buffer_interface,                        /* create_immed  -> buffer */
++};
++
++static const struct wl_message mgs_dmabuf_requests[] = {
++    { "destroy",       "",  mgs_dmabuf_types + 0 },
++    { "create_params", "n", mgs_dmabuf_types + 3 },
++};
++static const struct wl_message mgs_dmabuf_events[] = {
++    { "format",   "u",    mgs_dmabuf_types + 0 },
++    { "modifier", "3uuu", mgs_dmabuf_types + 0 },
++};
++static const struct wl_interface mgs_zwp_linux_dmabuf_v1_interface = {
++    "zwp_linux_dmabuf_v1", 3, 2, mgs_dmabuf_requests, 2, mgs_dmabuf_events,
++};
++
++static const struct wl_message mgs_params_requests[] = {
++    { "destroy",      "",       mgs_dmabuf_types + 0 },
++    { "add",          "huuuuu", mgs_dmabuf_types + 0 },
++    { "create",       "iiuu",   mgs_dmabuf_types + 0 },
++    { "create_immed", "2niiuu", mgs_dmabuf_types + 4 },
++};
++static const struct wl_message mgs_params_events[] = {
++    { "created", "n", mgs_dmabuf_types + 4 },
++    { "failed",  "",  mgs_dmabuf_types + 0 },
++};
++static const struct wl_interface mgs_zwp_linux_buffer_params_v1_interface = {
++    "zwp_linux_buffer_params_v1", 3, 4, mgs_params_requests, 2, mgs_params_events,
++};
++
++/* One presentable GPU buffer: kernel memory, the blob's view of it, and the
++ * compositor's view of it, all describing the same pages. */
++struct mgs_dmabuf_buffer
++{
++    int fd;
++    void *image;                  /* EGLImageKHR */
++    unsigned int tex, fbo;
++    struct wl_buffer *wl_buffer;
++    BOOL busy;                    /* compositor still holds it */
++};
+ 
+ struct mgs_config
+ {
+@@ -138,6 +233,25 @@
+     int shm_buffers;    /* MGS2_GL_SHM_BUFFERS */
+     int pbos;           /* MGS2_GL_PBOS     */
+     int stats;          /* MGS2_GL_STATS    : log timings every N frames, 0 = off */
++    /* MGS2_PRESENT_AB: in-process ABBA gate on the async presenter.  Block
++     * length in displayed frames; 0 = off.  Arms follow block%4 -> A B B A, so
++     * a cycle of four blocks cancels linear scene/thermal drift.  See
++     * mgs_ab_tick(). */
++    int present_ab;
++    int ab_settle;      /* MGS2_PRESENT_AB_SETTLE: frames discarded after each flip */
++    /* MGS2_PRESENT_STAGES: every N frames, report where the frame actually
++     * went, split by which multiple of the compositor period it landed on.
++     * Answers one question and only one: what makes delivered frames quantise
++     * to 16.667 ms when the presenter provably never waits for a buffer
++     * (measured acquire is 0.002-0.003 ms/f). */
++    int stages;
++    /* MGS2_GL_DMABUF: present a GPU buffer by FD instead of reading the frame
++     * back to the CPU.  See the block comment above mgs_dmabuf_present(). */
++    BOOL dmabuf;
++    int dmabuf_bufs;
++    unsigned int dmabuf_fourcc;
++    const char *dmabuf_heap;
++    BOOL dmabuf_flip;   /* MGS2_GL_DMABUF_FLIP: invert Y in the blit (default on) */
+ };
+ 
+ static struct mgs_config mgs_cfg;
+@@ -202,12 +316,58 @@
+      * Kept switchable for the day the render target changes. */
+     mgs_cfg.invalidate_ds = mgs_env_int("MGS2_GL_INVALIDATE_DS", 0, 0, 1) != 0;
+     mgs_cfg.async       = mgs_env_int("MGS2_GL_ASYNC", 0, 0, 1) != 0;
++    /* MGS2_PRESENT_AB=<frames>: flip MGS2_GL_ASYNC every <frames> displayed
++     * frames inside one process, ABBA, and print one machine-readable line per
++     * block.  Block 0 is always the synchronous arm, whatever MGS2_GL_ASYNC
++     * said, so the sequence is deterministic and the reader can trust the
++     * label.  Diagnostic build switch, never a shipping default. */
++    mgs_cfg.present_ab  = mgs_env_int("MGS2_PRESENT_AB", 0, 0, MGS_AB_MAX);
++    mgs_cfg.ab_settle   = mgs_env_int("MGS2_PRESENT_AB_SETTLE", 2, 0, 64);
++    mgs_cfg.stages      = mgs_env_int("MGS2_PRESENT_STAGES", 0, 0, 100000);
++    mgs_cfg.dmabuf      = mgs_env_int("MGS2_GL_DMABUF", 0, 0, 1) != 0;
++    mgs_cfg.dmabuf_bufs = mgs_env_int("MGS2_GL_DMABUF_BUFFERS", 3, 2, MGS_MAX_DMABUF);
++    /* Both the heap and the fourcc are switchable without a rebuild because
++     * neither can be settled by reading documentation: the heap decides whether
++     * the compositor can scan the buffer out directly, and the fourcc decides
++     * whether the blit lands with the channels in the right order. */
++    mgs_cfg.dmabuf_flip = mgs_env_int("MGS2_GL_DMABUF_FLIP", 1, 0, 1) != 0;
++    mgs_cfg.dmabuf_heap = getenv("MGS2_GL_DMABUF_HEAP");
++    if (!mgs_cfg.dmabuf_heap || !*mgs_cfg.dmabuf_heap)
++        mgs_cfg.dmabuf_heap = "linux,cma";
++    {
++        const char *cc = getenv("MGS2_GL_DMABUF_FOURCC");
++        if (cc && strlen(cc) == 4)
++            mgs_cfg.dmabuf_fourcc = MGS_FOURCC(cc[0], cc[1], cc[2], cc[3]);
++        else
++            mgs_cfg.dmabuf_fourcc = MGS_DRM_FORMAT_XRGB8888;
++    }
++    if (mgs_cfg.present_ab)
++    {
++        if (mgs_cfg.use_pbo)
++        {
++            /* The PBO path takes the first branch in wayland_drawable_swap and
++             * never consults mgs_cfg.async, so both arms would be identical and
++             * the run would produce a structural zero -- the exact false
++             * negative island_ab_read.py refuses.  Refuse it here instead. */
++            ERR("MGS2 PRESENT A/B: MGS2_GL_PBO=1 makes both arms the same path; "
++                "refusing to run the gate.  Set MGS2_GL_PBO=0.\n");
++            mgs_cfg.present_ab = 0;
++        }
++        else
++        {
++            mgs_cfg.async = FALSE;
++            if (mgs_cfg.ab_settle * 2u >= (unsigned int)mgs_cfg.present_ab)
++                mgs_cfg.ab_settle = 0;
++        }
++    }
+     mgs_cfg.witness     = mgs_env_int("MGS2_FRAME_WITNESS", 0, 0, 1) != 0;
+     mgs2_p67_frame_witness.enabled = mgs_cfg.witness;
+     mgs_cfg.loaded = TRUE;
+-    ERR("MGS2 present config: pbo=%d pbos=%d flip=%d bgra=%d shm_buffers=%d stats=%d\n",
++    ERR("MGS2 present config: pbo=%d pbos=%d flip=%d bgra=%d shm_buffers=%d stats=%d "
++        "dmabuf=%d(%s,%d bufs)\n",
+         mgs_cfg.use_pbo, mgs_cfg.pbos, mgs_cfg.flip, mgs_cfg.bgra,
+-        mgs_cfg.shm_buffers, mgs_cfg.stats);
++        mgs_cfg.shm_buffers, mgs_cfg.stats, mgs_cfg.dmabuf,
++        mgs_cfg.dmabuf_heap, mgs_cfg.dmabuf_bufs);
+ }
+ 
+ static double mgs_now_ms(void)
+@@ -253,12 +413,42 @@
+     /* Frame-time distribution. A mean over 300 frames hides a 300 ms hitch
+      * completely, and hitches are what the game is actually judged on. */
+     double t_prev_swap;
++    double t_prev_swap_ab;
+     double frame_max;
+     double t_acquire;      /* time spent waiting for a free compositor buffer */
+     double acquire_max;
+     unsigned int slow_50, slow_100, slow_200, slow_500;
++
++    /* MGS2_PRESENT_AB block accumulators.  Kept apart from the MGS2_GL_STATS
++     * ones above so both can run in the same process: the stats window is the
++     * independent frame counter the A/B ticks are checked against. */
++    unsigned int ab_block;      /* blocks completed so far */
++    unsigned int ab_seen;       /* frames since this block began, settle included */
++    unsigned int ab_frames;     /* frames actually accumulated */
++    double ab_t0;               /* block start, first accumulated frame */
++    double ab_readback, ab_copy, ab_finish, ab_gpucopy, ab_acquire;
++    double ab_ft[MGS_AB_MAX];
++    unsigned int ab_ft_n;
++    unsigned int ab_slow[4];
++    unsigned int ab_drop;       /* frames the presenter skipped: no shm buffer, ring unprimed */
++
++    /* MGS2_GL_DMABUF */
++    struct wl_proxy *dmabuf_global;
++    struct mgs_dmabuf_buffer dmabuf[MGS_MAX_DMABUF];
++    int dmabuf_count;
++    int dmabuf_width, dmabuf_height;
++    BOOL dmabuf_failed;         /* tried and could not; fall back for good */
++
++    /* MGS2_PRESENT_STAGES.  Bucket k holds the frames whose interval was
++     * closest to k periods; bucket 0 is everything past the last bucket. */
++    double st_exit;             /* when the presenter last returned */
++    unsigned int st_frames;
++    double st_out[5], st_swap[5], st_read[5], st_commit[5], st_total[5];
++    unsigned int st_n[5];
+ };
+ 
++static void mgs_dmabuf_teardown(struct wayland_gl_drawable *gl);
++
+ static struct wayland_gl_drawable *impl_from_opengl_drawable(struct opengl_drawable *base)
+ {
+     return CONTAINING_RECORD(base, struct wayland_gl_drawable, base);
+@@ -311,6 +501,7 @@
+     int i;
+ 
+     mgs_release_pbos(gl);
++    mgs_dmabuf_teardown(gl);
+ 
+     if (gl->async_tex[0] || gl->async_fbo)
+     {
+@@ -625,6 +816,254 @@
+     wl_display_flush(process_wayland.wl_display);
+ }
+ 
++/*
++ * MGS2_GL_DMABUF: stop moving the frame through the CPU at all.
++ *
++ * The shm presenter reads the finished frame back with glReadPixels into a
++ * wl_shm buffer. Measured on this device (docs/briefs/MGS2_PRESENT_GATE_2026-08-22.md)
++ * that costs 0.9 ms of actual copying and 3-7 ms of the CPU standing still
++ * waiting for the GPU, and an in-process ABBA showed the wait is on the critical
++ * path: removing it shortens the frame by 9.8 ms in a heavy scene.
++ *
++ * Here the frame is blitted GPU-to-GPU into a buffer the compositor can read
++ * directly, and only a file descriptor is handed over. Nothing waits, nothing is
++ * copied through the CPU, and unlike MGS2_GL_ASYNC there is no frame of latency,
++ * because the buffer being presented is this frame and not the previous one.
++ *
++ * The allocator is a kernel dma-heap rather than GBM, which was the obvious
++ * choice and is the wrong one on this box: there is no render node (only card0,
++ * driver rockchip-drm, and sway holds DRM master), the armhf libgbm is a 12 KB
++ * shim over libmali-hook, and Box86 exports no gbm_* wrappers at all. A dma-heap
++ * is open/ioctl/mmap -- syscalls the emulator passes straight through -- so this
++ * path adds no new emulator surface. linux,cma is the default because it is
++ * physically contiguous, which is what the display controller wants if the
++ * buffer is ever to be scanned out directly.
++ *
++ * Everything here was proved on the device before it was written:
++ * harness/dmabuf/dmabuf_import_probe.c (heap -> EGLImage -> complete FBO ->
++ * renders) and harness/dmabuf/scm_rights_probe.c (the FD survives SCM_RIGHTS
++ * through the emulated x86 libwayland-client and sway returns a wl_buffer).
++ */
++static void *(*p_mgs_eglCreateImageKHR)(void *, void *, unsigned int, void *, const int *);
++static unsigned int (*p_mgs_eglDestroyImageKHR)(void *, void *);
++static void (*p_mgs_glEGLImageTargetTexture2DOES)(unsigned int, void *);
++
++static int mgs_dma_heap_alloc(const char *heap, size_t len)
++{
++    struct mgs_dma_heap_alloc req;
++    char path[128];
++    int hfd, r;
++
++    snprintf(path, sizeof(path), "/dev/dma_heap/%s", heap);
++    if ((hfd = open(path, O_RDWR | O_CLOEXEC)) < 0)
++    {
++        ERR("MGS2 dmabuf: cannot open %s: %s\n", path, strerror(errno));
++        return -1;
++    }
++    memset(&req, 0, sizeof(req));
++    req.len = len;
++    req.fd_flags = O_RDWR | O_CLOEXEC;
++    r = ioctl(hfd, MGS_DMA_HEAP_IOCTL_ALLOC, &req);
++    close(hfd);
++    if (r < 0)
++    {
++        ERR("MGS2 dmabuf: ALLOC on %s failed: %s\n", heap, strerror(errno));
++        return -1;
++    }
++    return (int)req.fd;
++}
++
++static void mgs_dmabuf_release(void *data, struct wl_buffer *buffer)
++{
++    struct mgs_dmabuf_buffer *b = data;
++    (void)buffer;
++    b->busy = FALSE;
++}
++static const struct wl_buffer_listener mgs_dmabuf_buffer_listener = { mgs_dmabuf_release };
++
++static void mgs_dmabuf_global(void *data, struct wl_registry *reg, uint32_t name,
++                              const char *iface, uint32_t version)
++{
++    struct wayland_gl_drawable *gl = data;
++
++    if (strcmp(iface, "zwp_linux_dmabuf_v1")) return;
++    /* Bind at 3: version 3 is the highest this hand-written table describes, and
++     * binding above what the table covers is how a client earns a protocol
++     * error the first time the compositor sends an event it did not expect. */
++    gl->dmabuf_global = wl_registry_bind(reg, name, &mgs_zwp_linux_dmabuf_v1_interface,
++                                         version < 3 ? version : 3);
++    TRACE("MGS2 dmabuf: bound zwp_linux_dmabuf_v1 (compositor offers v%u)\n", version);
++}
++static void mgs_dmabuf_global_remove(void *d, struct wl_registry *r, uint32_t n)
++{ (void)d; (void)r; (void)n; }
++static const struct wl_registry_listener mgs_dmabuf_registry_listener =
++{ mgs_dmabuf_global, mgs_dmabuf_global_remove };
++
++static void mgs_dmabuf_teardown(struct wayland_gl_drawable *gl)
++{
++    BOOL have_ctx = funcs->p_eglGetCurrentContext() != EGL_NO_CONTEXT;
++    int i;
++
++    for (i = 0; i < gl->dmabuf_count; i++)
++    {
++        struct mgs_dmabuf_buffer *b = &gl->dmabuf[i];
++
++        if (b->wl_buffer) wl_buffer_destroy(b->wl_buffer);
++        if (b->image && p_mgs_eglDestroyImageKHR)
++            p_mgs_eglDestroyImageKHR(egl->display, b->image);
++        if (have_ctx)
++        {
++            if (b->fbo) funcs->p_glDeleteFramebuffers(1, &b->fbo);
++            if (b->tex) funcs->p_glDeleteTextures(1, &b->tex);
++        }
++        if (b->fd >= 0) close(b->fd);
++        memset(b, 0, sizeof(*b));
++        b->fd = -1;
++    }
++    gl->dmabuf_count = 0;
++}
++
++/* Build the ring. Any failure is permanent for this drawable: it sets
++ * dmabuf_failed and the caller drops back to the shm path for good, because a
++ * presenter that retries an allocation every frame is worse than one that never
++ * had it. */
++static BOOL mgs_dmabuf_ensure(struct wayland_gl_drawable *gl)
++{
++    struct wl_registry *reg;
++    int i;
++
++    if (gl->dmabuf_failed) return FALSE;
++    if (gl->dmabuf_count && gl->dmabuf_width == gl->width
++        && gl->dmabuf_height == gl->height)
++        return TRUE;
++
++    mgs_dmabuf_teardown(gl);
++
++    if (!p_mgs_eglCreateImageKHR)
++    {
++        p_mgs_eglCreateImageKHR = (void *)funcs->p_eglGetProcAddress("eglCreateImageKHR");
++        p_mgs_eglDestroyImageKHR = (void *)funcs->p_eglGetProcAddress("eglDestroyImageKHR");
++        p_mgs_glEGLImageTargetTexture2DOES =
++            (void *)funcs->p_eglGetProcAddress("glEGLImageTargetTexture2DOES");
++    }
++    if (!p_mgs_eglCreateImageKHR || !p_mgs_glEGLImageTargetTexture2DOES)
++    {
++        ERR("MGS2 dmabuf: EGLImage entry points missing, staying on shm\n");
++        gl->dmabuf_failed = TRUE;
++        return FALSE;
++    }
++
++    if (!gl->dmabuf_global)
++    {
++        reg = wl_display_get_registry(process_wayland.wl_display);
++        if (!reg) { gl->dmabuf_failed = TRUE; return FALSE; }
++        wl_proxy_set_queue((struct wl_proxy *)reg, gl->wl_event_queue);
++        wl_registry_add_listener(reg, &mgs_dmabuf_registry_listener, gl);
++        wl_display_roundtrip_queue(process_wayland.wl_display, gl->wl_event_queue);
++        wl_registry_destroy(reg);
++        if (!gl->dmabuf_global)
++        {
++            ERR("MGS2 dmabuf: compositor has no zwp_linux_dmabuf_v1, staying on shm\n");
++            gl->dmabuf_failed = TRUE;
++            return FALSE;
++        }
++    }
++
++    for (i = 0; i < mgs_cfg.dmabuf_bufs; i++)
++    {
++        struct mgs_dmabuf_buffer *b = &gl->dmabuf[i];
++        const int stride = gl->width * 4;
++        struct wl_proxy *params;
++        int attrs[13], n = 0;
++        unsigned int status;
++
++        b->fd = mgs_dma_heap_alloc(mgs_cfg.dmabuf_heap, (size_t)stride * gl->height);
++        if (b->fd < 0) goto fail;
++
++        attrs[n++] = EGL_WIDTH;                     attrs[n++] = gl->width;
++        attrs[n++] = EGL_HEIGHT;                    attrs[n++] = gl->height;
++        attrs[n++] = EGL_LINUX_DRM_FOURCC_EXT;      attrs[n++] = (int)mgs_cfg.dmabuf_fourcc;
++        attrs[n++] = EGL_DMA_BUF_PLANE0_FD_EXT;     attrs[n++] = b->fd;
++        attrs[n++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT; attrs[n++] = 0;
++        attrs[n++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;  attrs[n++] = stride;
++        attrs[n++] = EGL_NONE;
++
++        b->image = p_mgs_eglCreateImageKHR(egl->display, EGL_NO_CONTEXT,
++                                           EGL_LINUX_DMA_BUF_EXT, NULL, attrs);
++        if (!b->image)
++        {
++            ERR("MGS2 dmabuf: eglCreateImageKHR failed (egl error %#x, fourcc %#x)\n",
++                funcs->p_eglGetError(), mgs_cfg.dmabuf_fourcc);
++            goto fail;
++        }
++
++        funcs->p_glGenTextures(1, &b->tex);
++        funcs->p_glBindTexture(GL_TEXTURE_2D, b->tex);
++        funcs->p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++        funcs->p_glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++        p_mgs_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, b->image);
++
++        funcs->p_glGenFramebuffers(1, &b->fbo);
++        funcs->p_glBindFramebuffer(GL_FRAMEBUFFER, b->fbo);
++        funcs->p_glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
++                                        GL_TEXTURE_2D, b->tex, 0);
++        status = funcs->p_glCheckFramebufferStatus(GL_FRAMEBUFFER);
++        funcs->p_glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        if (status != GL_FRAMEBUFFER_COMPLETE)
++        {
++            ERR("MGS2 dmabuf: FBO incomplete (%#x) for fourcc %#x\n",
++                status, mgs_cfg.dmabuf_fourcc);
++            goto fail;
++        }
++
++        params = wl_proxy_marshal_flags(gl->dmabuf_global, 1,
++                                        &mgs_zwp_linux_buffer_params_v1_interface,
++                                        wl_proxy_get_version(gl->dmabuf_global), 0, NULL);
++        if (!params) goto fail;
++        wl_proxy_set_queue(params, gl->wl_event_queue);
++        /* 'h' marshals as sendmsg with SCM_RIGHTS; libwayland dups the fd, so
++         * ours stays ours to close at teardown. Modifier is linear (0,0). */
++        wl_proxy_marshal_flags(params, 1, NULL, wl_proxy_get_version(params), 0,
++                               b->fd, 0u, 0u, (uint32_t)stride, 0u, 0u);
++        b->wl_buffer = (struct wl_buffer *)wl_proxy_marshal_flags(
++            params, 3, &wl_buffer_interface, wl_proxy_get_version(params), 0,
++            NULL, gl->width, gl->height, mgs_cfg.dmabuf_fourcc, 0u);
++        wl_proxy_marshal_flags(params, 0, NULL, wl_proxy_get_version(params),
++                               WL_MARSHAL_FLAG_DESTROY);
++        if (!b->wl_buffer) goto fail;
++        wl_proxy_set_queue((struct wl_proxy *)b->wl_buffer, gl->wl_event_queue);
++        wl_buffer_add_listener(b->wl_buffer, &mgs_dmabuf_buffer_listener, b);
++
++        gl->dmabuf_count++;
++    }
++
++    gl->dmabuf_width = gl->width;
++    gl->dmabuf_height = gl->height;
++    ERR("MGS2 dmabuf: %d buffers of %dx%d from %s, fourcc %#x -- CPU readback is off\n",
++        gl->dmabuf_count, gl->width, gl->height, mgs_cfg.dmabuf_heap,
++        mgs_cfg.dmabuf_fourcc);
++    return TRUE;
++
++fail:
++    mgs_dmabuf_teardown(gl);
++    gl->dmabuf_failed = TRUE;
++    ERR("MGS2 dmabuf: setup failed, falling back to the shm presenter\n");
++    return FALSE;
++}
++
++static struct mgs_dmabuf_buffer *mgs_dmabuf_acquire(struct wayland_gl_drawable *gl)
++{
++    int i;
++
++    for (i = 0; i < gl->dmabuf_count; i++)
++        if (!gl->dmabuf[i].busy) return &gl->dmabuf[i];
++
++    wl_display_dispatch_queue_pending(process_wayland.wl_display, gl->wl_event_queue);
++    for (i = 0; i < gl->dmabuf_count; i++)
++        if (!gl->dmabuf[i].busy) return &gl->dmabuf[i];
++    return NULL;
++}
++
+ static BOOL mgs_ensure_pbos(struct wayland_gl_drawable *gl)
+ {
+     const size_t size = (size_t)gl->width * gl->height * 4;
+@@ -666,6 +1105,178 @@
+     return TRUE;
+ }
+ 
++static int mgs_cmp_double(const void *a, const void *b)
++{
++    double x = *(const double *)a, y = *(const double *)b;
++    return (x > y) - (x < y);
++}
++
++/* Percentile by nearest rank on an already sorted array. */
++static double mgs_pct(const double *sorted, unsigned int n, double q)
++{
++    unsigned int i;
++    if (!n) return 0.0;
++    i = (unsigned int)(q * n);
++    if (i >= n) i = n - 1;
++    return sorted[i];
++}
++
++/*
++ * One line per A/B block.  Everything the reader needs is on it, including the
++ * counts it uses as controls, because a block whose numbers have to be joined
++ * across two lines is a block that gets mis-paired when the log is trimmed.
++ *
++ * `wait` is the arm's own GPU-wait figure and it is the manipulation check: on
++ * the sync arm it is gpu_finish (only meaningful with MGS2_GL_READ_SPLIT=1), on
++ * the async arm it is the readPixels of the frame the GPU finished a frame ago.
++ * If the async arm does not show that number collapsing, the run measured
++ * nothing and no fps difference from it may be quoted.
++ */
++static void mgs_report_ab(struct wayland_gl_drawable *gl, double now)
++{
++    static double sorted[MGS_AB_MAX];
++    double span = now - gl->ab_t0;
++    unsigned int n = gl->ab_frames, k = gl->ab_ft_n;
++    double inv;
++
++    if (!n || span <= 0.0)
++    {
++        ERR("MGS2 PRESENT A/B block=%u arm=%s VOID frames=%u span=%.1f drop=%u\n",
++            gl->ab_block, mgs_cfg.async ? "async" : "sync", n, span, gl->ab_drop);
++        return;
++    }
++    inv = 1.0 / n;
++    if (k > MGS_AB_MAX) k = MGS_AB_MAX;
++    memcpy(sorted, gl->ab_ft, k * sizeof(double));
++    qsort(sorted, k, sizeof(double), mgs_cmp_double);
++
++    ERR("MGS2 PRESENT A/B block=%u arm=%s frames=%u span=%.1f fps=%.3f "
++        "ft_mean=%.2f p50=%.2f p95=%.2f p99=%.2f ftmax=%.2f "
++        "readback=%.3f wait=%.3f pixel=%.3f gpucopy=%.3f copy=%.3f acquire=%.3f "
++        "slow=%u/%u/%u/%u drop=%u tick=%.0f\n",
++        gl->ab_block, mgs_cfg.async ? "async" : "sync", n, span, n * 1000.0 / span,
++        span / n, mgs_pct(sorted, k, 0.50), mgs_pct(sorted, k, 0.95),
++        mgs_pct(sorted, k, 0.99), k ? sorted[k - 1] : 0.0,
++        gl->ab_readback * inv,
++        (mgs_cfg.async ? gl->ab_readback - gl->ab_gpucopy : gl->ab_finish) * inv,
++        (gl->ab_readback - (mgs_cfg.async ? gl->ab_gpucopy : gl->ab_finish)) * inv,
++        gl->ab_gpucopy * inv, gl->ab_copy * inv, gl->ab_acquire * inv,
++        gl->ab_slow[0], gl->ab_slow[1], gl->ab_slow[2], gl->ab_slow[3],
++        gl->ab_drop, now);
++}
++
++/*
++ * Close the block if it is full, print it, flip the arm and start the next one.
++ * Called once per displayed frame from the timing tail of wayland_drawable_swap.
++ *
++ * Arm order is block%4 -> A B B A.  The first `ab_settle` frames after a flip
++ * are counted but not accumulated: switching arms leaves the async texture ring
++ * unprimed once and drops one presented frame, and neither belongs in either
++ * arm's mean.
++ */
++static void mgs_ab_tick(struct wayland_gl_drawable *gl, double now,
++                        double readback, double copy, double finish,
++                        double gpucopy, double acquire, double interval)
++{
++    static const BOOL arm_async[4] = { FALSE, TRUE, TRUE, FALSE };
++
++    if (readback < 0.0)
++    {
++        gl->ab_drop++;
++        gl->ab_seen++;
++        if (gl->ab_seen < (unsigned int)mgs_cfg.present_ab) return;
++    }
++    else if (gl->ab_seen >= (unsigned int)mgs_cfg.ab_settle)
++    {
++        if (!gl->ab_frames) gl->ab_t0 = now - (interval > 0.0 ? interval : 0.0);
++        gl->ab_frames++;
++        gl->ab_readback += readback;
++        gl->ab_copy     += copy;
++        gl->ab_finish   += finish;
++        gl->ab_gpucopy  += gpucopy;
++        gl->ab_acquire  += acquire;
++        if (interval > 0.0)
++        {
++            if (gl->ab_ft_n < MGS_AB_MAX) gl->ab_ft[gl->ab_ft_n++] = interval;
++            if (interval > 500.0)      gl->ab_slow[3]++;
++            else if (interval > 200.0) gl->ab_slow[2]++;
++            else if (interval > 100.0) gl->ab_slow[1]++;
++            else if (interval > 50.0)  gl->ab_slow[0]++;
++        }
++        gl->ab_seen++;
++        if (gl->ab_seen < (unsigned int)mgs_cfg.present_ab) return;
++    }
++    else
++    {
++        gl->ab_seen++;
++        if (gl->ab_seen < (unsigned int)mgs_cfg.present_ab) return;
++    }
++
++    mgs_report_ab(gl, now);
++    gl->ab_block++;
++    gl->ab_seen = gl->ab_frames = gl->ab_ft_n = 0;
++    gl->ab_readback = gl->ab_copy = gl->ab_finish = 0.0;
++    gl->ab_gpucopy = gl->ab_acquire = 0.0;
++    gl->ab_slow[0] = gl->ab_slow[1] = gl->ab_slow[2] = gl->ab_slow[3] = 0;
++    gl->ab_drop = 0;
++    mgs_cfg.async = arm_async[gl->ab_block & 3];
++}
++
++/*
++ * Where does a delivered frame's time actually sit, and does the part that
++ * quantises sit inside this function or outside it?
++ *
++ *   outside  from the presenter returning to the game calling it again --
++ *            the game, d3d8, wined3d and the CS thread
++ *   swap     eglSwapBuffers on the pbuffer
++ *   read     glFinish (when split) plus glReadPixels
++ *   commit   attach, damage, commit, flush
++ *
++ * Split by the multiple of the compositor period the frame landed on. If the
++ * step from k=1 to k=2 shows up in `outside`, the limiter is the game and no
++ * presenter change can move it. If it shows up in `swap`, it is EGL or the
++ * display pipeline, and dmabuf inherits it.
++ */
++static void mgs_stage_tick(struct wayland_gl_drawable *gl, double t_enter,
++                           double t_swapped, double t0, double t1, double now)
++{
++    double period = 1000.0 / 60.0;
++    double interval = gl->st_exit > 0.0 ? now - gl->st_exit : 0.0;
++    unsigned int k;
++
++    if (gl->st_exit > 0.0 && t_enter > 0.0)
++    {
++        double total = now - gl->st_exit;
++        k = (unsigned int)((total / period) + 0.5);
++        if (k < 1 || k > 4) k = 0;
++        gl->st_out[k]    += t_enter - gl->st_exit;
++        gl->st_swap[k]   += t_swapped - t_enter;
++        gl->st_read[k]   += (t1 > 0.0 ? t1 - t0 : 0.0);
++        gl->st_commit[k] += now - (t1 > 0.0 ? t1 : t0);
++        gl->st_total[k]  += total;
++        gl->st_n[k]++;
++        gl->st_frames++;
++    }
++    gl->st_exit = now;
++    (void)interval;
++
++    if (gl->st_frames < (unsigned int)mgs_cfg.stages) return;
++
++    for (k = 0; k < 5; k++)
++    {
++        double n = gl->st_n[k];
++        if (!n) continue;
++        ERR("MGS2 present stages: k=%u n=%u total=%.2f | outside=%.2f swap=%.2f "
++            "read=%.2f commit=%.2f\n",
++            k, gl->st_n[k], gl->st_total[k] / n, gl->st_out[k] / n,
++            gl->st_swap[k] / n, gl->st_read[k] / n, gl->st_commit[k] / n);
++        gl->st_out[k] = gl->st_swap[k] = gl->st_read[k] = 0.0;
++        gl->st_commit[k] = gl->st_total[k] = 0.0;
++        gl->st_n[k] = 0;
++    }
++    gl->st_frames = 0;
++}
++
+ static void mgs_report_stats(struct wayland_gl_drawable *gl, double now)
+ {
+     double span = now - gl->t_first;
+@@ -764,10 +1375,14 @@
+     const unsigned int read_format = mgs_cfg.bgra ? GL_BGRA_EXT : GL_RGBA;
+     struct wayland_shm_buffer *buf;
+     double t0 = 0.0, t1 = 0.0, t2 = 0.0, t_drained = 0.0;
++    double t_gpucopy = 0.0, t_acq = 0.0;
++    double t_enter = 0.0, t_swapped = 0.0;
+     BOOL timing = mgs_cfg.stats > 0;
+     GLint saved_pack_pbo = 0, saved_pack_alignment = 4, saved_pack_row_length = 0;
+     GLint saved_pack_skip_rows = 0, saved_pack_skip_pixels = 0;
+ 
++    if (mgs_cfg.stages) t_enter = mgs_now_ms();
++
+     funcs->p_glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &saved_pack_pbo);
+     funcs->p_glGetIntegerv(GL_PACK_ALIGNMENT, &saved_pack_alignment);
+     funcs->p_glGetIntegerv(GL_PACK_ROW_LENGTH, &saved_pack_row_length);
+@@ -781,6 +1396,7 @@
+ 
+     client_surface_present(base->client);
+     funcs->p_eglSwapBuffers(egl->display, gl->base.surface);
++    if (mgs_cfg.stages) t_swapped = mgs_now_ms();
+ 
+     if (gl->width <= 0 || gl->height <= 0) goto done;
+ 
+@@ -802,7 +1418,61 @@
+ 
+     if (timing) t0 = mgs_now_ms();
+ 
+-    if (mgs_cfg.use_pbo && mgs_ensure_pbos(gl))
++    if (mgs_cfg.dmabuf && mgs_dmabuf_ensure(gl))
++    {
++        /* GPU-to-GPU. The blit is queued and returns; nothing here waits for the
++         * GPU and nothing touches the pixels with the CPU.
++         *
++         * The destination Y range is inverted on purpose, and a straight blit
++         * really does come out upside down -- verified on screen before this
++         * comment was written. GL puts texture y=0 at the BOTTOM, while a
++         * dma-buf's row 0 is the TOP of the image by DRM convention, so
++         * importing one as a texture already flips it once. The shm path does
++         * not need this because glReadPixels returns the bottom row first and
++         * writing those rows in order into a top-down shm buffer performs the
++         * same flip implicitly -- which is exactly why MGS2_GL_FLIP=0 is right
++         * there and means nothing here. */
++        struct wayland_client_surface *client =
++            CONTAINING_RECORD(gl->base.client, struct wayland_client_surface, client);
++        struct mgs_dmabuf_buffer *b;
++        GLint old_read = 0, old_draw = 0;
++        double t_acq0 = mgs_now_ms();
++
++        b = mgs_dmabuf_acquire(gl);
++        if (timing)
++        {
++            double d = mgs_now_ms() - t_acq0;
++            gl->t_acquire += d;
++            t_acq = d;
++            if (d > gl->acquire_max) gl->acquire_max = d;
++        }
++        /* Every buffer still held by the compositor: skip the frame rather than
++         * block. Blocking here is the one thing this presenter exists to avoid. */
++        if (!b) goto done;
++
++        funcs->p_glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &old_read);
++        funcs->p_glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &old_draw);
++        funcs->p_glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
++        funcs->p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, b->fbo);
++        if (mgs_cfg.dmabuf_flip)
++            funcs->p_glBlitFramebuffer(0, 0, gl->width, gl->height,
++                                       0, gl->height, gl->width, 0,
++                                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
++        else
++            funcs->p_glBlitFramebuffer(0, 0, gl->width, gl->height,
++                                       0, 0, gl->width, gl->height,
++                                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
++        funcs->p_glBindFramebuffer(GL_READ_FRAMEBUFFER, old_read);
++        funcs->p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, old_draw);
++        if (timing) t1 = t2 = mgs_now_ms();
++
++        b->busy = TRUE;
++        wl_surface_attach(client->wl_surface, b->wl_buffer, 0, 0);
++        wl_surface_damage_buffer(client->wl_surface, 0, 0, gl->width, gl->height);
++        wl_surface_commit(client->wl_surface);
++        wl_display_flush(process_wayland.wl_display);
++    }
++    else if (mgs_cfg.use_pbo && mgs_ensure_pbos(gl))
+     {
+         const size_t size = (size_t)gl->width * gl->height * 4;
+         int cur = gl->pbo_index;
+@@ -863,6 +1533,7 @@
+         /* This frame: GPU-side copy only, no wait. */
+         funcs->p_glBindTexture(GL_TEXTURE_2D, gl->async_tex[cur]);
+         funcs->p_glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, gl->width, gl->height);
++        if (timing) t_gpucopy = mgs_now_ms();
+ 
+         /* Previous frame: the GPU finished it a frame ago, so this read does not
+          * stall. The very first frame has no previous one and is simply not
+@@ -876,6 +1547,7 @@
+             {
+                 double d = mgs_now_ms() - t_acq0;
+                 gl->t_acquire += d;
++                t_acq = d;
+                 if (d > gl->acquire_max) gl->acquire_max = d;
+             }
+             if (buf)
+@@ -906,6 +1578,7 @@
+             {
+                 double d = mgs_now_ms() - t_acq0;
+                 gl->t_acquire += d;
++                t_acq = d;
+                 if (d > gl->acquire_max) gl->acquire_max = d;
+             }
+         }
+@@ -995,6 +1668,19 @@
+         gl->t_copy += t2 - t1;
+         if (mgs_cfg.read_split && t_drained > 0.0) gl->t_finish += t_drained - t0;
+         if (gl->frames >= (unsigned int)mgs_cfg.stats) mgs_report_stats(gl, mgs_now_ms());
++
++        /* t1 stays 0 when this swap presented nothing -- the async ring is not
++         * primed yet, or the shm pool had no free buffer.  Such a frame has no
++         * readback to attribute, so it is counted against the block length but
++         * kept out of both means. */
++        if (mgs_cfg.stages) mgs_stage_tick(gl, t_enter, t_swapped, t0, t1, now);
++
++        if (mgs_cfg.present_ab)
++            mgs_ab_tick(gl, now, t1 > 0.0 ? t1 - t0 : -1.0, t2 - t1,
++                        (mgs_cfg.read_split && t_drained > 0.0) ? t_drained - t0 : 0.0,
++                        t_gpucopy > 0.0 ? t_gpucopy - t0 : 0.0, t_acq,
++                        gl->t_prev_swap_ab > 0.0 ? now - gl->t_prev_swap_ab : 0.0);
++        gl->t_prev_swap_ab = now;
+     }
+ 
+ done:
