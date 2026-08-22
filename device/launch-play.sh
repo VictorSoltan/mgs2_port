@@ -265,8 +265,11 @@ fi
 # FINALPLAY7 is the measured production pair. Any diagnostic can explicitly
 # set this to 0, but normal play must not silently fall back to NO-ISLAND.
 export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-1}"
-export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33}"
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-island41}" /usr/bin/box86 || exit 1
+# Entry 41 is the fused A+B+C draw-state root (p72c). It ships here because
+# the 144-minute session that validated the p75a selector ran with exactly
+# this list; promoting a different one would ship something unplayed.
+export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41}"
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-island58-p75a-steady}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 # Diagnostics may select a separate presenter build, but normal play keeps the
 # measured production driver.  This is used by p67 only for a bounded,
@@ -333,7 +336,7 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # allow-list is the immediate rollback; p55 + island29 remains the older exact
 # pre-FINALPLAY6 rollback.
 export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
-mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_p56_batch_state.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_p75a_steady.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the

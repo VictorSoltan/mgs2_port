@@ -1,0 +1,386 @@
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -268,8 +268,231 @@
+     DWORD shader_controlled_clip_distances : 1;
+     DWORD clip_distance_mask : 8; /* WINED3D_MAX_CLIP_DISTANCES, 8 */
+     DWORD padding : 23;
++
++    /*
++     * Program-local cache of the FFP texture matrices this program was last
++     * given.
++     *
++     * Uniform values are state of a linked GL program and survive glUseProgram,
++     * but wined3d re-dirties a program's constants every time it becomes
++     * current, so the same matrix is uploaded again and again. Measured on this
++     * device: 331 redundant uploads per frame standing still, 410 in combat,
++     * ~96-97% of all calls to shader_glsl_ffp_vertex_texmatrix_uniform().
++     *
++     * The cache lives here and nowhere else on purpose. This struct IS one
++     * linked GL program, so (program, texture stage) is the natural key, with no
++     * hash table, no allocation on the hot path and no lookup by GLuint.
++     *
++     * A newly linked program gets a fresh entry, so its cache starts invalid by
++     * construction: all four allocation sites in this file use
++     * calloc(1, sizeof(*entry)) -- checked, not assumed -- and none of the four
++     * glLinkProgram() calls relinks an id that a live entry already holds, so
++     * there is no in-place relink to invalidate on. glUseProgram does not
++     * invalidate anything either: uniform values belong to the program.
++     */
++    uint32_t mgs_texmatrix_valid_mask;
++    struct wined3d_matrix mgs_texmatrix_cache[WINED3D_MAX_FFP_TEXTURES];
++};
++
++/*
++ * Counters for the cache above, in a self-identifying record so the A/B reader
++ * can find them by scanning. `enabled` is writable from outside: the
++ * same-process ABBA flips it, which is why the cache is updated even when the
++ * skip is off -- an arm that started with a cold cache would be measuring the
++ * warm-up and not the optimisation.
++ */
++#define MGS2_TEXMATRIX_MAGIC 0x314D5854u /* TXM1 */
++struct mgs2_texmatrix_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled;
++    unsigned int attempted, skipped, executed;
++    unsigned int cold_miss, changed_miss, program_cache_resets;
++    unsigned int per_tex_attempted[WINED3D_MAX_FFP_TEXTURES];
++    unsigned int per_tex_skipped[WINED3D_MAX_FFP_TEXTURES];
++};
++
++/* Bisection switch, compiled in for one experiment: the owner sees the frame
++ * height jumping on this build and not on production, so the skip has to be
++ * separated from everything else the build changed -- the regenerated class-B
++ * registry, the new island binary and the A/B tick in present. With this set,
++ * the cache is still filled and the A/B still flips arms and prints blocks, but
++ * no upload is ever skipped. If the artefact survives that, it is not the cache. */
++/* P74A is CLOSED: the cache lived on glsl_shader_prog_link while the uniforms
++ * belong to vs_program_id, which separable entries SHARE. Kept compiled in as a
++ * counted, non-skipping record of a measured negative; never re-enable without
++ * moving the cache to mgs2_ffp_vs_source, which is the real owner. */
++static const BOOL mgs2_texmatrix_skip_disabled = TRUE;
++
++struct mgs2_texmatrix_stats_public mgs2_texmatrix_stats =
++{
++    MGS2_TEXMATRIX_MAGIC, 1,
++    sizeof(struct mgs2_texmatrix_stats_public) / sizeof(unsigned int),
++    ~MGS2_TEXMATRIX_MAGIC,
++    1,
++};
++
++/*
++ * Same-process ABBA, driven from the swapchain's own present.
++ *
++ * The presenter in winewayland.drv already has an A/B harness, and the first
++ * attempt drove this flag from there by locating the record in memory. That was
++ * a mistake twice over: the scan ran inside the probe context wined3d builds to
++ * enumerate pixel formats and killed adapter initialisation, and once deferred
++ * it silently found nothing. The frame counter this needs is right here --
++ * swapchain_gl_present() is called once per displayed frame -- so the A/B lives
++ * where the optimisation lives and crosses no module boundary.
++ *
++ * The block line is printed in the exact format harness/present_ab_read.py
++ * already parses, so the reducer, its ABBA pairing, its depth and stability
++ * filters and its negative control are reused unchanged. Arm A ("sync") is
++ * always the incumbent: skipping disabled.
++ */
++void mgs2_texmatrix_ab_present(void);
++
++/*
++ * P75A: stop selecting a uniform target that nothing is about to write.
++ *
++ * With separable programs shader_glsl_load_constants() calls
++ * mgs2_glActiveShaderProgram() twice -- once for the VS program, once for the
++ * PS program -- unconditionally, before each stage's upload block. The census
++ * counts 1112-1304 constant loads per combat frame, so that is roughly
++ * 2200-2600 driver calls per frame, and NONE of them appear in the GL_EXTCALL
++ * histogram: this is a project-resolved function pointer, not a GL_EXTCALL
++ * site. The texture-matrix candidate just closed was 410.
++ *
++ * glActiveShaderProgram only chooses which program subsequent glUniform* calls
++ * write into; it does not change which stages execute. So selecting a stage
++ * that no upload follows is pure cost. No cached state, no value comparison,
++ * no payload changes -- the only question is whether an upload follows.
++ *
++ * need_vs/need_ps mirror the guards of the two blocks, and a mirror can drift
++ * from what it mirrors, so it is checked rather than trusted: the upload
++ * helpers bump a witness, and a witness raised while need_* said no is counted
++ * as MISSED. A run with any MISSED is not a result.
++ */
++#define MGS2_ASP_MAGIC 0x31505341u /* ASP1 */
++struct mgs2_asp_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int lazy;
++    unsigned int separable_loads;
++    unsigned int need_vs, need_ps;
++    unsigned int avoided_vs, avoided_ps;
++    unsigned int missed_vs, missed_ps;
++};
++struct mgs2_asp_stats_public mgs2_asp_stats =
++{
++    MGS2_ASP_MAGIC, 1,
++    sizeof(struct mgs2_asp_stats_public) / sizeof(unsigned int),
++    ~MGS2_ASP_MAGIC,
++    1,   /* lazy ON: steady build. The A/B below is compiled out. */
+ };
+ 
++/*
++ * The A/B alternates arms every 12 frames, and with -14.8 ms between them that
++ * alternation is VISIBLE as a ~1 Hz stutter -- the owner reported exactly that
++ * while the measurement was running. A steady build must therefore not carry
++ * the harness at all, which is what this constant turns off. Set it back to
++ * TRUE only to re-measure.
++ */
++static const BOOL mgs2_asp_ab_enabled = FALSE;
++static unsigned int mgs2_asp_witness;
++static BOOL mgs2_asp_need_vs;
++
++/*
++ * `enabled` has exactly one owner: mgs2_texmatrix_ab_present(). An earlier
++ * version also seeded it lazily from MGS2_GL_TEXMATRIX_SHADOW on the first
++ * uniform upload, and whichever of the two ran first won -- which is why the
++ * first block came out labelled as the wrong arm. The env variable is read once,
++ * in the A/B initialiser, and nowhere else.
++ */
++
++void mgs2_texmatrix_ab_present(void)
++{
++    static const unsigned int arm[4] = { 0, 1, 1, 0 };
++    static int block_len = -1, settle, seen, block;
++    static double stamp[1024];
++    static unsigned int nstamp;
++    static double ms_per_tick;
++    LARGE_INTEGER qpc;
++    double now, iv[1024];
++    unsigned int i, k, n;
++
++    if (!mgs2_asp_ab_enabled) return;
++
++    if (block_len < 0)
++    {
++        const char *v = getenv("MGS2_PRESENT_AB");
++        const char *w = getenv("MGS2_PRESENT_AB_SETTLE");
++
++        /* Default 12, not 0. getenv() on the PE side did not see
++         * MGS2_PRESENT_AB even though the Unix-side presenter did, and a
++         * silently disabled A/B in a build whose only purpose is the A/B is a
++         * waste of a run. The variable still overrides when it does arrive. */
++        block_len = (v && *v) ? atoi(v) : 12;
++        settle = (w && *w) ? atoi(w) : 1;
++        if (block_len < 2) block_len = 12;
++        if (settle < 0) settle = 0;
++        mgs2_texmatrix_stats.enabled = 0;   /* P74A closed: never skips */
++        mgs2_asp_stats.lazy = 0;            /* block 0 is arm A: eager selector */
++        ERR("MGS2 texmatrix A/B: %d-frame blocks, settle %d, arm A = cache off "
++            "(MGS2_PRESENT_AB said %s)\n", block_len, settle, v ? v : "nothing");
++    }
++    if (!block_len) return;
++
++    /* QueryPerformanceCounter, not clock_gettime: this is the PE side. */
++    if (ms_per_tick == 0.0)
++    {
++        LARGE_INTEGER freq;
++
++        QueryPerformanceFrequency(&freq);
++        ms_per_tick = freq.QuadPart ? 1000.0 / (double)freq.QuadPart : 0.0;
++        if (ms_per_tick == 0.0) { block_len = 0; return; }
++    }
++    QueryPerformanceCounter(&qpc);
++    now = (double)qpc.QuadPart * ms_per_tick;
++
++    /* Timestamps first; intervals are differences between consecutive ones, so
++     * a block of N stamps yields N-1 frame times. The settle frames after an
++     * arm flip are dropped: the first frame of a new arm straddles both. */
++    if (seen >= settle && nstamp < ARRAY_SIZE(stamp))
++        stamp[nstamp++] = now;
++    ++seen;
++    if (seen < block_len) return;
++
++    n = nstamp > 1 ? nstamp - 1 : 0;
++    if (n)
++    {
++        double span = stamp[nstamp - 1] - stamp[0], sum = 0.0;
++
++        for (i = 0; i < n; ++i)
++        {
++            iv[i] = stamp[i + 1] - stamp[i];
++            sum += iv[i];
++        }
++        for (i = 0; i + 1 < n; ++i)
++            for (k = 0; k + 1 < n - i; ++k)
++                if (iv[k] > iv[k + 1])
++                {
++                    double t = iv[k]; iv[k] = iv[k + 1]; iv[k + 1] = t;
++                }
++
++        ERR("MGS2 PRESENT A/B block=%u arm=%s frames=%u span=%.1f fps=%.3f "
++            "ft_mean=%.2f p50=%.2f p95=%.2f p99=%.2f ftmax=%.2f "
++            "readback=0.000 wait=0.000 pixel=0.000 gpucopy=0.000 copy=0.000 "
++            "acquire=0.000 slow=0/0/0/0 drop=0 tick=%.0f\n",
++            block, mgs2_asp_stats.lazy ? "async" : "sync",
++            n, span, n * 1000.0 / span, sum / n,
++            iv[n / 2], iv[(n * 95) / 100], iv[(n * 99) / 100], iv[n - 1], now);
++    }
++
++    ++block;
++    seen = 0;
++    nstamp = 0;
++    mgs2_asp_stats.lazy = arm[block & 3];
++}
++
+ struct glsl_program_key
+ {
+     GLuint vs_id;
+@@ -1826,14 +2049,43 @@
+ {
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
++    const struct wined3d_matrix *matrix;
++    uint32_t bit;
++
+     if (tex >= WINED3D_MAX_FFP_TEXTURES)
+         return;
+     if (prog->vs.texture_matrix_location[tex] == -1)
+         return;
+ 
++    matrix = &constants->texture_matrices[tex];
++    bit = 1u << tex;
++
++    ++mgs2_asp_witness;
++    ++mgs2_texmatrix_stats.attempted;
++    ++mgs2_texmatrix_stats.per_tex_attempted[tex];
++
++    if (!(prog->mgs_texmatrix_valid_mask & bit))
++        ++mgs2_texmatrix_stats.cold_miss;
++    else if (memcmp(&prog->mgs_texmatrix_cache[tex], matrix, sizeof(*matrix)))
++        ++mgs2_texmatrix_stats.changed_miss;
++    else if (mgs2_texmatrix_stats.enabled && !mgs2_texmatrix_skip_disabled)
++    {
++        /* Bit-identical to what this program already holds. */
++        ++mgs2_texmatrix_stats.skipped;
++        ++mgs2_texmatrix_stats.per_tex_skipped[tex];
++        return;
++    }
++
+     GL_EXTCALL(glUniformMatrix4fv(prog->vs.texture_matrix_location[tex],
+-            1, FALSE, &constants->texture_matrices[tex]._11));
++            1, FALSE, &matrix->_11));
+     checkGLcall("glUniformMatrix4fv");
++
++    /* Updated on BOTH arms. With the skip off this costs one 64-byte copy and
++     * keeps the cache warm, so switching the arm on does not first have to pay
++     * for a cold cache and understate the win. */
++    prog->mgs_texmatrix_cache[tex] = *matrix;
++    prog->mgs_texmatrix_valid_mask |= bit;
++    ++mgs2_texmatrix_stats.executed;
+ }
+ 
+ static void shader_glsl_ffp_vertex_material_uniform(struct wined3d_context_gl *context_gl,
+@@ -1985,12 +2237,44 @@
+     if (prog->separable)
+         mgs2_resolve_separable(gl_info);
+ 
+-    if (prog->separable)
+-        mgs2_glActiveShaderProgram(prog->pipeline_id, prog->vs_program_id);
+-
+     constant_version = prog->constant_version;
+     update_mask = context->constant_update_mask & prog->constant_update_mask;
+ 
++    if (prog->separable)
++    {
++        static const uint32_t vs_any = WINED3D_SHADER_CONST_VS_F
++                | WINED3D_SHADER_CONST_VS_I | WINED3D_SHADER_CONST_VS_B
++                | WINED3D_SHADER_CONST_VS_CLIP_PLANES
++                | WINED3D_SHADER_CONST_VS_POINTSIZE
++                | WINED3D_SHADER_CONST_POS_FIXUP
++                | WINED3D_SHADER_CONST_BASE_VERTEX_ID
++                | WINED3D_SHADER_CONST_FFP_MODELVIEW
++                | WINED3D_SHADER_CONST_FFP_VERTEXBLEND
++                | WINED3D_SHADER_CONST_FFP_PROJ
++                | WINED3D_SHADER_CONST_FFP_TEXMATRIX
++                | WINED3D_SHADER_CONST_FFP_MATERIAL
++                | WINED3D_SHADER_CONST_FFP_LIGHTS;
++        static const uint32_t vs_ffp = WINED3D_SHADER_CONST_VS_F
++                | WINED3D_SHADER_CONST_FFP_LIGHTS
++                | WINED3D_SHADER_CONST_FFP_MATERIAL
++                | WINED3D_SHADER_CONST_FFP_MODELVIEW
++                | WINED3D_SHADER_CONST_FFP_PROJ
++                | WINED3D_SHADER_CONST_FFP_TEXMATRIX
++                | WINED3D_SHADER_CONST_FFP_VERTEXBLEND
++                | WINED3D_SHADER_CONST_VS_POINTSIZE;
++
++        mgs2_asp_need_vs = (vshader && vshader->is_ffp_vs)
++                ? !!(context->constant_update_mask & vs_ffp)
++                : !!(update_mask & vs_any);
++        ++mgs2_asp_stats.separable_loads;
++        if (mgs2_asp_need_vs) ++mgs2_asp_stats.need_vs;
++        else ++mgs2_asp_stats.avoided_vs;
++
++        if (mgs2_asp_need_vs || !mgs2_asp_stats.lazy)
++            mgs2_glActiveShaderProgram(prog->pipeline_id, prog->vs_program_id);
++        mgs2_asp_witness = 0;
++    }
++
+     if (vshader && vshader->is_ffp_vs)
+     {
+         /* The shader's constant update mask is WINED3D_SHADER_CONST_VS_F.
+@@ -2172,7 +2456,33 @@
+     }
+ 
+     if (prog->separable)
+-        mgs2_glActiveShaderProgram(prog->pipeline_id, prog->ps_program_id);
++    {
++        static const uint32_t ps_any = WINED3D_SHADER_CONST_PS_F
++                | WINED3D_SHADER_CONST_PS_I | WINED3D_SHADER_CONST_PS_B
++                | WINED3D_SHADER_CONST_PS_BUMP_ENV
++                | WINED3D_SHADER_CONST_FFP_COLOR_KEY
++                | WINED3D_SHADER_CONST_FFP_PS
++                | WINED3D_SHADER_CONST_PS_FOG
++                | WINED3D_SHADER_CONST_PS_ALPHA_TEST;
++        static const uint32_t ps_ffp = WINED3D_SHADER_CONST_PS_F
++                | WINED3D_SHADER_CONST_FFP_COLOR_KEY
++                | WINED3D_SHADER_CONST_FFP_PS
++                | WINED3D_SHADER_CONST_PS_BUMP_ENV;
++        BOOL need_ps;
++
++        /* The VS block has finished: an upload while need_vs said there would be
++         * none means the mirror is wrong, and the run is void. */
++        if (mgs2_asp_witness && !mgs2_asp_need_vs) ++mgs2_asp_stats.missed_vs;
++
++        need_ps = (pshader && pshader->is_ffp_ps)
++                ? !!(context->constant_update_mask & ps_ffp)
++                : !!(update_mask & ps_any);
++        if (need_ps) ++mgs2_asp_stats.need_ps;
++        else ++mgs2_asp_stats.avoided_ps;
++
++        if (need_ps || !mgs2_asp_stats.lazy)
++            mgs2_glActiveShaderProgram(prog->pipeline_id, prog->ps_program_id);
++    }
+ 
+     if (pshader && pshader->is_ffp_ps)
+     {
+--- a/dlls/wined3d/swapchain.c
++++ b/dlls/wined3d/swapchain.c
+@@ -214,6 +214,12 @@
+         WARN("Failed to retrieve device context, trying swapchain backup.\n");
+ }
+ 
++/* The A/B's frame clock. swapchain_gl_present() looked like the place and is
++ * never reached on this stack -- the port renders into a pbuffer and the frame
++ * leaves through the presenter -- so the tick hangs off the public entry d3d8
++ * actually calls. */
++void mgs2_texmatrix_ab_present(void);
++
+ HRESULT CDECL wined3d_swapchain_present(struct wined3d_swapchain *swapchain,
+         const RECT *src_rect, const RECT *dst_rect, HWND dst_window_override,
+         unsigned int swap_interval, uint32_t flags)
+@@ -257,6 +263,8 @@
+ 
+     wined3d_mutex_unlock();
+ 
++    mgs2_texmatrix_ab_present();
++
+     return WINED3D_OK;
+ }
+ 

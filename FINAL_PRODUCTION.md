@@ -1,13 +1,65 @@
-# MGS2 Substance on the Anbernic RG353VS — FINALPLAY6
+# MGS2 Substance on the Anbernic RG353VS — FINALPLAY8
 
-Promoted 16 August 2026. This is the binary set the game ships with. The owner
-explicitly authorised promotion after the native `mgs2_batch_flush` route was
-measured. The release was then exercised through the real external launcher,
-save load and all 12 walk bursts before this record was changed to production.
+Promoted 22 August 2026, replacing FINALPLAY6's `island41` / `p56` pair. The
+owner authorised promotion after playing the exact binaries below for 144
+minutes, and the launcher was then exercised through the ordinary entry point
+(`MGS2-Substance.sh`, no environment overrides) to prove the defaults, not a
+hand-built command line.
 
-Do not rebuild or mix either half of the `island31` / `p56` pair independently:
-entry 4 depends on state exported by that exact WineD3D side. Further work still
-needs a same-process measurement and the usual device correctness route.
+```text
+box86      box86-island58-p75a-steady
+           9ad81a9d69b2f26acc8f89b1d7bfc8c1969731dce683ba209b7eaa5ef6686977
+wined3d    wined3d_p75a_steady.dll
+           9d91e320b94fb0d497d3ed415966d214768abf088af7daf560524123f5118acf
+presenter  winewayland_stall1.so   (unchanged)
+island     0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41
+```
+
+The two halves must not be rebuilt independently: the class-B registry inside
+box86 maps guest WineD3D RVAs, so it is valid only for this exact DLL. Rebuilding
+one side alone produces `class-B: site 0 dispatches to ... not a mappable WineD3D
+function` and an assert at startup.
+
+## What this release adds, and what it is worth
+
+**P75A, the lazy separable stage selector** (`wine-patches/75-separable-lazy-stage-selector.patch`).
+
+With separable programs `shader_glsl_load_constants()` called
+`mgs2_glActiveShaderProgram()` twice unconditionally -- once for the VS program,
+once for the PS program -- whether or not either block uploaded anything. It is a
+patch-27 function pointer rather than a `GL_EXTCALL` site, so no census in this
+project had ever counted it. It now runs only when an upload actually follows.
+
+```text
+combat, same-process ABBA, 12-frame blocks
+    selector calls   1571.8/frame -> 191.6, avoided 1380.3 (87.8%)
+    frame time       71.54 ms -> 56.74 ms
+    delta            -14.80 ms/frame, 95% CI [-19.49, -13.66]
+    fps              13.98 -> 17.63   (+26%)
+    p95/p99          -15.35 ms  (tails improve with the mean, not against it)
+    sign test        14 of 14 cycles, p=0.0001
+    negative control +0.000 ms, CI [-0.015, +0.018]
+    mirror check     MISSED = 0
+```
+
+Entry 41, the fused A+B+C draw-state root (p72c), ships with it. It was a
+candidate before today and is promoted here only because the validated session
+ran with exactly this island list; its own magnitude remains the post-hoc
+estimate of -4.8 ms and is NOT claimed as measured.
+
+## What is still open on this release
+
+```text
+STALL    a 144-minute session logged five frames over 500 ms: three at startup
+         (normal) and two during play, 5816 ms and 784 ms. Whether that rate
+         differs from production has NOT been measured -- it needs a paired soak
+         counting stalls per hour, and until then the hitches are neither
+         attributed to this patch nor cleared of it
+freezes  one hang was captured during the P75A A/B with cs_deadlock_census
+         VERDICT B (queues empty, consumer correctly asleep, main thread waiting
+         in ntsync) -- a different signature from the verdict-C hangs seen
+         earlier the same day, and matching the project's long-standing class
+```
 
 ## What is measured, and what is not
 

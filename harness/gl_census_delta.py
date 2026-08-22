@@ -39,6 +39,7 @@ SHADOW_SITE = SHADOW_NAME + 8
 ATTRIB_MAGIC = 0x31485341   # 'ASH1' -- the real vertex-attribute shadow (closed)
 TXM_MAGIC = 0x314D5854      # 'TXM1' -- the FFP texture-matrix program cache
 TXM_TEX = 8
+ASP_MAGIC = 0x31505341      # 'ASP1' -- the separable stage selector
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
           "program_selects texture_binds sampler_applies shader_resource_binds "
           "fbo_checks").split()
@@ -123,6 +124,29 @@ def find_ext_records(pid):
                     continue
                 hits.append((lo + i, name))
     return hits
+
+
+def read_asp_stats(pid):
+    """Sum every ASP1 record (guest DLL plus the island's copy)."""
+    pat = struct.pack("<IIII", ASP_MAGIC, 1, 12, (~ASP_MAGIC) & 0xFFFFFFFF)
+    keys = ("lazy separable_loads need_vs need_ps avoided_vs avoided_ps "
+            "missed_vs missed_ps").split()
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                w = struct.unpack("<12I", blob[i:i + 48])
+                d = dict(zip(keys, w[4:]))
+                d["where"] = (name or "(anon)").split("/")[-1]
+                out.append(d)
+                i = blob.find(pat, i + 4)
+    return out
 
 
 def read_txm_stats(pid):
@@ -295,12 +319,14 @@ def main():
     sbefore = sample_shadow(a.pid, saddrs) if saddrs else {}
     a0 = read_attrib_stats(a.pid)
     t0 = read_txm_stats(a.pid)
+    s0 = read_asp_stats(a.pid)
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
     eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
     safter = sample_shadow(a.pid, saddrs) if saddrs else {}
     a1 = read_attrib_stats(a.pid)
     t1 = read_txm_stats(a.pid)
+    s1 = read_asp_stats(a.pid)
     f1 = frames(a.log) if a.log else None
 
     nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
@@ -336,6 +362,33 @@ def main():
         if tot and total.get("ext_calls"):
             print("  (family counter said %d; histogram sums to %d)"
                   % (total["ext_calls"], tot))
+
+    if s1:
+        def st(rs, k):
+            return sum(r[k] for r in rs)
+        loads = st(s1, "separable_loads") - st(s0, "separable_loads")
+        nvs = st(s1, "need_vs") - st(s0, "need_vs")
+        nps = st(s1, "need_ps") - st(s0, "need_ps")
+        avs = st(s1, "avoided_vs") - st(s0, "avoided_vs")
+        aps = st(s1, "avoided_ps") - st(s0, "avoided_ps")
+        mvs = st(s1, "missed_vs") - st(s0, "missed_vs")
+        print("\nSEPARABLE STAGE SELECTOR (%d record%s, lazy=%s)"
+              % (len(s1), "" if len(s1) == 1 else "s",
+                 "/".join(str(r["lazy"]) for r in s1)))
+        print("  separable constant loads %d  -> selector calls without lazy: %d"
+              % (loads, 2 * loads))
+        print("  need VS %d (%.1f%%), need PS %d (%.1f%%)"
+              % (nvs, 100.0 * nvs / loads if loads else 0,
+                 nps, 100.0 * nps / loads if loads else 0))
+        print("  avoidable: VS %d + PS %d = %d of %d (%.1f%%)"
+              % (avs, aps, avs + aps, 2 * loads,
+                 100.0 * (avs + aps) / (2 * loads) if loads else 0))
+        if nframes:
+            print("  per frame: selector calls %.1f -> %.1f, avoided %.1f"
+                  % (2 * loads / nframes, (nvs + nps) / nframes,
+                     (avs + aps) / nframes))
+        print("  mirror self-check MISSED (must be 0): %d -- %s"
+              % (mvs, "PASS" if mvs == 0 else "FAIL, run is void"))
 
     if t1:
         print("\nFFP TEXTURE-MATRIX PROGRAM CACHE (%d record%s: %s)"
