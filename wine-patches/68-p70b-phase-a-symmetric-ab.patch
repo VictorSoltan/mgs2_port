@@ -1,0 +1,136 @@
+Patch 68 -- symmetric guest-side A/B selector for the ABI-admitted phase A.
+
+Incremental after patch 67. The p70 correctness build always routed entry 40, so
+its scene-dominated frame windows carry no performance claim in either
+direction. This patch adds the measurement arm, using the same design that made
+entry 38's p68b number honest: guest WineD3D keeps the choice, and both arms are
+one guest call from the same site.
+
+The p70 island function is split in two. `mgs2_draw_state_phase_a_body()` holds
+the whole contiguous resource/stream preload transaction, unchanged.
+`mgs2_draw_state_phase_a_island()` is the marked entry point Box86 replaces with
+the ARM build of the same pair. The control arm calls the body directly.
+
+There is deliberately no unmarked guest twin of the entry point. Box86 matches
+the marker anywhere in the first 64 bytes from a branch target, and a twin
+linked just ahead of the marked entry sits inside that window: the canonical-RVA
+identity added after the 2026-08-19 entry-22 defect would reject it, but the
+first draft of this patch produced exactly that layout, 22 bytes ahead of entry
+0x28's marker. Calling the body keeps one guest call per arm and puts no marker
+in the control arm's window. `harness/island/full/island_marker_check.py` now
+reports this neighbour relation for every entry.
+
+The control block is byte-identical in layout to the p68 draw-tail control, so
+Box86 validates and publishes into it with one code path; only the armed entry
+number differs. Regenerate the entry identity from the paired DLL: splitting the
+entry point moved entry 40 to marker +6 at canonical RVA 0x000b8b40.
+
+This is a research-only measurement patch. It promotes nothing and has no device
+FPS result at the time it was recorded.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4026,19 +4026,46 @@
+     }
+ }
+ 
++#define MGS2_PHASE_A_AB_MAGIC 0x31424154u /* TAB1 */
++
++/* p70b symmetric selector.  Layout and validation words are identical to the
++ * p68 draw-tail control, so Box86 registers and publishes into it with the
++ * same code path; only the armed entry number differs. */
++struct mgs2_phase_a_ab_control
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled, route, settled;
++    volatile unsigned int calls[2];
++};
++
++static struct mgs2_phase_a_ab_control mgs2_phase_a_ab =
++{
++    MGS2_PHASE_A_AB_MAGIC, 1,
++    sizeof(struct mgs2_phase_a_ab_control) / sizeof(unsigned int),
++    ~MGS2_PHASE_A_AB_MAGIC,
++    0, 1, 0, {0, 0},
++};
++
+ struct mgs2_draw_state_phase_a_args
+ {
+     struct wined3d_context *context;
+     const struct wined3d_device *device;
+     const struct wined3d_state *state;
+     uint32_t indexed;
++    struct mgs2_phase_a_ab_control *ab_control;
+ };
+ 
+ /* p70 phase A is one contiguous transaction from texture/resource preload
+  * through stream-info and index-buffer maintenance. Guest x86 remains the
+  * owner of context_apply_draw_state() control flow and runs dirty state,
+- * bindings/FBO and the ABI-unsafe shader backend after this returns. */
+-DECLSPEC_NOINLINE void mgs2_draw_state_phase_a_island(
++ * bindings/FBO and the ABI-unsafe shader backend after this returns.
++ *
++ * p70b splits the transaction from its entry point so that each A/B arm is one
++ * guest call: the routed arm calls the marked island entry, which Box86
++ * replaces with the ARM build of the same thunk-and-body pair, and the control
++ * arm calls this body directly. Neither arm pays a RunFunctionFmt() re-entry,
++ * so the measured difference is the port, not the boundary. */
++static DECLSPEC_NOINLINE void mgs2_draw_state_phase_a_body(
+         struct mgs2_draw_state_phase_a_args *args)
+ {
+     struct wined3d_context *context = args->context;
+@@ -4047,8 +4074,6 @@
+     struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+     uint32_t map;
+ 
+-    MGS2_ISLAND_MARK(0x28);
+-
+     /* Preload resources before FBO setup. Texture preload in particular may
+      * result in changes to the current FBO, due to using e.g. FBO blits for
+      * updating a resource location. */
+@@ -4115,6 +4140,15 @@
+     }
+ }
+ 
++/* The marked entry Box86 replaces with native ARM. */
++DECLSPEC_NOINLINE void mgs2_draw_state_phase_a_island(
++        struct mgs2_draw_state_phase_a_args *args)
++{
++    MGS2_ISLAND_MARK(0x28);
++
++    mgs2_draw_state_phase_a_body(args);
++}
++
+ /* Context activation is done by the caller. */
+ static BOOL context_apply_draw_state(struct wined3d_context *context,
+         const struct wined3d_device *device, const struct wined3d_state *state, BOOL indexed)
+@@ -4141,7 +4175,28 @@
+     phase_a.device = device;
+     phase_a.state = state;
+     phase_a.indexed = indexed;
+-    mgs2_draw_state_phase_a_island(&phase_a);
++    phase_a.ab_control = &mgs2_phase_a_ab;
++    if (__atomic_load_n(&mgs2_phase_a_ab.enabled, __ATOMIC_ACQUIRE))
++    {
++        unsigned int routed = __atomic_load_n(&mgs2_phase_a_ab.route, __ATOMIC_ACQUIRE);
++
++        if (__atomic_load_n(&mgs2_phase_a_ab.settled, __ATOMIC_ACQUIRE))
++            __atomic_fetch_add(&mgs2_phase_a_ab.calls[routed ? 0 : 1], 1, __ATOMIC_RELAXED);
++        if (routed)
++            mgs2_draw_state_phase_a_island(&phase_a);
++        else
++            /* The control arm must NOT call a second unmarked wrapper. Box86
++             * matches the marker anywhere in the first 64 bytes from a branch
++             * target, so a twin linked just before the marked entry would be
++             * routed as well -- or would claim the entry's guest address first
++             * and invert both arms. Calling the transaction body directly keeps
++             * one guest call per arm and no marker in this target's window. */
++            mgs2_draw_state_phase_a_body(&phase_a);
++    }
++    else
++    {
++        mgs2_draw_state_phase_a_island(&phase_a);
++    }
+ 
+     /* MGS2_PHASE_B_BEGIN: dirty-state transaction, including bitmap clear. */
+     for (i = 0, base = 0; i < ARRAY_SIZE(context->dirty_graphics_states); ++i)

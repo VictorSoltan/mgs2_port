@@ -1,0 +1,404 @@
+Patch 70 -- p72: phases A+B+C as one native root, plus the routed shader frontend
+and the GL-work census.
+
+Three things that belong together because they were built together:
+
+1. mgs2_draw_state_abc_body() is one contiguous transaction -- resource/stream
+   preload, the whole dirty-state loop including its bitmap clear, and the
+   resource/UAV bindings with FBO validation -- behind the marked entry
+   mgs2_draw_state_abc_island() (id 0x29). Shader phase D stays guest, which is
+   the entire difference from the rejected p71.
+2. shader_generate_code() called the shader FRONTEND vtable at four sites that
+   nothing routed; native ARM would have branched to a guest x86 pointer on any
+   FFP shader cache miss inside a native root. They now dispatch through the new
+   MGS2_P50_SHADER_FRONTEND site (MGS2_P50_SITES 36 -> 37).
+3. MGS2_GL_CENSUS counts what the driver is actually asked to do, by family. The
+   profile puts 42.5% of user cycles inside libmali, which porting cannot remove.
+   Compiles away entirely when the define is absent.
+
+MGS2_FUSED_ABC_AB selects the symmetric A/B build; without it the root is always
+routed, which is the p72c candidate. Correctness, A/B and soak are in sections
+14.2 to 14.6 of the brief.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -421,6 +421,7 @@
+ /* Context activation is done by the caller. */
+ void wined3d_context_gl_check_fbo_status(const struct wined3d_context_gl *context_gl, GLenum target)
+ {
++    MGS2_CENSUS_INC(fbo_checks);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     GLenum status;
+ 
+@@ -2484,6 +2485,7 @@
+ 
+ void wined3d_context_gl_bind_texture(struct wined3d_context_gl *context_gl, GLenum target, GLuint name)
+ {
++    MGS2_CENSUS_INC(texture_binds);
+     const struct wined3d_dummy_textures *textures = &wined3d_device_gl(context_gl->c.device)->dummy_textures;
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     GLenum old_texture_type;
+@@ -3729,6 +3731,7 @@
+ static void wined3d_context_gl_bind_shader_resources(struct wined3d_context_gl *context_gl,
+         const struct wined3d_state *state, enum wined3d_shader_type shader_type)
+ {
++    MGS2_CENSUS_INC(shader_resource_binds);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     unsigned int bind_idx, shader_sampler_count, base, count, i;
+     const struct wined3d_device *device = context_gl->c.device;
+@@ -4149,54 +4152,85 @@
+     mgs2_draw_state_phase_a_body(args);
+ }
+ 
+-/* Context activation is done by the caller. */
+-static BOOL context_apply_draw_state(struct wined3d_context *context,
+-        const struct wined3d_device *device, const struct wined3d_state *state, BOOL indexed)
++#ifdef MGS2_GL_CENSUS
++#define MGS2_GL_CENSUS_MAGIC 0x314c4743u /* CGL1 */
++/* The island links a second copy of this translation unit, so the ARM build has
++ * its own census record: counters inside a phase that runs natively land there,
++ * not in the guest's copy. That is why the p72 run read zero state-callbacks and
++ * zero texture binds. Export it so the reader can find BOTH copies -- the guest
++ * DLL's by RVA and the island's from Box86's dynamic symbols -- and sum them. */
++#ifdef MGS2_ISLAND_ARM
++__attribute__((visibility("default")))
++#endif
++struct mgs2_gl_census_public mgs2_gl_census =
++{
++    MGS2_GL_CENSUS_MAGIC, 1,
++    sizeof(struct mgs2_gl_census_public) / sizeof(unsigned int),
++    ~MGS2_GL_CENSUS_MAGIC,
++};
++#endif
++
++/* p72b A/B control block. Byte-identical layout to the p68 draw-tail and p70b
++ * phase-A controls, so Box86 validates and publishes into it with one path. */
++struct mgs2_fused_abc_ab_control
+ {
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled, route, settled;
++    volatile unsigned int calls[2];
++};
++
++#ifdef MGS2_FUSED_ABC_AB
++#define MGS2_FUSED_ABC_AB_MAGIC 0x31424154u /* TAB1 */
++static struct mgs2_fused_abc_ab_control mgs2_fused_abc_ab =
++{
++    MGS2_FUSED_ABC_AB_MAGIC, 1,
++    sizeof(struct mgs2_fused_abc_ab_control) / sizeof(unsigned int),
++    ~MGS2_FUSED_ABC_AB_MAGIC,
++    0, 1, 0, {0, 0},
++};
++#endif
++
++struct mgs2_draw_state_abc_args
++{
++    struct wined3d_context *context;
++    const struct wined3d_device *device;
++    const struct wined3d_state *state;
++    uint32_t indexed;
++    struct mgs2_fused_abc_ab_control *ab_control;
++};
++
++/* p72 fused root: phases A, B and C as ONE contiguous native transaction.
++ *
++ * A  resource/stream preload, stream-info maintenance, index buffer
++ * B  the whole dirty-state loop, every GL state-table callback, bitmap clear
++ * C  shader-resource and UAV bindings, FBO status validation
++ *
++ * The shader phase D deliberately stays guest: p71 moved it and bound neither a
++ * program nor a pipeline, because the island links a second copy of
++ * glsl_shader.c whose nine separable-program entry pointers are its own. Phases
++ * B and C reference none of those objects (audited: 0 of 9), which is why this
++ * root is a different proposition from p71 rather than a smaller retry of it.
++ *
++ * There is no return value: neither B nor C can fail. The FBO-attachment check
++ * that can fail stays in the guest caller above this boundary. */
++static DECLSPEC_NOINLINE void mgs2_draw_state_abc_body(
++        struct mgs2_draw_state_abc_args *args)
++{
++    struct wined3d_context *context = args->context;
++    const struct wined3d_device *device = args->device;
++    const struct wined3d_state *state = args->state;
+     const struct wined3d_state_entry *state_table = context->state_table;
+     struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+-    const struct wined3d_fb_state *fb = &state->fb;
+-    unsigned int i, base;
+     struct mgs2_draw_state_phase_a_args phase_a;
+-
+-    context->uses_fbo_attached_resources = 0;
+-
+-    if (!have_framebuffer_attachment(gl_info->limits.buffers, fb->render_targets, fb->depth_stencil))
+-    {
+-        if (!gl_info->supported[ARB_FRAMEBUFFER_NO_ATTACHMENTS])
+-        {
+-            FIXME("OpenGL implementation does not support framebuffers with no attachments.\n");
+-            return FALSE;
+-        }
+-    }
++    unsigned int i, base;
+ 
+     phase_a.context = context;
+     phase_a.device = device;
+     phase_a.state = state;
+-    phase_a.indexed = indexed;
+-    phase_a.ab_control = &mgs2_phase_a_ab;
+-    if (__atomic_load_n(&mgs2_phase_a_ab.enabled, __ATOMIC_ACQUIRE))
+-    {
+-        unsigned int routed = __atomic_load_n(&mgs2_phase_a_ab.route, __ATOMIC_ACQUIRE);
+-
+-        if (__atomic_load_n(&mgs2_phase_a_ab.settled, __ATOMIC_ACQUIRE))
+-            __atomic_fetch_add(&mgs2_phase_a_ab.calls[routed ? 0 : 1], 1, __ATOMIC_RELAXED);
+-        if (routed)
+-            mgs2_draw_state_phase_a_island(&phase_a);
+-        else
+-            /* The control arm must NOT call a second unmarked wrapper. Box86
+-             * matches the marker anywhere in the first 64 bytes from a branch
+-             * target, so a twin linked just before the marked entry would be
+-             * routed as well -- or would claim the entry's guest address first
+-             * and invert both arms. Calling the transaction body directly keeps
+-             * one guest call per arm and no marker in this target's window. */
+-            mgs2_draw_state_phase_a_body(&phase_a);
+-    }
+-    else
+-    {
+-        mgs2_draw_state_phase_a_island(&phase_a);
+-    }
++    phase_a.indexed = args->indexed;
++    phase_a.ab_control = NULL;
++    mgs2_draw_state_phase_a_body(&phase_a);
+ 
+     /* MGS2_PHASE_B_BEGIN: dirty-state transaction, including bitmap clear. */
+     for (i = 0, base = 0; i < ARRAY_SIZE(context->dirty_graphics_states); ++i)
+@@ -4207,6 +4241,7 @@
+         {
+             unsigned int state_id = base + wined3d_bit_scan(&dirty_mask);
+ 
++            MGS2_CENSUS_INC(state_apply_callbacks);
+             MGS2_P50_CALL(MGS2_P50_STATE_APPLY,
+                     state_table[state_id].apply)(context, state, state_id);
+         }
+@@ -4239,6 +4274,67 @@
+ 
+     wined3d_context_gl_check_fbo_status(context_gl, GL_FRAMEBUFFER);
+     /* MGS2_PHASE_C_END */
++}
++
++DECLSPEC_NOINLINE void mgs2_draw_state_abc_island(struct mgs2_draw_state_abc_args *args)
++{
++    MGS2_ISLAND_MARK(0x29);
++
++    mgs2_draw_state_abc_body(args);
++}
++
++/* Context activation is done by the caller. */
++static BOOL context_apply_draw_state(struct wined3d_context *context,
++        const struct wined3d_device *device, const struct wined3d_state *state, BOOL indexed)
++{
++    struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
++    const struct wined3d_gl_info *gl_info = context_gl->gl_info;
++    const struct wined3d_fb_state *fb = &state->fb;
++    struct mgs2_draw_state_abc_args abc;
++
++    MGS2_CENSUS_INC(draw_state_applies);
++    context->uses_fbo_attached_resources = 0;
++
++    if (!have_framebuffer_attachment(gl_info->limits.buffers, fb->render_targets, fb->depth_stencil))
++    {
++        if (!gl_info->supported[ARB_FRAMEBUFFER_NO_ATTACHMENTS])
++        {
++            FIXME("OpenGL implementation does not support framebuffers with no attachments.\n");
++            return FALSE;
++        }
++    }
++
++    abc.context = context;
++    abc.device = device;
++    abc.state = state;
++    abc.indexed = indexed;
++#ifdef MGS2_FUSED_ABC_AB
++    /* p72b symmetric A/B. Same shape that made entry 38's and phase A's numbers
++     * honest: one guest call per arm from this site, the routed arm entering the
++     * marked island entry and the control arm calling the transaction body, so
++     * neither pays a RunFunctionFmt() re-entry and the marker of the routed entry
++     * is nowhere near the control arm's own window. */
++    abc.ab_control = &mgs2_fused_abc_ab;
++    if (__atomic_load_n(&mgs2_fused_abc_ab.enabled, __ATOMIC_ACQUIRE))
++    {
++        unsigned int routed = __atomic_load_n(&mgs2_fused_abc_ab.route, __ATOMIC_ACQUIRE);
++
++        if (__atomic_load_n(&mgs2_fused_abc_ab.settled, __ATOMIC_ACQUIRE))
++            __atomic_fetch_add(&mgs2_fused_abc_ab.calls[routed ? 0 : 1], 1, __ATOMIC_RELAXED);
++        if (routed)
++            mgs2_draw_state_abc_island(&abc);
++        else
++            mgs2_draw_state_abc_body(&abc);
++    }
++    else
++    {
++        mgs2_draw_state_abc_island(&abc);
++    }
++#else
++    abc.ab_control = NULL;
++    mgs2_draw_state_abc_island(&abc);
++#endif
++
+     /* MGS2_PHASE_D_BEGIN: ABI-unsafe FFP shader/cache path stays guest. */
+     MGS2_P50_CALL(MGS2_P50_SHADER_BACKEND,
+             device->shader_backend->shader_apply_draw_state)(device->shader_priv, context, state);
+@@ -5339,7 +5435,6 @@
+     unsigned int i, idx_size = 0;
+     const void *idx_data = NULL;
+     struct mgs2_draw_primitive_arrays_args mgs2_draw_args;
+-    struct mgs2_apply_draw_state_args mgs2_apply_args;
+ 
+     TRACE("device %p, state %p, parameters %p.\n", device, state, parameters);
+ 
+@@ -5425,20 +5520,13 @@
+         mgs2_batch_flush();
+     }
+ 
+-    /* p71: the whole draw-state application is one native root again, this time
+-     * on an island built with the guest's MSVC field offsets. Guest x86 keeps
+-     * everything around it -- context_acquire(), current-context ownership,
+-     * render-target/depth preparation, the final draw, barriers and
+-     * context_release() -- exactly as p69 did; only the compiler under the
+-     * boundary changed. Phase A's entry stays compiled inside it and is reached
+-     * natively, with no second crossing. */
+-    mgs2_apply_args.context = context;
+-    mgs2_apply_args.device = device;
+-    mgs2_apply_args.state = state;
+-    mgs2_apply_args.indexed = parameters->indexed;
+-    mgs2_apply_args.result = FALSE;
+-    mgs2_context_apply_draw_state_island(&mgs2_apply_args);
+-    if (!mgs2_apply_args.result)
++    /* p72: the guest owns context_apply_draw_state() again. p71 proved that the
++     * whole of it cannot be moved -- not for ABI reasons any more, but because
++     * the island's second copy of glsl_shader.c holds its own nine separable-
++     * program entry pointers, so the native shader phase bound neither a program
++     * nor a pipeline and every draw was invalid. The fused root below stops
++     * before that phase. */
++    if (!context_apply_draw_state(context, device, state, parameters->indexed))
+     {
+         context_release(context);
+         WARN("Unable to apply draw state, skipping draw.\n");
+--- a/dlls/wined3d/shader.c
++++ b/dlls/wined3d/shader.c
+@@ -1898,14 +1898,17 @@
+     ctx.backend_data = backend_ctx;
+     ins.ctx = &ctx;
+ 
+-    fe->shader_read_header(fe_data, &ptr, &shader_version);
++    MGS2_P50_CALL(MGS2_P50_SHADER_FRONTEND, fe->shader_read_header)(fe_data,
++            &ptr, &shader_version);
+     if (start)
+         ptr = start;
+ 
+-    while (!fe->shader_is_end(fe_data, &ptr) && ptr != end)
++    while (!MGS2_P50_CALL(MGS2_P50_SHADER_FRONTEND, fe->shader_is_end)(fe_data, &ptr)
++            && ptr != end)
+     {
+         /* Read opcode. */
+-        fe->shader_read_instruction(fe_data, &ptr, &ins);
++        MGS2_P50_CALL(MGS2_P50_SHADER_FRONTEND, fe->shader_read_instruction)(
++                fe_data, &ptr, &ins);
+ 
+         /* Unknown opcode and its parameters. */
+         if (ins.handler_idx == WINED3DSIH_TABLE_SIZE)
+@@ -1918,7 +1921,8 @@
+             FIXME("Predicates not implemented.\n");
+ 
+         /* Call appropriate function for output target */
+-        device->shader_backend->shader_handle_instruction(&ins);
++        MGS2_P50_CALL(MGS2_P50_SHADER_BACKEND,
++                device->shader_backend->shader_handle_instruction)(&ins);
+     }
+ 
+     return WINED3D_OK;
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -2205,7 +2205,7 @@
+  * Only class 3 can turn out to require calling back into the emulator.
+  */
+ #define MGS2_P50_MAGIC 0x30355250 /* PR50 */
+-#define MGS2_P50_SITES 36
++#define MGS2_P50_SITES 37
+ #define MGS2_P50_TARGETS 8
+ 
+ struct mgs2_p50_target
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -5248,5 +5248,11 @@
+ #define MGS2_P50_VERTEX_PIPE                  33
+ #define MGS2_P50_FRAGMENT_PIPE                34
+ #define MGS2_P50_STATE_APPLY                  35
++/* p71: shader_generate_code() calls the shader FRONTEND through a vtable. Those
++ * four call sites were the only unrouted indirect calls left in the
++ * context_apply_draw_state() closure, and they are reachable whenever the FFP
++ * shader cache misses inside the native root. Unrouted means native ARM would
++ * branch to a guest x86 pointer. */
++#define MGS2_P50_SHADER_FRONTEND              36
+ 
+ #endif
+--- a/dlls/wined3d/wined3d_gl.h
++++ b/dlls/wined3d/wined3d_gl.h
+@@ -399,7 +399,30 @@
+ #define MGS2_GL_INFO(gi) (gi)
+ #endif
+ 
++/* p72 GL-work census. The renderer profile puts 42.5% of all user cycles inside
++ * libmali -- native driver time that no amount of porting WineD3D to ARM can
++ * remove, because it is paid per GL call. Before redesigning any API usage, this
++ * counts what the driver is actually asked to do, by family, in one correctness
++ * run. Counters only; no output, no timing, and the whole thing compiles away
++ * without MGS2_GL_CENSUS. */
++#ifdef MGS2_GL_CENSUS
++struct mgs2_gl_census_public
++{
++    unsigned int magic, version, size_words, signature;
++    unsigned int ext_calls;
++    unsigned int draw_state_applies, state_apply_callbacks;
++    unsigned int uniform_loads, program_selects;
++    unsigned int texture_binds, sampler_applies;
++    unsigned int shader_resource_binds, fbo_checks;
++};
++extern struct mgs2_gl_census_public mgs2_gl_census;
++#define MGS2_CENSUS_INC(field) (++mgs2_gl_census.field)
++#define GL_EXTCALL(f) (MGS2_CENSUS_INC(ext_calls), \
++        (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_##f))
++#else
++#define MGS2_CENSUS_INC(field) ((void)0)
+ #define GL_EXTCALL(f) (MGS2_GL_INFO(gl_info)->gl_ops.ext.p_##f)
++#endif
+ 
+ void install_gl_compat_wrapper(struct wined3d_gl_info *gl_info, enum wined3d_gl_extension ext);
+ void print_glsl_info_log(const struct wined3d_gl_info *gl_info, GLuint id, BOOL program);
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -1965,6 +1965,7 @@
+ static void shader_glsl_load_constants(struct shader_glsl_priv *priv,
+         struct wined3d_context *context, const struct wined3d_state *state)
+ {
++    MGS2_CENSUS_INC(uniform_loads);
+     const struct wined3d_shader *vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
+     const struct wined3d_shader *pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
+     const struct glsl_context_data *ctx_data = context->shader_backend_data;
+@@ -11222,6 +11223,7 @@
+ static void set_glsl_shader_program(const struct wined3d_context_gl *context_gl, const struct wined3d_state *state,
+         struct shader_glsl_priv *priv, struct glsl_context_data *ctx_data)
+ {
++    MGS2_CENSUS_INC(program_selects);
+     const struct wined3d_d3d_info *d3d_info = context_gl->c.d3d_info;
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     const struct wined3d_shader *pre_rasterization_shader;
+--- a/dlls/wined3d/texture_gl.c
++++ b/dlls/wined3d/texture_gl.c
+@@ -3149,6 +3149,7 @@
+ void wined3d_texture_gl_apply_sampler_desc(struct wined3d_texture_gl *texture_gl,
+         const struct wined3d_sampler_desc *sampler_desc, const struct wined3d_context_gl *context_gl)
+ {
++    MGS2_CENSUS_INC(sampler_applies);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     GLenum target = texture_gl->target;
+     struct gl_texture *gl_tex;

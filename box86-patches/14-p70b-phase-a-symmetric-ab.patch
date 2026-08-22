@@ -1,0 +1,103 @@
+Patch 14 -- p70b symmetric A/B for draw-state phase A.
+
+Incremental after patch 13 and Wine patch 68. Entry 40's wrapper registers the
+guest-side selector from the argument object on its first routed call and then
+reads the arm from it, exactly as entry 38 does. Once registered, guest x86
+calls this bridge only for the routed arm and calls the phase-A transaction body
+directly for the control arm, so neither arm pays a RunFunctionFmt() re-entry.
+
+`mgs2_island_ab.c` previously hard-coded entry 38 in both the registration and
+the selector test. Those two places now share one `mgs2_ab_guest_capable()`
+predicate listing the entries that ship a guest-side selector, and the
+registration log line names the entry instead of asserting 38. Everything else
+in the A/B harness -- ABBA blocks, discarded settle frames, per-cycle pairing,
+displayed-frame tick and cumulative counters -- is unchanged.
+
+The memory-only phase-A record from patch 13 stays armed: it counts routed calls
+and guest fallbacks without writing to stderr, so it does not disqualify the run
+for timing. Build without MGS2_ISLAND_DIAGNOSTICS; regenerate the entry identity
+and class-B table from the exact paired DLL. This patch makes no frame-rate
+claim.
+
+--- a/src/mgs2_island_ab.c
++++ b/src/mgs2_island_ab.c
+@@ -135,15 +135,25 @@
+     return (frame % MGS2_AB_BLOCK) >= MGS2_AB_SETTLE;
+ }
+ 
+-/* Register the p68 guest-side selector from its first routed call. The
+- * control block is statically allocated by WineD3D and remains live for the
+- * process lifetime. Validate every layout witness before publishing into it;
+- * a mismatched research DLL falls back to the ordinary wrapper A/B. */
++/* Which entries ship a guest-side symmetric selector: 38 is the p68 draw tail,
++ * 40 the p70b draw-state phase A. Both publish the identical control layout, so
++ * one validated registration path serves them; anything else keeps the ordinary
++ * wrapper A/B. */
++static int mgs2_ab_guest_capable(unsigned int entry)
++{
++    return entry == 38 || entry == 40;
++}
++
++/* Register the guest-side selector from its first routed call. The control
++ * block is statically allocated by WineD3D and remains live for the process
++ * lifetime. Validate every layout witness before publishing into it; a
++ * mismatched research DLL falls back to the ordinary wrapper A/B. */
+ void mgs2_island_ab_register_guest(unsigned int entry, void *ptr)
+ {
+     struct mgs2_ab_guest_control *control = ptr;
+ 
+-    if (!mgs2_island_ab_enabled || entry != mgs2_ab_entry || entry != 38 || mgs2_ab_guest)
++    if (!mgs2_island_ab_enabled || entry != mgs2_ab_entry
++            || !mgs2_ab_guest_capable(entry) || mgs2_ab_guest)
+         return;
+     if (!control || control->magic != MGS2_AB_GUEST_MAGIC || control->version != 1
+             || control->size_words != sizeof(*control) / sizeof(uint32_t)
+@@ -156,12 +166,14 @@
+     __atomic_store_n(&control->route, mgs2_ab_which(mgs2_ab_frame) == 0, __ATOMIC_RELEASE);
+     __atomic_store_n(&control->settled, mgs2_ab_settled(mgs2_ab_frame), __ATOMIC_RELEASE);
+     __atomic_store_n(&control->enabled, 1, __ATOMIC_RELEASE);
+-    printf_log(LOG_NONE, "MGS2 A/B: entry 38 symmetric guest selector registered at %p\n", control);
++    printf_log(LOG_NONE, "MGS2 A/B: entry %u symmetric guest selector registered at %p\n",
++            entry, control);
+ }
+ 
+ int mgs2_island_ab_guest_selector(unsigned int entry)
+ {
+-    return mgs2_island_ab_enabled && entry == mgs2_ab_entry && entry == 38 && mgs2_ab_guest;
++    return mgs2_island_ab_enabled && entry == mgs2_ab_entry
++            && mgs2_ab_guest_capable(entry) && mgs2_ab_guest;
+ }
+ 
+ /*
+--- a/src/mgs2_island_bridges.c
++++ b/src/mgs2_island_bridges.c
+@@ -582,13 +582,27 @@
+ 
+ /* p70 keeps context_apply_draw_state() and phases B/C/D in guest x86. Only
+  * the ABI-admitted contiguous resource/stream preload transaction is native.
+- * There is no A/B logic in this first correctness wrapper. */
++ *
++ * p70b adds the symmetric guest selector: guest WineD3D publishes a validated
++ * control block through the argument object, and from then on it calls this
++ * bridge only for the routed arm. The control arm calls its own unmarked guest
++ * twin of the same transaction, so neither arm pays a RunFunctionFmt()
++ * re-entry and the measured difference is the port itself. */
+ static void mgs2_island_w40_vFp(x86emu_t *emu, uintptr_t fnc)
+ {
++    struct mgs2_phase_a_args32
++    {
++        uint32_t context, device, state, indexed, ab_control;
++    };
+     uint32_t esp = GetESP(emu);
+     void *a = *(void **)(esp + 4);
++    int routed;
++
++    mgs2_island_ab_register_guest(40,
++            (void *)(uintptr_t)((const struct mgs2_phase_a_args32 *)a)->ab_control);
++    routed = mgs2_island_ab_guest_selector(40) ? 1 : mgs2_island_ab_route(40);
+ 
+-    if (mgs2_island_context_tls_sync() == 1)
++    if (routed && mgs2_island_context_tls_sync() == 1)
+     {
+         if (mgs2_phase_a_correctness_on())
+             ++mgs2_phase_a_correctness.calls;

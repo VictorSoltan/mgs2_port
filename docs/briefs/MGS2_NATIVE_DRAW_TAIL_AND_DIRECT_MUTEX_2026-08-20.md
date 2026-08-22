@@ -883,6 +883,274 @@ the release WineD3D build with TRACE/debug removed and 30 `draw_primitive()`
 hooks reduced to zero. Rebuilding a nominal p56-equivalent with the same define
 would not create an independent hypothesis.
 
+### 10.9 Built, not yet run: p70b symmetric A/B for phase A
+
+The p70 correctness configuration always routes, so its frame windows are
+scene-dominated and carry no performance claim. Wine patch 68 and Box86 patch 14
+add the measurement arm with the design that made entry 38's number honest:
+guest WineD3D keeps the selector, and each arm is one guest call from the same
+call site inside `context_apply_draw_state()`.
+
+```text
+routed arm     call marked mgs2_draw_state_phase_a_island() -> Box86 bridge
+               -> ARM thunk -> ARM mgs2_draw_state_phase_a_body()
+control arm    call guest mgs2_draw_state_phase_a_body() directly
+both arms      same enabled/route/settle reads and the same per-arm counter;
+               phases B/C/D, final draw, barriers and release stay guest
+```
+
+Neither arm pays a `RunFunctionFmt()` re-entry. The control block is
+byte-identical to the p68 draw-tail control, so Box86 validates and publishes
+into it through one path; `mgs2_island_ab.c` no longer hard-codes entry 38 in the
+registration and selector test but asks one `mgs2_ab_guest_capable()` predicate.
+
+The first draft of the patch put the control arm in its own unmarked guest twin
+of the entry point. The linker placed that twin **22 bytes ahead of entry 0x28's
+marker**, inside the 64-byte window Box86 scans forward from a branch target, so
+calling the twin matches an id it does not own. The canonical-RVA identity added
+after the 2026-08-19 entry-22 defect would have rejected it, so this was not a
+picture risk -- but the layout is avoidable, and the class is now checked
+statically rather than trusted at runtime:
+
+```text
+harness/island/full/island_marker_check.py
+  --target SYMBOL   the control arm's call target must have NO marker in its own
+                    64-byte window, so its safety does not rest on the
+                    canonical-RVA identity having been established yet
+  --armed LIST      severity follows the configuration: a finding for an id this
+                    run does not arm is IGNORED and does not affect the exit code
+  neighbours        every function starting within 64 bytes ahead of a marker,
+                    with whether that id is identity-protected; fatal only for an
+                    unprotected armed id
+```
+
+The `--target` invariant is the one that must hold before the device, because
+the canonical-RVA check is a second witness that only becomes decisive once the
+guest module base is known. On the shipped p70b DLL it holds outright:
+
+```text
+mgs2_draw_state_phase_a_body   @ 0x100b8350   no marker in +0..64 -- PASS
+                                              nearest marker is 0x28 at +2038
+mgs2_draw_state_phase_a_island @ 0x100b8b40   0x28 at +6, its own
+```
+
+So the control arm is marker-free by layout, not by rejection, and no physical
+separation is needed.
+
+With the armed list of this configuration the whole check now exits zero. It
+still reports four neighbours -- ids 0x11, 0x27 twice and 0x33, all
+identity-protected, matching the five the one-off 2026-08-19 scan found on the
+mounted p56 DLL -- and the three legacy cases (id 0x14 in two functions; ids
+0x0b and 0x22 with markers past the window) are printed as IGNORED because no
+launcher arms 11, 20 or 34. Feeding those three ids to `--armed` returns exit 1,
+so the tool still fails on them for a configuration that would arm them.
+
+Static admission for the built pair:
+
+```text
+entry 40 identity       marker +6, canonical RVA 0x000b8b40 (moved by the split)
+identity control        19 required armed ids, 0 missing, 0 beyond the window
+marker control          exit 0 for the armed list; entry 0x28 in exactly one
+                        function, no neighbour, and the control arm's target has
+                        a marker-free window
+ABI closure phase A     548 functions / 27 TUs / 1,096 aggregate rows
+ABI mismatch / hard     0 / 0 -- PASS
+ABI direct root         549 functions, same 1,096 rows, 0 / 0 -- PASS
+indirect calls          53 routed, 0 unrouted -- PASS
+class B                 1,616 native IDs, all registered by the ARM objects
+ARM marker control      no x86 island marker bytes in the ARM objects
+mutable state           46 writable objects; the only new one is the ARM copy of
+                        mgs2_phase_a_ab, which no native closure function
+                        touches -- the selector is read and written by guest code
+                        and by Box86 through the pointer in the argument object,
+                        exactly as mgs2_draw_tail_ab was for p68b
+libm compatibility      the eight wrapped libm symbols are GLIBC_2.4, identical
+                        to the accepted p70 binary; no diagnostics build flag
+```
+
+The tooling reruns that back the phase choice were repeated on the current tree
+and reproduce: the ABI self-test is entry 10/23/38 PASS and p69/D FAIL; the phase
+matrix is A 548/1,096/0 PASS, B 167/372/0 PASS, C 21/171/0 PASS, D 235/468/9
+FAIL with the same `texture_stage_op -> ffp_frag_settings -> ffp_frag_desc ->
+glsl_ffp_fragment_shader` chain; offline attribution of the island41 capture is
+again A 2.878%, B 2.596%, C 0.514%, D 4.176% of all user cycles. Phase A's
+closure counts 549 rather than 548 when the audit is seeded from the direct root
+instead of the phase span, because the split added the thunk itself.
+
+The launcher is a timing configuration, not a second correctness run. It arms
+the selector, the production entries and the frame tick, and nothing else:
+
+```text
+armed        FINALPLAY7 entries + 40, guest selector, ABBA/tick machinery,
+             per-arm counters inside the guest control block
+not armed    MGS2_DRAW_CORRECTNESS, MGS2_PHASE_A_CORRECTNESS, MGS2_FRAME_WITNESS,
+             MGS2_REINFORCEMENT_CENSUS, MGS2_DISPLAY_LOCK_HISTORY, the p67
+             witness presenter, and any diagnostics build flag
+kept          MGS2_GL_STATS=300 with WINEDEBUG -all,err+waylanddrv
+```
+
+`MGS2_GL_STATS` is kept deliberately against the otherwise-strict rule: `present
+stats` is one `winewayland.drv` ERR line per 300 displayed frames, produced on
+the other side of the emulator, and it is the only non-circular check of the A/B
+tick rate -- ticks against per-arm frame counts is circular, because the blocks
+are defined in ticks. Everything correctness-related is dropped because the
+always-routed p70 capture already settled the picture.
+
+**Not run.** There is no device result and no FPS number for p70b.
+
+#### The stop rule, corrected: phase B is not judged by phase A
+
+The first version of this rule said a phase-A median under roughly 1 ms/frame
+closes the whole pre-shader idea. That does not follow, and the reason is in this
+brief's own numbers. The guest arm of p70b is FINALPLAY7, which already routes
+entries 10 and 23; phase A's closure *contains* those families, so part of
+phase A's offline weight is cost the production build has already removed.
+Routing phase A merely absorbs those closures into the ARM phase. Therefore:
+
+```text
+offline phase weight  !=  incremental opportunity over production
+```
+
+Phase B is dirty-state apply, at an independent 2.596% of all user cycles --
+almost the same weight as A -- and its overlap with the existing production
+entries is a different, unmeasured quantity. So it earns its own measurement
+whatever A does:
+
+```text
+A >= 1.0 ms/f       production candidate; B still worth measuring for more
+A 0.3 .. 1.0        A not promoted on its own; B still measured
+A <= 0.3            A closed as a root; B still gets ONE bounded correctness +
+                    A/B shot, on its own ~2.6% independent weight
+A and B both ~0     then, and only then, close the native pre-shader branch
+C                   not measured standalone at 0.514%; absorb it later into a
+                    fused ABI-safe root, where it is nearly free
+D                   untouched until the FFP ABI question is decided; no FPS run
+```
+
+#### Pre-registered before the p70b run
+
+Recorded here before any device data exists, so the classification cannot be
+chosen after seeing the number.
+
+```text
+sign convention   delta = median(routed - guest); NEGATIVE means ARM is faster
+primary result    median over cycles balanced to <=2% call count, both arms
+                  non-zero; target at least 25-30 balanced cycles, p68b scale
+secondary         sign count, plateau subset, high-call subset, per-arm means,
+                  harness ticks against the MGS2_GL_STATS displayed-frame count
+outliers          the all-cycles mean must NOT override the balanced median when
+                  death or scene-transition outliers reappear; p68b showed why
+                  (all cycles median -0.115 mean -3.347 sd 16.26; balanced
+                  median +0.002 mean +0.109 sd 1.10)
+
+delta <= -1.0 ms/f     A is a production candidate; correctness soak, then FPS;
+                       B investigated separately afterwards
+-1.0 < delta <= -0.3   effect is real but A is not promoted alone; B proceeds
+|delta| < ~0.3         A closed as a performance root; move to B
+delta > +0.3           A actively costs performance; closed with more
+                       confidence; B remains its own hypothesis
+```
+
+No pretty win rate is required: a delta near -1.5 ms/frame with the plateau
+subset agreeing in sign and the variance explained by the scene is enough, and a
+-0.15 ms/frame does not become useful because the sign count looks good.
+
+One conditional follow-up: if the result lands right on a boundary -- roughly
+-0.25 to -0.4 ms/frame -- run one short additional A/B with `MGS2_GL_STATS`
+unset before classifying A, so the decision is not argued over a tenth of a
+millisecond of presenter-side logging. At -1 ms or beyond it is unnecessary; the
+line is one ERR per 300 frames and is paid identically by both arms.
+
+The staged device copies were verified byte-for-byte after upload:
+
+```text
+box86-island50-p70b-ab       3aeb7c73...3051541
+wined3d_p70b_phase_a_ab.dll  23fe29ac...0a3ca76a1
+launch-p70b-ab.sh            fe8fc1b9...a5cc97ae
+```
+
+`/storage` had 561 MB free at that point, which is enough for this log but not
+for another pair of research artifacts; prune older ones before the next build.
+Production launch defaults and the FINALPLAY7 files were not touched, no process
+was started, and `/proc/mounts` held no research bind mount.
+
+One further caution on the ranking that chose A: `island_phase_profile.py`
+attributes a sample by whether the sampled function is a member of a phase
+closure, not by proving the call chain that sample came from. Shared helpers can
+therefore inflate a phase. The 2.878% is a ranking signal and an upper bound on
+what phase A could be worth, never a prediction of the A/B result.
+
+### 10.10 Measured: p70b phase A is a real negative delta, band 2 by the rule
+
+Superseded as the entry point by
+`MGS2_PHASE_A_NATIVE_MEASURED_2026-08-21.md`, which is the standalone record of
+the p70b build, its controls and this measurement. This section stays as the
+in-place result so the p69 -> p70 -> p70b thread reads in one place.
+
+One clean process, the exact staged pair, gameplay driven by the owner. The run
+ended after cycle 49; the reduction below is the whole log.
+
+```text
+all cycles             n=49   median -0.759   mean -1.642   sd 10.79
+balanced (<=2%)        n=27   median -0.626   mean +0.280   sd  6.29   PRIMARY
+sign                          20 of 27 balanced cycles favour routed
+plateau 66,528 calls   n=10   median -0.944   mean -0.915   sd  0.55   10/10 routed
+high-call >=66,528     n=16   median -1.081   mean -1.378   sd  2.64   14/16 routed
+arms                   routed 48.3 ms/f, guest 48.0 ms/f  ->  -0.12 fps
+filter moved median    +0.133 ms/frame (noise removed, does not change the answer)
+tick control           12,544 harness ticks against 12,300 GL_STATS frames
+                       (102.0%, inside the one-block lag of 256)
+```
+
+Sign convention as pre-registered: negative means the ARM route is faster.
+
+The pre-registered count target was 25--30 balanced cycles and 27 were obtained,
+so the run is complete on its own terms. Applying the table to the primary
+metric, -0.626 ms/frame falls in `-1.0 < delta <= -0.3`: **the effect is real,
+phase A is not promoted on its own from this data, and phase B proceeds
+regardless.**
+
+The homogeneous evidence is stronger than the session median and is what makes
+the effect real rather than noise: ten balanced cycles at exactly 66,528 calls
+per arm give -0.944 ms/frame with sd 0.55 and all ten favouring routed. The
+session median is diluted by lighter scenes and menus where the entry is cold.
+The high-call half gives -1.081 with 14 of 16 favouring routed.
+
+Two things are reported against the result, not around it. The balanced *mean* is
++0.280 while its median is -0.626, and the per-arm means make routed look 0.12
+fps slower; both are the death and scene-transition outliers the rule
+pre-committed to excluding from the primary read -- cycle 38 is +19.0 and cycle
+41 is +11.0, at 20% and 15% call imbalance. And the largest single balanced
+cycle, 49, is -9.762 ms/frame at 128,980 calls in a 114 ms/f scene: it hints
+that the gain scales with draw-state load, but it is one cycle and carries no
+weight on its own.
+
+There is a second, smaller plateau at 76,272 calls -- cycles 43--45 give
++2.832, -1.102, -1.245 -- which is why promotion should rest on a longer
+plateau-dominated soak rather than on this session's median.
+
+#### How the run ended, and what it does not say
+
+The owner reported the game freezing. The evidence is an exit, not a live
+deadlock: no box86 process remained, `/proc/mounts` held no research bind mount
+(so `launch-play.sh`'s EXIT trap ran), the log ends on a complete cycle-49 line
+with no SIGILL, SIGSEGV, island fault or unresolved-dispatch line anywhere, and
+`dmesg` shows no OOM kill. Frame times just before the end were 9.5 fps with 223
+frames over 100 ms, which is what a player reads as a freeze. A stale
+`wineserver` survived and was left alone.
+
+This run therefore says **nothing** about the intermittent `display_lock`
+deadlock: the timing configuration deliberately disarmed
+`MGS2_DISPLAY_LOCK_HISTORY`, so the one instrument that could have identified it
+was not recording. That is the price of the clean timing launcher, and it was
+paid knowingly; a freeze reproduction needs the correctness configuration.
+
+```text
+logs/rg353vs/p70b-ab-20260821/p70b-ab-20260821.log
+  b11fa7426247677bc516b5931baa54adf2c58f2d99663cbfdf3f1591b4f757e4
+harness/island_ab_read.py   plateau and high-call subsets added for this read
+```
+
 ## 11. What is and is not decided
 
 ```text
@@ -918,8 +1186,31 @@ rejected      concrete ABI-invalid p69 entry-39 artifact; no timing or
               performance claim exists, but an ABI-safe split remains open
 not decided   whether the 32-byte shader-cache misread is the sole runtime cause
               of p69's black frame; phase D + bounded program witness can prove it
-not decided   any p70 phase-A FPS effect; its always-routed correctness log is
-              scene-dominated and has no guest control arm
+measured      p70b phase A: balanced median -0.626 ms/frame over 27 cycles,
+              20/27 favouring routed; the 66,528-call plateau gives -0.944
+              (sd 0.55, 10/10) and the high-call half -1.081 (14/16). Real
+              negative delta, band 2: not promoted alone, phase B proceeds
+not decided   whether phase A alone reaches the >=1.0 ms/frame promotion band;
+              that needs a longer plateau-dominated soak, and the second 76,272
+              plateau (+2.832, -1.102, -1.245) is why
+not decided   whether the p70b run's ending was the display_lock freeze: the
+              timing launcher had the recorder disarmed, and the process had
+              already exited cleanly with no fault line and no OOM
+implemented   p70b entry 40 symmetric guest selector: one guest call per arm,
+              no RunFunctionFmt() in either, identity regenerated at +6 /
+              0x000b8b40, and every static control passed -- built, NOT run
+implemented   island_marker_check.py now reports functions starting inside the
+              64-byte window ahead of a marker, takes the run's armed list so a
+              real defect is not lost among known unarmed ones, and asserts that
+              a named control-arm target has a marker-free window
+validated     p70b's control-arm target is marker-free by layout: the nearest
+              marker is entry 0x28's own, 2,038 bytes ahead, so this does not
+              depend on the canonical-RVA identity being established yet
+decided       a phase-A median below 1 ms/frame does NOT close phase B: the p70b
+              guest arm already contains production entries 10/23, so phase A's
+              offline weight overstates its incremental opportunity, while phase
+              B's 2.596% overlap with production is a separate unmeasured
+              quantity. B gets one bounded shot regardless of A's result
 not decided   whether p68 changes freeze frequency or caused this occurrence
 not decided   the exact recursive call chain into display_lock
 not decided   a production mutex fix; the debugger unlock is recovery only
@@ -989,6 +1280,20 @@ wine-patches/67-p70-phase-a-correctness.patch
   cb44a6beaf815115fcc34588b114fe76345dfb738c285d6d2e106ec2daa59852
 box86-patches/13-p70-phase-a-correctness.patch
   2ed07174d0f5cd48b03b2badf6a849b389fbf4baa843d00e4446094cd022bb0a
+
+device/launch-p70b-ab.sh
+  fe8fc1b9020300f32dee09b419b79e8c8bb2c95f4d7ebee113747fc5a56c97ae
+  timing configuration: selector + production entries + frame tick only
+binaries/box86-island50-p70b-ab
+  3aeb7c733dd896694bbf7ee2a581807a32991ff44907a3fa9e7e5c3df3051541
+binaries/wined3d_p70b_phase_a_ab.dll
+  23fe29aca711c8e9a0ace560cd4ef681fa2c195c85319e9100f02480a3ca76a1
+wine-patches/68-p70b-phase-a-symmetric-ab.patch
+  cddb5a485b394ff45a6c56498daabc416c6cfcb0129543c4cd5279d58f59f425
+box86-patches/14-p70b-phase-a-symmetric-ab.patch
+  40f3dd0ce6c43464e62a977c942dda33d0a7e32b4f8c8dc7e2df15084c513be8
+  read the p70b run with harness/island_ab_read.py and
+  harness/p70_phase_a_correctness_read.py; no new reader was needed
 
 logs/rg353vs/p70-phase-a-20260821/
   p70-phase-a-heavy-20260821.png

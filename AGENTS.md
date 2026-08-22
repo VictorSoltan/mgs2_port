@@ -99,6 +99,15 @@ docs/briefs/MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md
                            admission controls and offline phase ranking selecting
                            p70 phase A, whose heavy-save gameplay correctness gate
                            passes while its symmetric performance A/B remains open
+docs/briefs/MGS2_PHASE_A_NATIVE_MEASURED_2026-08-21.md
+                           START HERE for the native pre-shader boundary: p70b's
+                           symmetric one-guest-call-per-arm A/B measures phase A
+                           at balanced median -0.626 ms/frame (66,528-call
+                           plateau -0.944, sd 0.55, 10/10 routed), the first
+                           non-zero renderer delta since entry 23. Also the
+                           marker-window trap a control arm can fall into, the
+                           standing checks added for it, and why phase B is
+                           measured regardless of phase A's band
 docs/briefs/MGS2_ISLAND_MEASURED_2026-08-16c.md
                            the entry-10 measurement the ABBA harness exists for:
                            -8.87 ms/frame, and section 4 on the unfinished

@@ -16,6 +16,20 @@ an embedded key with MS bitfields can move every field after it.  This tool:
 same island defines.  It does not replace the linked island objects or any
 shipping artifact.
 
+``--arm-cc`` and ``--arm-extra-cflag`` exist to answer one question without
+building a device binary: does another ARM compiler assign the guest's field
+offsets?  The i386 guest is MSVC-layout, and GCC has no ARM equivalent, but
+Clang does:
+
+    --arm-cc clang-18 --arm-extra-cflag=--target=arm-linux-gnueabihf
+             --arm-extra-cflag=-mms-bitfields
+
+Everything else -- island defines, optimisation, ``-fshort-wchar`` -- stays
+identical to the GCC build so the comparison is about layout only.  Use the same
+target triple and sysroot as the real cross toolchain; mixing soft- and
+hard-float ABIs would make the objects unlinkable for a reason that has nothing
+to do with bitfields.
+
 Ownership is deliberately conservative.  A short, reviewed table below marks
 objects whose lifetime crosses the p69 boundary.  Everything else is UNKNOWN,
 not silently declared safe.  Add a classification only with a source-level
@@ -204,7 +218,14 @@ def layouts(dies, order):
                 # Compare one canonical absolute LSB position.
                 members.append((member_name, "bit", data_bit_offset, bit_size))
             else:
-                members.append((member_name, "byte", offset, None))
+                # A union member, and any member at the start of its aggregate,
+                # may carry no DW_AT_data_member_location at all: DWARF says the
+                # offset is then zero. The mingw i386 producer omits it while
+                # Clang emits an explicit 0, so comparing the raw attribute
+                # reported nine identical unions -- VkClearColorValue,
+                # _LARGE_INTEGER, wined3d_gl_fence_object and friends -- as
+                # differing in an otherwise size- and align-identical row.
+                members.append((member_name, "byte", offset or 0, None))
             target = embedded_aggregate_target(dies, reference(dies, child))
             if target:
                 edges.add(target)
@@ -227,21 +248,31 @@ def classify(type_name):
     return "UNKNOWN"
 
 
-def build_arm_objects(tus, arm_dir):
+def build_arm_objects(tus, arm_dir, cc="arm-linux-gnueabihf-gcc", extra=()):
     arm_dir.mkdir(parents=True, exist_ok=True)
     include = [
         WINE_BUILD / "dlls/wined3d", WINE_SRC / "dlls/wined3d", WINE_SRC / "include",
         WINE_SRC / "include/msvcrt", WINE_SRC / "libs/vkd3d/include",
         WINE_SRC / "libs/vkd3d/include/private", WINE_BUILD / "include",
     ]
-    flags = ["-O2", "-g", "-fshort-wchar", "-Wno-builtin-declaration-mismatch", "-c",
+    flags = ["-O2", "-g", "-fshort-wchar", "-c",
              "-DMGS2_RELEASE", "-DMGS2_FINALPLAY", "-D_UCRT", "-D__WINESRC__",
              "-DMGS2_ISLAND_ARM", "-DWINE_NO_TRACE_MSGS", "-DWINE_NO_DEBUG_MSGS"]
+    if "clang" in cc:
+        # Clang drops debug info for types nothing in the TU uses, which made
+        # nine aggregates -- wined3d_settings among them -- read as "missing in
+        # ARM DWARF" and therefore unverified rather than equal. Keep the type
+        # set complete so the comparison covers the same rows on both sides.
+        flags.append("-fno-eliminate-unused-debug-types")
+    else:
+        # Clang does not know this GCC warning switch and says so per file.
+        flags.insert(3, "-Wno-builtin-declaration-mismatch")
+    flags += list(extra)
     flags += ["-I" + str(path) for path in include]
     for tu in sorted(tus):
         source = WINE_SRC / "dlls/wined3d" / tu
         output = arm_dir / (pathlib.Path(tu).stem + ".o")
-        subprocess.run(["arm-linux-gnueabihf-gcc", *flags, str(source), "-o", str(output)], check=True)
+        subprocess.run([cc, *flags, str(source), "-o", str(output)], check=True)
 
 
 def changed(left, right):
@@ -299,6 +330,11 @@ def main():
                         default=WINE_BUILD / "dlls/wined3d/i386-windows")
     parser.add_argument("--arm-dir", type=pathlib.Path, default=pathlib.Path("/tmp/mgs2-island-abi-arm"))
     parser.add_argument("--build-arm", action="store_true")
+    parser.add_argument("--arm-cc", default=os.environ.get("ISLAND_ARM_CC",
+                                                          "arm-linux-gnueabihf-gcc"),
+                        help="compiler for --build-arm; e.g. clang-18")
+    parser.add_argument("--arm-extra-cflag", action="append", default=[],
+                        help="extra flag for --build-arm; repeatable")
     parser.add_argument("--all", action="store_true", help="print equal UNKNOWN rows too")
     parser.add_argument("--self-test", action="store_true",
                         help="require proven entries 10/23/38 to pass and p69 to fail")
@@ -315,7 +351,9 @@ def main():
         for label, control_root, expected_rc in controls:
             command = [sys.executable, __file__, args.binary, "--root", control_root,
                        "--entries", args.entries, "--i386-dir", str(args.i386_dir),
-                       "--arm-dir", str(args.arm_dir)]
+                       "--arm-dir", str(args.arm_dir), "--arm-cc", args.arm_cc]
+            for flag in args.arm_extra_cflag:
+                command += ["--arm-extra-cflag", flag]
             if args.build_arm:
                 command.append("--build-arm")
             result = subprocess.run(command, capture_output=True, text=True)
@@ -346,7 +384,7 @@ def main():
         synthetic_bodies[synthetic] = phase["body"]
     tus = set(functions_by_tu)
     if args.build_arm:
-        build_arm_objects(tus, args.arm_dir)
+        build_arm_objects(tus, args.arm_dir, args.arm_cc, args.arm_extra_cflag)
 
     records = []
     missing_objects = []
@@ -400,6 +438,8 @@ def main():
     hard = [r for r in records if r["changed"] and r["class"] in {"guest-owned", "shared"}]
     mismatch = [r for r in records if r["changed"]]
     print("root %s; closure %d functions in %d translation units" % (root, len(closure), len(tus)))
+    if args.arm_cc != "arm-linux-gnueabihf-gcc" or args.arm_extra_cflag:
+        print("ARM objects built by %s %s" % (args.arm_cc, " ".join(args.arm_extra_cflag)))
     print("transitive aggregate rows %d; mismatches %d; hard failures %d\n" %
           (len(records), len(mismatch), len(hard)))
     for record in records:
@@ -423,10 +463,23 @@ def main():
         expected = {"texture_stage_op", "ffp_frag_settings", "ffp_frag_desc",
                     "glsl_ffp_fragment_shader"}
         seen_hard = {r["type"] for r in hard}
-        print("control: known MS-bitfield propagation detected: " +
-              ("PASS" if expected <= seen_hard else "FAIL, missing "
-               + ", ".join(sorted(expected - seen_hard))))
-        if "shader_glsl_apply_draw_state" not in closure or not expected <= seen_hard:
+        # With a GNU-layout ARM compiler these four types MUST show up as hard
+        # failures: that is the known defect and the control that proves the
+        # audit still sees it. With an MS-layout ARM compiler the same four must
+        # be absent, and finding any of them means the flag did not take effect.
+        # Both directions are real controls; neither may be skipped.
+        ms_layout = any("ms-bitfields" in flag for flag in args.arm_extra_cflag)
+        if ms_layout:
+            ok = not (expected & seen_hard)
+            print("control: MS-layout ARM removes the known bitfield chain: " +
+                  ("PASS" if ok else "FAIL, still hard: "
+                   + ", ".join(sorted(expected & seen_hard))))
+        else:
+            ok = expected <= seen_hard
+            print("control: known MS-bitfield propagation detected: " +
+                  ("PASS" if ok else "FAIL, missing "
+                   + ", ".join(sorted(expected - seen_hard))))
+        if "shader_glsl_apply_draw_state" not in closure or not ok:
             return 2
     print("admission: %s" % ("FAIL" if hard else "PASS"))
     return 1 if hard else 0

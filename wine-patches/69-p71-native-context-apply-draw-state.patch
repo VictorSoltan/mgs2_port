@@ -1,0 +1,45 @@
+Patch 69 -- p71: the whole context_apply_draw_state() native, on an MS-layout island.
+
+Rejected by measurement, kept because the rejection is the result. Entry 39's
+boundary was retried on an island built by clang -mms-bitfields, so the nine hard
+ABI failures that invalidated p69 are gone. It still rendered black: the bounded
+shader witness read current program 0, program pipeline 0 and
+GL_INVALID_OPERATION in 171 of 171 samples. The island links a second copy of
+glsl_shader.c, whose nine separable-program entry pointers are its own, so the
+native shader phase bound nothing. Phase D references all nine; B and C none.
+
+Section 13.3 of docs/briefs/MGS2_PHASE_A_NATIVE_MEASURED_2026-08-21.md has the
+run. Do not re-apply without solving the duplicated separable pointers first.
+
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -5339,6 +5339,7 @@
+     unsigned int i, idx_size = 0;
+     const void *idx_data = NULL;
+     struct mgs2_draw_primitive_arrays_args mgs2_draw_args;
++    struct mgs2_apply_draw_state_args mgs2_apply_args;
+ 
+     TRACE("device %p, state %p, parameters %p.\n", device, state, parameters);
+ 
+@@ -5424,7 +5425,20 @@
+         mgs2_batch_flush();
+     }
+ 
+-    if (!context_apply_draw_state(context, device, state, parameters->indexed))
++    /* p71: the whole draw-state application is one native root again, this time
++     * on an island built with the guest's MSVC field offsets. Guest x86 keeps
++     * everything around it -- context_acquire(), current-context ownership,
++     * render-target/depth preparation, the final draw, barriers and
++     * context_release() -- exactly as p69 did; only the compiler under the
++     * boundary changed. Phase A's entry stays compiled inside it and is reached
++     * natively, with no second crossing. */
++    mgs2_apply_args.context = context;
++    mgs2_apply_args.device = device;
++    mgs2_apply_args.state = state;
++    mgs2_apply_args.indexed = parameters->indexed;
++    mgs2_apply_args.result = FALSE;
++    mgs2_context_apply_draw_state_island(&mgs2_apply_args);
++    if (!mgs2_apply_args.result)
+     {
+         context_release(context);
+         WARN("Unable to apply draw state, skipping draw.\n");

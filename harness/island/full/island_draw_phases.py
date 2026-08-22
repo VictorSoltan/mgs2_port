@@ -44,7 +44,11 @@ def phase_spec(name, bodies=None):
         raise ValueError("unknown draw-state phase %s" % name)
     bodies = bodies or island_icall_audit.functions_by_file()
     if name == "A":
-        _filename, first, lines = bodies["mgs2_draw_state_phase_a_island"]
+        # p70b split the marked entry from the transaction it performs, so the
+        # contiguous span lives in the body function when that exists.
+        entry = ("mgs2_draw_state_phase_a_body" if "mgs2_draw_state_phase_a_body" in bodies
+                 else "mgs2_draw_state_phase_a_island")
+        _filename, first, lines = bodies[entry]
         last = lines[-1][0]
     else:
         _filename, _start, function_body = bodies["context_apply_draw_state"]
@@ -57,7 +61,7 @@ def phase_spec(name, bodies=None):
     roots = {match.group(1) for text in syntax for match in call_re.finditer(text)
              if match.group(1) in bodies}
     if name == "A":
-        roots.add("mgs2_draw_state_phase_a_island")
+        roots.add(entry)
     elif name == "B":
         roots.update(_state_apply_targets(bodies))
     elif name == "D":

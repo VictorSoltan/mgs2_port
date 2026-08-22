@@ -1,0 +1,286 @@
+Patch 15 -- p71/p72 bridges: the clang-MS island, entry 41, and two witnesses.
+
+Incremental after patch 14 and Wine patches 69-70.
+
+Entry 39 gains the p71 bounded shader witness: one sample every 4,096 native
+applications reads GL_CURRENT_PROGRAM, GL_PROGRAM_PIPELINE_BINDING and
+GL_DRAW_FRAMEBUFFER_BINDING plus glGetError, and counts zero-program and
+GL-error samples. That witness is what turned p71's black frame from "the
+boundary does not work" into "nothing was bound, and here is the object that
+explains why". Memory only, no stderr, no per-draw cost.
+
+Entry 41 is the fused A+B+C root: one pointer to a guest-stack argument object,
+no result, failing closed to the guest body when the TLS guard is unavailable.
+Its p72 record counts applications and guest fallbacks; arming it is how a
+non-diagnostic candidate build proves its route is live at all, since the
+"entry matched" line exists only in the diagnostics build.
+
+mgs2_ab_guest_capable() now lists entry 41 alongside 38 and 40, so the symmetric
+guest-side selector works for the fused root with one registration path.
+
+Build the island with clang for the MS layout, and regenerate the Class-B table
+when doing so: clang inlines more, so the table is ~1,548 ids rather than GCC's
+1,616, and a stale table would leave reachable slots without a native target.
+
+--- a/src/mgs2_island_bridges.c
++++ b/src/mgs2_island_bridges.c
+@@ -195,6 +195,97 @@
+     ~MGS2_P69_CORRECTNESS_MAGIC,
+ };
+ 
++#define MGS2_P71_WITNESS_MAGIC 0x31375750u /* PW71 */
++#define MGS2_P71_WITNESS_INTERVAL 4096u
++
++/* p71 bounded shader witness. Not per-draw: one sample every 4096 native
++ * draw-state applications, which is a few times per second at this route's call
++ * rate. It records what the driver actually has bound after the native root
++ * returns, plus how often that program was zero -- the shape a mis-read FFP
++ * cache id would produce. No stderr output at any point. */
++struct mgs2_p71_witness_public
++{
++    uint32_t magic, version, size_words, signature;
++    uint32_t enabled, samples, resolved;
++    uint32_t last_program, last_pipeline, last_framebuffer, last_gl_error;
++    uint32_t zero_program_samples, gl_error_samples;
++};
++
++__attribute__((visibility("default")))
++struct mgs2_p71_witness_public mgs2_p71_witness =
++{
++    MGS2_P71_WITNESS_MAGIC, 1,
++    sizeof(struct mgs2_p71_witness_public) / sizeof(uint32_t),
++    ~MGS2_P71_WITNESS_MAGIC,
++};
++
++void mgs2_island_shader_witness_impl(unsigned int *out);   /* mgs2_island_gl.c */
++
++static int mgs2_p71_witness_on(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        const char *value = getenv("MGS2_P71_WITNESS");
++
++        enabled = value && strcmp(value, "0");
++        mgs2_p71_witness.enabled = enabled;
++    }
++    return enabled;
++}
++
++static void mgs2_p71_witness_sample(void)
++{
++    unsigned int out[5] = { 0, 0, 0, 0, 0 };
++
++    mgs2_island_shader_witness_impl(out);
++    mgs2_p71_witness.resolved = out[0];
++    if (!out[0])
++        return;
++    mgs2_p71_witness.last_program = out[1];
++    mgs2_p71_witness.last_pipeline = out[2];
++    mgs2_p71_witness.last_framebuffer = out[3];
++    mgs2_p71_witness.last_gl_error = out[4];
++    if (!out[1])
++        ++mgs2_p71_witness.zero_program_samples;
++    if (out[4])
++        ++mgs2_p71_witness.gl_error_samples;
++    ++mgs2_p71_witness.samples;
++}
++
++#define MGS2_P72_CORRECTNESS_MAGIC 0x32374350u /* PC72 */
++
++/* p72 fused root: phases A+B+C in one native transaction, shader phase D and
++ * everything around it guest. Memory-only counters, no stderr. */
++struct mgs2_p72_correctness_public
++{
++    uint32_t magic, version, size_words, signature;
++    uint32_t enabled, calls, guest_fallbacks;
++};
++
++__attribute__((visibility("default")))
++struct mgs2_p72_correctness_public mgs2_p72_correctness =
++{
++    MGS2_P72_CORRECTNESS_MAGIC, 1,
++    sizeof(struct mgs2_p72_correctness_public) / sizeof(uint32_t),
++    ~MGS2_P72_CORRECTNESS_MAGIC,
++};
++
++static int mgs2_p72_correctness_on(void)
++{
++    static int enabled = -1;
++
++    if (enabled == -1)
++    {
++        const char *value = getenv("MGS2_P72_CORRECTNESS");
++
++        enabled = value && strcmp(value, "0");
++        mgs2_p72_correctness.enabled = enabled;
++    }
++    return enabled;
++}
++
+ static int mgs2_p69_correctness_on(void)
+ {
+     static int enabled = -1;
+@@ -568,6 +659,9 @@
+         ((void (*)(void *))fnc)(a);
+         if (mgs2_p69_correctness_on() && a && !a->result)
+             ++mgs2_p69_correctness.false_returns;
++        if (mgs2_p71_witness_on()
++                && !(mgs2_p69_correctness.calls % MGS2_P71_WITNESS_INTERVAL))
++            mgs2_p71_witness_sample();
+     }
+     else
+     {
+@@ -619,6 +713,44 @@
+     }
+ }
+ 
++/* p72 entry 41. One pointer to a guest-stack argument object, no result: the
++ * only failure path in draw-state application is the framebuffer-attachment
++ * check, and that stays in the guest above this boundary. Fails closed to the
++ * guest body when the TLS guard is unavailable, exactly as entry 40 did. */
++static void mgs2_island_w41_vFp(x86emu_t *emu, uintptr_t fnc)
++{
++    struct mgs2_fused_abc_args32
++    {
++        uint32_t context, device, state, indexed, ab_control;
++    };
++    uint32_t esp = GetESP(emu);
++    void *a = *(void **)(esp + 4);
++    int routed;
++
++    /* p72b: register the guest-side selector from its first routed call. Once
++     * registered, guest x86 enters this bridge only for the routed arm and calls
++     * the transaction body directly for the control arm. */
++    mgs2_island_ab_register_guest(41,
++            (void *)(uintptr_t)((const struct mgs2_fused_abc_args32 *)a)->ab_control);
++    routed = mgs2_island_ab_guest_selector(41) ? 1 : mgs2_island_ab_route(41);
++
++    if (routed && mgs2_island_context_tls_sync() == 1)
++    {
++        if (mgs2_p72_correctness_on())
++            ++mgs2_p72_correctness.calls;
++        ((void (*)(void *))fnc)(a);
++    }
++    else
++    {
++        uintptr_t guest = mgs2_island_entry_guest(41);
++
++        if (mgs2_p72_correctness_on())
++            ++mgs2_p72_correctness.guest_fallbacks;
++        if (guest)
++            RunFunctionFmt(guest, "p", a);
++    }
++}
++
+ static void mgs2_island_w_vFppppi(x86emu_t *emu, uintptr_t fnc)
+ {
+     uint32_t esp = GetESP(emu);
+@@ -700,6 +832,7 @@
+ extern void mgs2_draw_primitive_arrays_island(void);
+ extern void mgs2_context_apply_draw_state_island(void);
+ extern void mgs2_draw_state_phase_a_island(void);
++extern void mgs2_draw_state_abc_island(void);
+ 
+ const struct mgs2_island_entry mgs2_island_entries[] = {
+     { 0, (void *)mgs2_island_w_vFpu, (void *)context_invalidate_compute_state },
+@@ -741,5 +874,6 @@
+     { 38, (void *)mgs2_island_w38_vFp, (void *)mgs2_draw_primitive_arrays_island },
+     { 39, (void *)mgs2_island_w39_vFp, (void *)mgs2_context_apply_draw_state_island },
+     { 40, (void *)mgs2_island_w40_vFp, (void *)mgs2_draw_state_phase_a_island },
++    { 41, (void *)mgs2_island_w41_vFp, (void *)mgs2_draw_state_abc_island },
+ };
+-const unsigned int mgs2_island_entry_count = 39;
++const unsigned int mgs2_island_entry_count = 40;
+--- a/src/mgs2_island_ab.c
++++ b/src/mgs2_island_ab.c
+@@ -135,15 +135,25 @@
+     return (frame % MGS2_AB_BLOCK) >= MGS2_AB_SETTLE;
+ }
+ 
+-/* Register the p68 guest-side selector from its first routed call. The
+- * control block is statically allocated by WineD3D and remains live for the
+- * process lifetime. Validate every layout witness before publishing into it;
+- * a mismatched research DLL falls back to the ordinary wrapper A/B. */
++/* Which entries ship a guest-side symmetric selector: 38 is the p68 draw tail,
++ * 40 the p70b draw-state phase A. Both publish the identical control layout, so
++ * one validated registration path serves them; anything else keeps the ordinary
++ * wrapper A/B. */
++static int mgs2_ab_guest_capable(unsigned int entry)
++{
++    return entry == 38 || entry == 40 || entry == 41;
++}
++
++/* Register the guest-side selector from its first routed call. The control
++ * block is statically allocated by WineD3D and remains live for the process
++ * lifetime. Validate every layout witness before publishing into it; a
++ * mismatched research DLL falls back to the ordinary wrapper A/B. */
+ void mgs2_island_ab_register_guest(unsigned int entry, void *ptr)
+ {
+     struct mgs2_ab_guest_control *control = ptr;
+ 
+-    if (!mgs2_island_ab_enabled || entry != mgs2_ab_entry || entry != 38 || mgs2_ab_guest)
++    if (!mgs2_island_ab_enabled || entry != mgs2_ab_entry
++            || !mgs2_ab_guest_capable(entry) || mgs2_ab_guest)
+         return;
+     if (!control || control->magic != MGS2_AB_GUEST_MAGIC || control->version != 1
+             || control->size_words != sizeof(*control) / sizeof(uint32_t)
+@@ -156,12 +166,14 @@
+     __atomic_store_n(&control->route, mgs2_ab_which(mgs2_ab_frame) == 0, __ATOMIC_RELEASE);
+     __atomic_store_n(&control->settled, mgs2_ab_settled(mgs2_ab_frame), __ATOMIC_RELEASE);
+     __atomic_store_n(&control->enabled, 1, __ATOMIC_RELEASE);
+-    printf_log(LOG_NONE, "MGS2 A/B: entry 38 symmetric guest selector registered at %p\n", control);
++    printf_log(LOG_NONE, "MGS2 A/B: entry %u symmetric guest selector registered at %p\n",
++            entry, control);
+ }
+ 
+ int mgs2_island_ab_guest_selector(unsigned int entry)
+ {
+-    return mgs2_island_ab_enabled && entry == mgs2_ab_entry && entry == 38 && mgs2_ab_guest;
++    return mgs2_island_ab_enabled && entry == mgs2_ab_entry
++            && mgs2_ab_guest_capable(entry) && mgs2_ab_guest;
+ }
+ 
+ /*
+--- a/src/mgs2_island_gl.c
++++ b/src/mgs2_island_gl.c
+@@ -17,6 +17,8 @@
+ #define GL_ELEMENT_ARRAY_BUFFER_BINDING 0x8895
+ #define GL_VIEWPORT                     0x0BA2
+ #define GL_ACTIVE_TEXTURE               0x84E0
++#define GL_PROGRAM_PIPELINE_BINDING     0x825A
++#define GL_DRAW_FRAMEBUFFER_BINDING     0x8CA6
+ 
+ typedef unsigned int GLenum;
+ typedef int GLint;
+@@ -73,3 +75,29 @@
+     out[7] = (unsigned)v[2]; out[8] = (unsigned)v[3];
+     out[9] = (unsigned)p_glGetError();
+ }
++
++
++/* p71 shader witness. The p69 boundary died because native code read a shared
++ * FFP cache node's `id` 32 bytes early, so the program actually bound is the
++ * thing to watch when that boundary is tried again on an MS-layout island.
++ *
++ * Sampled, never per-draw: the caller decides the interval. Read-only, three
++ * glGetIntegerv calls plus one glGetError.
++ *
++ * out[0] resolved flag, [1] current program, [2] program pipeline,
++ * [3] draw framebuffer, [4] glGetError result. */
++void mgs2_island_shader_witness_impl(unsigned int *out)
++{
++    GLint v[4] = { 0, 0, 0, 0 };
++
++    if (!out)
++        return;
++    mgs2_island_gl_resolve();
++    out[0] = p_glGetIntegerv && p_glGetError;
++    if (!out[0])
++        return;
++    p_glGetIntegerv(GL_CURRENT_PROGRAM, v);          out[1] = (unsigned)v[0];
++    p_glGetIntegerv(GL_PROGRAM_PIPELINE_BINDING, v); out[2] = (unsigned)v[0];
++    p_glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, v); out[3] = (unsigned)v[0];
++    out[4] = (unsigned)p_glGetError();
++}

@@ -34,6 +34,8 @@ THREE CONTROLS, PRINTED WHETHER OR NOT THEY PASS
 usage: island_ab_read.py <launch log> [--tolerance 0.02] [--all]
 """
 import argparse
+import math
+import random
 import re
 import statistics
 import sys
@@ -70,6 +72,52 @@ def read(path):
     return cycles, armed, frames, stats_ms
 
 
+def work_normalised(cycles, iterations=20000, seed=20260822):
+    """Per-call cost difference, using every cycle instead of only balanced ones.
+
+    WHY THIS EXISTS, AND WHAT IT COSTS
+
+    The balanced-cycle median is the primary metric and stays that.  It needs the
+    two arms to do the same amount of work inside one cycle, which a scene that
+    drifts faster than a block simply never provides: the p72b session yielded 5
+    balanced cycles out of 28, with a spread that says nothing.
+
+    This estimator divides each arm's frame time by that arm's calls per frame,
+    so scene weight cancels instead of disqualifying the cycle.  Its assumption
+    is that frame time scales with the number of native applications -- true for
+    a draw-bound renderer, false for a frame dominated by something else -- and
+    the confidence interval does NOT cover that assumption, only sampling noise.
+
+    The sign test is reported separately because it survives the assumption: it
+    asks only whether the routed arm was cheaper per call, cycle by cycle.
+    """
+    per = []
+    for c in cycles:
+        if not c["routed_calls"] or not c["unrouted_calls"]:
+            continue
+        routed = c["routed"] / (c["routed_calls"] / c["routed_n"])
+        unrouted = c["unrouted"] / (c["unrouted_calls"] / c["unrouted_n"])
+        per.append((routed - unrouted,
+                    (c["routed_calls"] / c["routed_n"]
+                     + c["unrouted_calls"] / c["unrouted_n"]) / 2))
+    if len(per) < 2:
+        return None
+    deltas = [item[0] for item in per]
+    workload = statistics.median([item[1] for item in per])
+    n = len(deltas)
+    favour = sum(1 for value in deltas if value < 0)
+    tail = sum(math.comb(n, k) for k in range(favour, n + 1))
+    p_value = min(1.0, 2.0 * tail / 2 ** n)
+
+    rng = random.Random(seed)
+    boot = sorted(statistics.median(rng.choices(deltas, k=n)) * workload
+                  for _ in range(iterations))
+    return dict(n=n, favour=favour, p=p_value, workload=workload,
+                median=statistics.median(deltas) * workload,
+                lo=boot[int(0.025 * iterations)], hi=boot[int(0.975 * iterations)],
+                below_one=sum(1 for b in boot if b < -1.0) / iterations)
+
+
 def spread(values):
     if not values:
         return None
@@ -95,6 +143,12 @@ def main():
     ap.add_argument("--tolerance", type=float, default=0.02,
                     help="max relative call-count imbalance for a balanced cycle")
     ap.add_argument("--all", action="store_true", help="print every cycle")
+    ap.add_argument("--min-calls", type=int,
+                    help="high-call subset: balanced cycles with at least this "
+                         "many routed calls (default: the balanced median)")
+    ap.add_argument("--plateau-width", type=float, default=0.05,
+                    help="a plateau is the largest group of balanced cycles whose "
+                         "routed call counts sit within this fraction of each other")
     args = ap.parse_args()
 
     cycles, armed, frames, stats_ms = read(args.log)
@@ -146,6 +200,44 @@ def main():
               f"   ->  {1000 / r - 1000 / u:+.2f} fps at this spot")
         favour = sum(1 for c in balanced if c["diff"] < 0)
         print(f"sign: {favour} of {len(balanced)} balanced cycles favour routed")
+
+    # A single median over a whole session mixes scenes. The pre-registered
+    # secondary metrics are therefore the repeated call-count plateau -- the
+    # largest cluster of balanced cycles at one workload -- and the high-call
+    # half, which is where the entry is actually hot. Neither replaces the
+    # balanced median; they say whether it is carried by one scene.
+    if balanced:
+        counts = sorted(c["routed_calls"] for c in balanced)
+        best = []
+        for anchor in counts:
+            group = [c for c in balanced
+                     if anchor <= c["routed_calls"] <= anchor * (1 + args.plateau_width)]
+            if len(group) > len(best):
+                best = group
+        if len(best) > 1:
+            lo = min(c["routed_calls"] for c in best)
+            hi = max(c["routed_calls"] for c in best)
+            show(f"plateau {lo}-{hi}", spread([c["diff"] for c in best]))
+            favour = sum(1 for c in best if c["diff"] < 0)
+            print(f"{'':<22} {favour} of {len(best)} favour routed")
+        cut = args.min_calls if args.min_calls is not None else statistics.median(counts)
+        high = [c for c in balanced if c["routed_calls"] >= cut]
+        if high and len(high) != len(balanced):
+            show(f"high-call (>={int(cut)})", spread([c["diff"] for c in high]))
+            favour = sum(1 for c in high if c["diff"] < 0)
+            print(f"{'':<22} {favour} of {len(high)} favour routed")
+
+    work = work_normalised(cycles)
+    if work:
+        print("\nwork-normalised (all %d cycles, scene weight divided out):" % work["n"])
+        print("  routed cheaper per call in %d of %d  (exact two-sided sign test p=%.4g)"
+              % (work["favour"], work["n"], work["p"]))
+        print("  effect at %.0f calls/frame: median %+.2f ms/frame,"
+              " 95%% bootstrap CI [%+.2f, %+.2f]"
+              % (work["workload"], work["median"], work["lo"], work["hi"]))
+        print("  bootstrap medians below -1.0 ms/frame: %.0f%%" % (100 * work["below_one"]))
+        print("  ASSUMES frame time scales with call count; the CI covers sampling"
+              " noise only.\n  The sign test does not depend on that assumption.")
 
     print()
     if silent:

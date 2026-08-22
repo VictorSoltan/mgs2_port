@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """Writable ELF objects referenced by one native-island entry closure.
 
+TWO MODES, AND WHY THE SECOND ONE EXISTS
+
+The original mode decodes literal pools in the linked binary.  That silently
+stops working when the island objects are position-independent: a PIC reference
+to a writable object goes through the GOT, so the literal points at a GOT slot
+and the analyser reports ZERO referenced objects -- which reads exactly like a
+clean root.  The Clang island build is PIC (and links, while -fno-pic makes
+ld.bfd segfault), so ``--from-objects DIR`` reads the objects' own relocation
+tables instead: relocation offsets are mapped to the containing function symbol,
+and each relocation target that resolves to a writable section in the linked
+binary is reported.  That mode is addressing-model independent.
+
 The ARM island links a second copy of WineD3D's translation units into Box86.
 Any mutable file-scope object used by both guest and ARM may therefore diverge.
 This audit starts at an island entry, builds the same direct/source/ops closure
@@ -237,18 +249,70 @@ def referenced_objects(binary, closure, sec, objects):
     return hits
 
 
+def object_relocation_hits(objects_dir, binary, sec, writable, closure):
+    """Writable objects referenced by closure functions, from object relocations.
+
+    Reads ``objdump -dr``: the disassembly gives the containing function and the
+    interleaved relocation lines give the symbol the compiler asked the linker
+    to resolve.  This sees GOT, REL32 and ABS32 references alike, so it does not
+    depend on the instruction shape a particular compiler emits for a global.
+    """
+    by_name = {}
+    for obj in writable:
+        _address, _size, name, _section, _binding = obj
+        by_name.setdefault(name, obj)
+
+    section_relative = collections.Counter()
+    function = re.compile(r"^[0-9a-f]+ <([^>]+)>:")
+    relocation = re.compile(r"^\s+([0-9a-f]+):\s+R_ARM_\S+\s+(\S+)")
+    hits = collections.defaultdict(list)
+    for path in sorted(pathlib.Path(objects_dir).glob("*.o")):
+        current = None
+        for line in run("arm-linux-gnueabihf-objdump", "-dr", str(path)).splitlines():
+            match = function.match(line)
+            if match:
+                current = CLONE.sub("", match.group(1))
+                continue
+            match = relocation.match(line)
+            if not match or current not in closure:
+                continue
+            symbol = match.group(2).split("+")[0].split("-")[0]
+            if symbol in (".bss", ".data", ".tbss", ".rodata"):
+                # Section-relative with the addend stored in the instruction
+                # stream: this names no symbol, so the object alone cannot say
+                # which file-local variable it is. Counted, not guessed.
+                section_relative[symbol] += 1
+                continue
+            target = by_name.get(symbol)
+            if target is not None:
+                hits[target].append((current, int(match.group(1), 16), "reloc"))
+    if section_relative:
+        print("coverage: %d section-relative references carry no symbol name (%s);"
+              % (sum(section_relative.values()),
+                 ", ".join("%s=%d" % item for item in sorted(section_relative.items()))))
+        print("          those file-local objects are NOT covered by this mode --"
+              " compare the island's writable symbol set instead")
+    return hits
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("binary", help="unstripped ARM Box86 linked with --emit-relocs")
     ap.add_argument("--entry", type=int, default=37)
     ap.add_argument("--root", help="audit this symbol directly instead of resolving --entry")
     ap.add_argument("--entries", default="/mnt/data/holden/mgs/box86-src/src/mgs2_island_bridges.c")
+    ap.add_argument("--from-objects", metavar="DIR",
+                    help="read the island objects' relocations instead of decoding "
+                         "literals; required for a PIC island build")
     args = ap.parse_args()
 
     sec = sections(args.binary)
     objects = writable_objects(args.binary, sec)
     root, closure = source_closure(args.binary, args.entry, args.entries, args.root)
-    hits = referenced_objects(args.binary, closure, sec, objects)
+    if args.from_objects:
+        hits = object_relocation_hits(args.from_objects, args.binary, sec, objects, closure)
+    else:
+        hits = referenced_objects(args.binary, closure, sec, objects)
 
     rows = []
     for obj, sites in hits.items():
@@ -258,7 +322,9 @@ def main():
     rows.sort()
 
     print("entry %d root %s" % (args.entry, root) if not args.root else "root %s" % root)
-    print("closure %d functions; %d referenced writable objects\n" % (len(closure), len(rows)))
+    print("closure %d functions; %d referenced writable objects%s\n"
+          % (len(closure), len(rows),
+             " (from object relocations)" if args.from_objects else ""))
     for _constant, name, address, size, section, binding, sites in rows:
         label = "RUNTIME" if section in (".bss", ".tbss") else "REVIEW"
         callers = sorted({fn for fn, _address, _method in sites})
