@@ -1,4 +1,4 @@
-# MGS2 Substance on the Anbernic RG353VS — FINALPLAY8
+# MGS2 Substance on the Anbernic RG353VS — FINALPLAY9
 
 Promoted 22 August 2026, replacing FINALPLAY6's `island41` / `p56` pair. The
 owner authorised promotion after playing the exact binaries below for 144
@@ -11,7 +11,8 @@ box86      box86-island58-p75a-steady
            2d7547b2671e16810ed31a7306aaea6b01a7dbe129f206468cf7d841a19dee4b
 wined3d    wined3d_p75a_steady.dll
            382649257b754d88adb27af02a2b447a43a38adfea5b359ec55bbb874bfa9a0d
-presenter  winewayland_stall1.so   (unchanged)
+presenter  winewayland_dmabuf_prod.so   (MGS2_GL_DMABUF=1, SYNC=3)
+           51879e2d706d434e...
 island     0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41
 ```
 
@@ -53,6 +54,57 @@ Entry 41, the fused A+B+C draw-state root (p72c), ships with it. It was a
 candidate before today and is promoted here only because the validated session
 ran with exactly this island list; its own magnitude remains the post-hoc
 estimate of -4.8 ms and is NOT claimed as measured.
+
+## The presenter, added on top of FINALPLAY8 the same evening
+
+The frame is blitted GPU-to-GPU into a dma-buf from `/dev/dma_heap/linux,cma` and
+handed to sway by file descriptor, instead of being read back through the CPU
+into a wl_shm buffer. The GPU write fence is imported into the buffer with
+`DMA_BUF_IOCTL_IMPORT_SYNC_FILE`, so the compositor waits for the blit and the
+game does not -- sway advertises no explicit-synchronization protocol, and
+without that import the picture tears like vsync off.
+
+```text
+measured on FINALPLAY8, same-process ABBA, 12-frame blocks, owner playing
+    shm arm      71.03 ms (14.08 fps)
+    delta        -9.45 ms/frame, 95% CI [-10.95, -8.29]
+    fps          14.08 -> 16.24
+    p95/p99      -9.65 ms
+    sign test    19 of 20 cycles, p<0.0001
+    negative control +0.020 ms
+    fence fail create/dup/import 0/0/0
+```
+
+The win survived P75A and its interval halved against the pre-FINALPLAY8
+measurement, so the present path and the selector path are independent.
+
+`MGS2_GL_DMABUF=0` falls back to the shm presenter at runtime, and
+`winewayland_stall1.so` is untouched on the device.
+
+### Why this shipped with the stability question OPEN
+
+Two hangs on 2026-08-22 were caught on dmabuf builds. A paired soak was run to
+find out whether it hitches more than shm -- same session, interleaved arms,
+startup excluded by a rule fixed in advance, and only the >200 ms and >500 ms
+buckets compared, because at 15 fps every ordinary frame exceeds 50 ms and the
+slower arm would otherwise look like it hitches constantly.
+
+```text
+7 complete cycles, arms balanced at 3528 frames each
+per 1000 frames      >200 ms   >500 ms
+    shm                 1.42      0.57
+    dmabuf              0.57      0.28
+    difference        -0.850    -0.283      (dmabuf hitches LESS)
+no freeze during the soak
+```
+
+**The pre-declared gate of ten cycles was NOT met, and this is not a clean
+bill.** Behind those rates are single-digit event counts -- 5 against 2, and 2
+against 1 -- and five minutes of dmabuf arms cannot measure a hang rate of about
+two per day. What the soak establishes is only that there is no evidence of harm
+and that the direction favours dmabuf. It was promoted on the owner's decision
+with that stated, because the win is large, the rollback is one line, and
+ordinary play continues the soak.
 
 ## What is still open on this release
 

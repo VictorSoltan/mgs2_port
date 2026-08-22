@@ -30,7 +30,13 @@ import sys
 import time
 
 MAGIC = 0x314C4743          # 'CGL1' -- the family record
-EXT_MAGIC = 0x314C4758      # 'XGL1' -- the per-function histogram
+EXT_MAGIC = 0x314C4758      # 'XGL1' -- the old ext-only histogram
+CALL_MAGIC = 0x324C4758     # 'XGL2' -- ext + core + project-local, by name
+CALL_NAME = 48
+CALL_SITE = CALL_NAME + 4
+LGT_MAGIC = 0x3154474C      # 'LGT1' -- FFP light uniform redundancy simulator
+LCA_MAGIC = 0x3141434C      # 'LCA1' -- the real FFP light-colour cache
+UCT_MAGIC = 0x31544355      # 'UCT1' -- measured cost of one GL call on this stack
 EXT_NAME = 40               # sizeof(mgs2_ext_site.name)
 EXT_SITE = EXT_NAME + 4
 SHADOW_MAGIC = 0x314C4753   # 'SGL1' -- the shadow simulator
@@ -98,6 +104,50 @@ def find_records(pid):
     return hits
 
 
+def find_call_records(pid):
+    """Every XGL2 record: the guest DLL and the island's copy. Both must be
+    summed -- work routed natively increments the island's counters, and a
+    reader that finds one copy silently under-reports exactly the paths the
+    island exists to accelerate."""
+    head = struct.pack("<I", CALL_MAGIC)
+    hits = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            start = 0
+            while True:
+                i = blob.find(head, start)
+                if i < 0:
+                    break
+                start = i + 4
+                if len(blob) - i < 16:
+                    continue
+                ver, cap, used = struct.unpack("<III", blob[i + 4:i + 16])
+                if ver != 1 or not (1 <= cap <= 8192) or used > cap:
+                    continue
+                hits.append((lo + i, name))
+    return hits
+
+
+def sample_calls(pid, addrs):
+    out = {}
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for a, _ in addrs:
+            mem.seek(a)
+            _, _, _, used = struct.unpack("<IIII", mem.read(16))
+            blob = mem.read(used * CALL_SITE)
+            for i in range(used):
+                rec = blob[i * CALL_SITE:(i + 1) * CALL_SITE]
+                name = rec[:CALL_NAME].split(b"\0")[0].decode("ascii", "replace")
+                n = struct.unpack("<I", rec[CALL_NAME:CALL_NAME + 4])[0]
+                out[name] = out.get(name, 0) + n
+    return out
+
+
 def find_ext_records(pid):
     """The per-function histogram. Its header is magic, version, capacity, used
     -- no inverted-magic tail -- so the match is on magic plus a version and a
@@ -145,6 +195,58 @@ def read_asp_stats(pid):
                 d = dict(zip(keys, w[4:]))
                 d["where"] = (name or "(anon)").split("/")[-1]
                 out.append(d)
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_uct_stats(pid):
+    """UCT1: (period, qpc_khz, samples[2], ticks_lo[2], ticks_hi[2], exec[2])."""
+    pat = struct.pack("<IIII", UCT_MAGIC, 1, 14, (~UCT_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, nm in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                out.append(struct.unpack("<14I", blob[i:i + 56])[4:])
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_lca_stats(pid):
+    pat = struct.pack("<IIII", LCA_MAGIC, 1, 11, (~LCA_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, nm in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                out.append(struct.unpack("<11I", blob[i:i + 44])[4:])
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_lgt_stats(pid):
+    pat = struct.pack("<IIII", LGT_MAGIC, 1, 9, (~LGT_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, nm in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                out.append(struct.unpack("<9I", blob[i:i + 36])[4:])
                 i = blob.find(pat, i + 4)
     return out
 
@@ -308,6 +410,7 @@ def main():
     for addr, name in addrs:
         print("  %#x  %s" % (addr, name or "(anonymous)"))
 
+    caddrs = find_call_records(a.pid)
     eaddrs = find_ext_records(a.pid)
     saddrs = find_shadow_records(a.pid)
     print("per-function histogram records: %d, shadow simulator records: %d"
@@ -316,16 +419,24 @@ def main():
     f0 = frames(a.log) if a.log else None
     before = sample(a.pid, addrs)
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
+    cbefore = sample_calls(a.pid, caddrs) if caddrs else {}
     sbefore = sample_shadow(a.pid, saddrs) if saddrs else {}
     a0 = read_attrib_stats(a.pid)
     t0 = read_txm_stats(a.pid)
+    l0 = read_lgt_stats(a.pid)
+    k0 = read_lca_stats(a.pid)
+    u0 = read_uct_stats(a.pid)
     s0 = read_asp_stats(a.pid)
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
     eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
+    cafter = sample_calls(a.pid, caddrs) if caddrs else {}
     safter = sample_shadow(a.pid, saddrs) if saddrs else {}
     a1 = read_attrib_stats(a.pid)
     t1 = read_txm_stats(a.pid)
+    l1 = read_lgt_stats(a.pid)
+    k1 = read_lca_stats(a.pid)
+    u1 = read_uct_stats(a.pid)
     s1 = read_asp_stats(a.pid)
     f1 = frames(a.log) if a.log else None
 
@@ -362,6 +473,96 @@ def main():
         if tot and total.get("ext_calls"):
             print("  (family counter said %d; histogram sums to %d)"
                   % (total["ext_calls"], tot))
+
+    if k0 and k1:
+        f = lambda rs, i: sum(r[i] for r in rs)
+        att = f(k1, 1) - f(k0, 1); skp = f(k1, 2) - f(k0, 2)
+        exe = f(k1, 3) - f(k0, 3); cold = f(k1, 4) - f(k0, 4)
+        chg = f(k1, 5) - f(k0, 5); noo = f(k1, 6) - f(k0, 6)
+        print("\nREAL FFP LIGHT CACHE (%d records, enabled=%s)"
+              % (len(k1), "/".join(str(r[0]) for r in k1)))
+        print("  attempted %d | skipped %d (%.1f%%) | executed %d"
+              % (att, skp, 100.0 * skp / att if att else 0, exe))
+        print("  misses: cold %d, changed %d, no owner %d" % (cold, chg, noo))
+        if nframes:
+            # One skip = one glUniform4fv not made. It was three while the cache
+            # was all-or-nothing per light; per-field counting makes it one.
+            print("  per frame: attempted %.1f, skipped %.1f (= GL calls removed)"
+                  % (att / nframes, skp / nframes))
+        print("  identity attempted == skipped + executed: %s"
+              % ("PASS" if att == skp + exe else "FAIL"))
+
+    if u1:
+        # Cumulative on purpose. This is a ratio of two means, so it wants the
+        # largest N available, and the arms alternate every few frames -- the
+        # whole run is already well mixed between them.
+        khz = max(r[1] for r in u1) or 1
+        per = max(r[0] for r in u1)
+        s_a = sum(r[2] for r in u1); s_b = sum(r[3] for r in u1)
+        t_a = sum(r[4] + (r[6] << 32) for r in u1)
+        t_b = sum(r[5] + (r[7] << 32) for r in u1)
+        e_a = sum(r[8] for r in u1); e_b = sum(r[9] for r in u1)
+        print("\nMEASURED GL CALL COST (%d records, 1 group in %d timed)"
+              % (len(u1), per))
+        if s_a and s_b:
+            us = lambda t, n: 1000.0 * t / khz / n     # ticks -> us per sample
+            ca, cb = us(t_a, s_a), us(t_b, s_b)
+            ea, eb = e_a / float(s_a), e_b / float(s_b)
+            print("  arm A (cache off): %6d groups, %7.3f us/group, %.3f uploads/group"
+                  % (s_a, ca, ea))
+            print("  arm B (cache on):  %6d groups, %7.3f us/group, %.3f uploads/group"
+                  % (s_b, cb, eb))
+            if ea - eb > 0.01:
+                cost = (ca - cb) / (ea - eb)
+                print("  => one glUniform4fv costs %.3f us on this stack" % cost)
+                if nframes and k0 and k1:
+                    skipped = sum(r[2] for r in k1) - sum(r[2] for r in k0)
+                    # k-window skips are split across arms; the steady build
+                    # skips in every frame, so scale by the arm-B frame share.
+                    sfr = skipped / nframes * (s_a + s_b) / float(s_b)
+                    print("  => %.0f calls/frame removed steady = %.2f ms/frame"
+                          % (sfr, sfr * cost / 1000.0))
+            else:
+                print("  arms uploaded the same amount: nothing to divide by")
+
+    if l0 and l1:
+        # Windowed, like every other counter here. Printing this one cumulatively
+        # was how a two-minute simulator delta got compared against a twenty-second
+        # histogram delta and produced an impossible ratio.
+        att = sum(r[0] for r in l1) - sum(r[0] for r in l0)
+        red = sum(r[1] for r in l1) - sum(r[1] for r in l0)
+        cold = sum(r[2] for r in l1) - sum(r[2] for r in l0)
+        chg = sum(r[3] for r in l1) - sum(r[3] for r in l0)
+        full = sum(r[4] for r in l1) - sum(r[4] for r in l0)
+        print("\nFFP LIGHT UNIFORM SIMULATOR (%d records, this window)" % len(l1))
+        print("  attempted %d | redundant %d (%.1f%%) | cold %d | changed %d | table full %d"
+              % (att, red, 100.0 * red / att if att else 0, cold, chg, full))
+        if nframes:
+            print("  per frame: attempted %.1f, removable %.1f"
+                  % (att / nframes, red / nframes))
+        print("  key is (vs_program_id, light, field) -- what GL attributes the")
+        print("  state to. Covers the three unconditional colour uniforms per")
+        print("  light (diffuse/specular/ambient), not the type-specific ones.")
+
+    if caddrs:
+        d = {k: cafter[k] - cbefore.get(k, 0) for k in cafter}
+        d = {k: v for k, v in d.items() if v > 0}
+        tot = sum(d.values())
+        fam = {}
+        for k, v in d.items():
+            fam[k.split(":", 1)[0]] = fam.get(k.split(":", 1)[0], 0) + v
+        print("\nALL GL CALLS BY NAME (%d records, %d live sites, %d calls)"
+              % (len(caddrs), len(d), tot))
+        print("  by family: " + ", ".join(
+            "%s %d (%.1f%%)%s" % (k, v, 100.0 * v / tot,
+                                  "  %.1f/frame" % (v / nframes) if nframes else "")
+            for k, v in sorted(fam.items(), key=lambda kv: -kv[1])))
+        print("  %-46s %10s %9s %6s" % ("call", "count",
+                                        "per frame" if nframes else "per sec", "share"))
+        for k in sorted(d, key=d.get, reverse=True)[:24]:
+            v = d[k]
+            rate = (v / nframes) if nframes else (v / a.seconds)
+            print("  %-46s %10d %9.1f %5.1f%%" % (k, v, rate, 100.0 * v / tot))
 
     if s1:
         def st(rs, k):

@@ -274,7 +274,14 @@ mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || ex
 # Diagnostics may select a separate presenter build, but normal play keeps the
 # measured production driver.  This is used by p67 only for a bounded,
 # memory-only frame-content witness; it does not change the production default.
-mount_bind "$GAMEDIR/${MGS2_WAYLAND_SO:-winewayland_stall1.so}" /usr/lib/wine/i386-unix/winewayland.so || exit 1
+# The dmabuf presenter. The frame is blitted GPU-to-GPU into a dma-buf and handed
+# to sway by FD instead of being read back through the CPU, and the GPU write
+# fence is imported into the buffer with DMA_BUF_IOCTL_IMPORT_SYNC_FILE so the
+# compositor waits instead of the game. Measured on FINALPLAY8: -9.45 ms/frame,
+# 19 of 20 paired cycles. MGS2_GL_DMABUF=0 falls back to the shm presenter.
+export MGS2_GL_DMABUF="${MGS2_GL_DMABUF:-1}"
+export MGS2_GL_DMABUF_SYNC="${MGS2_GL_DMABUF_SYNC:-3}"
+mount_bind "$GAMEDIR/${MGS2_WAYLAND_SO:-winewayland_dmabuf_prod.so}" /usr/lib/wine/i386-unix/winewayland.so || exit 1
 mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32.so || exit 1
 # ntdll_fastyield.so is deliberately NOT mounted. Patch 05 consists solely of an
 # NtYieldExecution switch gated on MGS2_YIELD, which production never sets, so the
