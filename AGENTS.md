@@ -108,6 +108,13 @@ docs/briefs/MGS2_PHASE_A_NATIVE_MEASURED_2026-08-21.md
                            marker-window trap a control arm can fall into, the
                            standing checks added for it, and why phase B is
                            measured regardless of phase A's band
+docs/briefs/MGS2_NEXT_FPS_RESEARCH_2026-08-22.md
+                           START HERE before choosing the next FPS project: the
+                           heavy-scene profile was cycles:u on one thread, so
+                           37.6% of the renderer thread's wall clock was never
+                           profiled; libmali's share is per-GL-call driver work,
+                           not the readback; and the candidates are ranked with
+                           the cheap measurements that decide between them first
 docs/briefs/MGS2_ISLAND_MEASURED_2026-08-16c.md
                            the entry-10 measurement the ABBA harness exists for:
                            -8.87 ms/frame, and section 4 on the unfinished
