@@ -553,47 +553,54 @@ def main():
               % ("PASS" if att == skp + exe else "FAIL"))
 
     if u1:
-        # Cumulative on purpose. This is a ratio of two means, so it wants the
-        # largest N available, and the arms alternate every few frames -- the
-        # whole run is already well mixed between them.
+        # EVERYTHING here is windowed, and it has to be: the histogram was
+        # already windowed while samples/ticks/exec were not, so the median
+        # difference (this window) was being divided by uploads-per-group that
+        # could carry the whole life of the process. A mixed pair like that is
+        # wrong even when the two happen to agree.
         khz = max(r[1] for r in u1) or 1
         per = max(r[0] for r in u1)
-        s_a = sum(r[2] for r in u1); s_b = sum(r[3] for r in u1)
-        t_a = sum(r[4] + (r[6] << 32) for r in u1)
-        t_b = sum(r[5] + (r[7] << 32) for r in u1)
-        e_a = sum(r[8] for r in u1); e_b = sum(r[9] for r in u1)
-        print("\nMEASURED GL CALL COST (%d records, 1 group in %d timed)"
+
+        def d32(i):
+            return sum(r[i] for r in u1) - (sum(r[i] for r in u0) if u0 else 0)
+
+        def d64(lo, hi):
+            f = lambda rs: sum(r[lo] + (r[hi] << 32) for r in rs)
+            return f(u1) - (f(u0) if u0 else 0)
+
+        s_a, s_b = d32(2), d32(3)
+        t_a, t_b = d64(4, 6), d64(5, 7)
+        e_a, e_b = d32(8), d32(9)
+        h_a = [d32(10 + k) for k in range(40)]
+        h_b = [d32(50 + k) for k in range(40)]
+        print("\nMEASURED GL CALL COST (%d records, 1 group in %d timed, this window)"
               % (len(u1), per))
-        # Histograms are cumulative like everything else here; the windowed
-        # difference is what belongs in a verdict.
-        h_a = [sum(r[10 + k] for r in u1) - (sum(r[10 + k] for r in u0) if u0 else 0)
-               for k in range(40)]
-        h_b = [sum(r[50 + k] for r in u1) - (sum(r[50 + k] for r in u0) if u0 else 0)
-               for k in range(40)]
         if s_a and s_b:
             us = lambda t, n: 1000.0 * t / khz / n     # ticks -> us per sample
             ca, cb = us(t_a, s_a), us(t_b, s_b)
             ea, eb = e_a / float(s_a), e_b / float(s_b)
             ma, mb = uct_quantile(h_a, 0.5), uct_quantile(h_b, 0.5)
-            print("  arm A (cache off): %6d groups, mean %7.3f us, median %s us, "
+            print("  arm A (cache off): %6d groups, median %s us, mean %7.3f us, "
                   "%.3f uploads/group"
-                  % (s_a, ca, "%.1f" % ma if ma is not None else "-", ea))
-            print("  arm B (cache on):  %6d groups, mean %7.3f us, median %s us, "
+                  % (s_a, "%.1f" % ma if ma is not None else "-", ca, ea))
+            print("  arm B (cache on):  %6d groups, median %s us, mean %7.3f us, "
                   "%.3f uploads/group"
-                  % (s_b, cb, "%.1f" % mb if mb is not None else "-", eb))
+                  % (s_b, "%.1f" % mb if mb is not None else "-", cb, eb))
             if ma is not None and mb is not None and ea - eb > 0.01:
-                print("  MEDIAN-based saving per skipped upload: %+.3f us "
-                      "(the mean is not usable here: one preemption inside a "
-                      "20 us group moves it by microseconds)"
-                      % ((ma - mb) / (ea - eb)))
-            if ea - eb > 0.01:
-                cost = (ca - cb) / (ea - eb)
-                # Not "the cost of a glUniform4fv": the difference also carries
-                # whatever cache, branch and control-flow effect surrounds the
-                # call. It is the saving per skipped upload in THIS loop, which
-                # is the quantity the patch is actually judged on.
-                print("  => marginal saving per skipped light glUniform4fv "
-                      "in this workload: %.3f us" % cost)
+                cost = (ma - mb) / (ea - eb)
+                mean_cost = (ca - cb) / (ea - eb)
+                # Not "the cost of a GL call". It is the saving per skipped
+                # upload for THIS uniform on THIS path: the difference also
+                # carries the surrounding cache, branch and control-flow effect,
+                # and another entry point -- glUniformMatrix4fv, glBindTexture,
+                # glActiveShaderProgram -- can cost the driver something else
+                # entirely. Do not carry this number to another candidate;
+                # measure that candidate the same way.
+                print("  => saving per skipped light glUniform4fv on this path: "
+                      "%+.3f us (median)" % cost)
+                print("     the mean says %+.3f us and is only diagnostic: one "
+                      "preemption inside a 20 us group moves it by microseconds"
+                      % mean_cost)
                 if armf and armf[1] and k0 and k1:
                     skipped = sum(r[2] for r in k1) - sum(r[2] for r in k0)
                     # Only the enabled arm ever skips, so the steady-state rate is

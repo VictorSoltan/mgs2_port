@@ -1,9 +1,17 @@
 # MGS2 Substance on the Anbernic RG353VS — FINALPLAY11
 
-Promoted 23 August 2026, replacing FINALPLAY9. FINALPLAY9's own record follows
-below the FINALPLAY10 section and is unchanged: the presenter and the separable
-stage selector are carried forward as they were, and this release adds the
-native dither converter on top of them.
+Promoted 23 August 2026. The chain, because it is now three deep and the
+sections below are in reverse order:
+
+```text
+FINALPLAY9   P75A separable stage selector + dmabuf presenter   22 Aug
+FINALPLAY10  + native ARM dither converter                      23 Aug
+FINALPLAY11  + FFP light-colour cache, + PBC machinery (off)    23 Aug
+```
+
+Each release keeps everything the one above it added; only the box86/WineD3D
+pair is rebuilt. FINALPLAY9's record follows below the other two and is
+unchanged.
 
 FINALPLAY9 was promoted 22 August 2026, replacing FINALPLAY6's `island41` /
 `p56` pair. The owner authorised promotion after playing the exact binaries for 144
@@ -58,8 +66,14 @@ arm B (cache on)   median 14.5 us per three-field group, 0.029 uploads
 
 That is ~0.04 ms/frame in a quiet scene, which is nothing, and ~0.7 ms/frame in
 combat, where the same path attempts 552 uploads per frame at 87% redundancy. A
-miss costs three 16-byte memcmps. The 1.68 us is also a reusable constant: it
-converts "calls removed per frame" into ms/frame for every later candidate.
+miss costs three 16-byte memcmps.
+
+The 1.68 us is a prior for **this uniform on this path**, not a price for GL
+calls in general. glUniformMatrix4fv uploads sixteen floats, glBindTexture
+changes driver state, glActiveShaderProgram touches a pipeline object -- each
+can cost the driver something entirely different. Any later candidate gets its
+own UCT-style group timer or its own frame ABBA; carrying this number across
+would be exactly the kind of borrowed constant this project has been burned by.
 
 ### The Mali shader freeze: measured, attacked, and CLOSED with proof
 

@@ -367,27 +367,26 @@ mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib
 # run that silently mixes halves produces numbers for a build nobody has.
 # Overrides are how experiments are run, so they only downgrade this to a notice.
 mgs2_verify_identity() {
-    expect_box86=ea3e367d71703039bd4a10b32e34b6c6f331b104f4316bc7180dfbf22052d120
-    expect_wined3d=b35529b0ba4570bac910763f4c0180bac61d3648ab3a4033e718de5e31d02706
-    expect_wayland=51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169
+    manifest="$GAMEDIR/FINALPLAY.manifest"
     if [ -n "${MGS2_BOX86_BIN:-}${MGS2_WINED3D_DLL:-}${MGS2_WAYLAND_SO:-}" ]; then
         echo "MGS2: identity check skipped, binaries overridden by environment" >&2
         return 0
     fi
+    if [ ! -r "$manifest" ]; then
+        echo "MGS2: no $manifest, cannot verify identity" >&2
+        return 1
+    fi
     bad=0
-    for pair in \
-        "/usr/bin/box86:$expect_box86" \
-        "/usr/lib/wine/i386-windows/wined3d.dll:$expect_wined3d" \
-        "/usr/lib/wine/i386-unix/winewayland.so:$expect_wayland"; do
-        f=${pair%%:*}; want=${pair#*:}
-        got=$(sha256sum "$f" 2>/dev/null | cut -d" " -f1)
+    while read -r path want src; do
+        case "$path" in ''|\#*) continue;; esac
+        got=$(sha256sum "$path" 2>/dev/null | cut -d" " -f1)
         if [ "$got" != "$want" ]; then
-            echo "MGS2: $f is $got, FINALPLAY11 expects $want" >&2
+            echo "MGS2: $path is ${got:-missing}, manifest expects $want ($src)" >&2
             bad=1
         fi
-    done
-    [ "$bad" = 0 ] || { echo "MGS2: refusing to launch a build that is not FINALPLAY11" >&2; return 1; }
-    echo "MGS2: FINALPLAY11 identity verified (box86 + wined3d + presenter)" >&2
+    done < "$manifest"
+    [ "$bad" = 0 ] || { echo "MGS2: refusing to launch, mounted files do not match the manifest" >&2; return 1; }
+    echo "MGS2: identity verified against FINALPLAY.manifest" >&2
 }
 mgs2_verify_identity || exit 1
 # Patch 31 is OFF. It replaces the culler's per-draw AABB scan -- 349 vertex walks
