@@ -58,7 +58,13 @@ rm -f "$LOG"
 cd /storage/roms/ports || exit 1
 LAUNCHER="${MGS2_AUTOLOAD_LAUNCHER:-./MGS2-Substance.sh}"
 echo "лаунчер: $LAUNCHER"
-MGS2_GL_STATS=60 MGS2_PLAY_WINEDEBUG="-all,err+waylanddrv" \
+# The A/B blocks that wined3d prints go to the d3d_shader channel, so a run that
+# wants them has to say so. This was hardcoded, and a P80 measurement run came
+# back with zero blocks while the A/B was in fact flipping arms perfectly well.
+# err+d3d_shader is safe for timing; err+d3d is NOT, because checkGLcall() then
+# calls glGetError() on every call.
+MGS2_GL_STATS="${MGS2_GL_STATS:-60}" \
+MGS2_PLAY_WINEDEBUG="${MGS2_PLAY_WINEDEBUG:--all,err+waylanddrv}" \
     setsid nohup $LAUNCHER > "$LOG" 2>&1 < /dev/null &
 
 # Wait for real frames rather than a fixed sleep: the driver prints a stats line

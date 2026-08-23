@@ -314,16 +314,26 @@ def read_txm_stats(pid):
                 start = i + 4
                 if blob[i + 12:i + 16] != inv:
                     continue
-                n = 10 + 2 * TXM_TEX
+                # 4 header + enabled + attempted/skipped/executed
+                # + cold/changed/resets + no_owner/owner_mismatch/location_mismatch
+                # + per_tex_attempted[8] + per_tex_skipped[8].
+                # The previous reader took 26 words and started per_tex at index
+                # 10, which is program_cache_resets -- every per-slot figure it
+                # printed was shifted by one.
+                n = 14 + 2 * TXM_TEX
                 if len(blob) - i < n * 4:
                     continue
+                if struct.unpack_from("<I", blob, i + 8)[0] != n:
+                    continue          # a record of a different vintage
                 w = struct.unpack("<%dI" % n, blob[i:i + n * 4])
                 out.append({
                     "addr": lo + i, "where": name or "(anon)",
                     "enabled": w[4], "attempted": w[5], "skipped": w[6],
                     "executed": w[7], "cold_miss": w[8], "changed_miss": w[9],
-                    "per_tex_attempted": list(w[10:10 + TXM_TEX]),
-                    "per_tex_skipped": list(w[10 + TXM_TEX:10 + 2 * TXM_TEX]),
+                    "resets": w[10], "no_owner": w[11],
+                    "owner_mismatch": w[12], "location_mismatch": w[13],
+                    "per_tex_attempted": list(w[14:14 + TXM_TEX]),
+                    "per_tex_skipped": list(w[14 + TXM_TEX:14 + 2 * TXM_TEX]),
                 })
     return out
 
@@ -698,7 +708,18 @@ def main():
         chg = tot(t1, "changed_miss") - tot(t0, "changed_miss")
         print("  attempted %d | skipped %d (%.1f%%) | executed %d"
               % (att, skp, 100.0 * skp / att if att else 0.0, exe))
-        print("  misses: cold %d, changed %d" % (cold, chg))
+        rst = tot(t1, "resets") - tot(t0, "resets")
+        noo = tot(t1, "no_owner") - tot(t0, "no_owner")
+        own = tot(t1, "owner_mismatch") - tot(t0, "owner_mismatch")
+        loc = tot(t1, "location_mismatch") - tot(t0, "location_mismatch")
+        print("  misses: cold %d, changed %d, relink resets %d" % (cold, chg, rst))
+        # The vetoes are the correctness readout. P74A shipped a cache whose
+        # owner was wrong and the only symptom was the picture jumping; here the
+        # same mistake shows up as a number before anyone has to look at a frame.
+        print("  vetoes: no owner %d, owner mismatch %d, location mismatch %d%s"
+              % (noo, own, loc,
+                 "" if not (own or loc) else "   <- INVESTIGATE, the cache is "
+                 "being offered to programs it does not own"))
         if nframes:
             print("  per frame: attempted %.1f, skipped %.1f, executed %.1f"
                   % (att / nframes, skp / nframes, exe / nframes))
