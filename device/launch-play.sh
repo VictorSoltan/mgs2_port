@@ -21,6 +21,40 @@ type get_controls >/dev/null 2>&1 && get_controls
 GAMEDIR="/storage/roms/ports/MGS2-Substance"
 EXE="mgs2_sse_rg353vs_port.exe"
 
+# Production runs exactly one bundle, and it is not selectable from the
+# environment.
+#
+# Each of these variables used to do two things: pick a different binary, and
+# switch off the identity check for all the OTHER mounted files. So one stale
+# exported value from an earlier measurement -- MGS2_WINED3D_DLL left in a shell,
+# a sourced profile line -- silently produced frame times, screenshots and crash
+# reports for a build nobody had assembled on purpose, with box86's class-B
+# registry mapping the RVAs of a DLL that was no longer mounted.
+#
+# Research still needs the overrides, so they are not removed; they moved behind
+# an opt-in that a leaked environment cannot supply by accident. That is the same
+# rename trick MGS2_ISLAND_AB_MEASURE uses further down, and for the same reason:
+# the variable that can leak must not be the variable that arms the change.
+mgs2_reject_research_overrides() {
+    found=""
+    for v in MGS2_BOX86_BIN MGS2_WINED3D_DLL MGS2_WAYLAND_SO MGS2_D3D8_DLL \
+             MGS2_DMSYNTH_DLL MGS2_DSOUND_DLL MGS2_DMIME_DLL; do
+        eval "value=\${$v:-}"
+        [ -n "$value" ] && found="$found $v=$value"
+    done
+    [ -n "$found" ] || return 0
+    if [ -n "${MGS2_RESEARCH_RUN:-}" ]; then
+        echo "MGS2: RESEARCH RUN, binaries overridden:$found" >&2
+        return 0
+    fi
+    echo "MGS2: refusing to launch -- a research binary override reached the" \
+         "production launcher:$found" >&2
+    echo "MGS2: run it deliberately with device/launch-research.sh, or use the" \
+         "named launch-*.sh for that experiment" >&2
+    exit 1
+}
+mgs2_reject_research_overrides
+
 exec 9>/tmp/mgs2-substance.lock
 flock -n 9 || exit 0
 
@@ -274,7 +308,7 @@ export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,1
 # during the multi-second freeze after a save loads. Still a switch, so the A/B
 # can be rerun without rebuilding: MGS2_BOX86_NATIVE_DITHER=0 restores the guest.
 export MGS2_BOX86_NATIVE_DITHER="${MGS2_BOX86_NATIVE_DITHER:-1}"
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp13}" /usr/bin/box86 || exit 1
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp14}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 # Diagnostics may select a separate presenter build, but normal play keeps the
 # measured production driver.  This is used by p67 only for a bounded,
@@ -348,7 +382,7 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # allow-list is the immediate rollback; p55 + island29 remains the older exact
 # pre-FINALPLAY6 rollback.
 export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
-mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_fp13.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_fp14.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the
@@ -361,34 +395,6 @@ mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || 
 # 44.3 fps with it against 37.7 without, over two 400 s windows.
 mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
 
-# FINALPLAY13 identity check, on the MOUNTED files rather than on what was asked
-# for. box86 and wined3d are a matched pair -- the class-B registry inside box86
-# maps this exact DLL's RVAs -- and the presenter carries the dmabuf path, so a
-# run that silently mixes halves produces numbers for a build nobody has.
-# Overrides are how experiments are run, so they only downgrade this to a notice.
-mgs2_verify_identity() {
-    manifest="$GAMEDIR/FINALPLAY.manifest"
-    if [ -n "${MGS2_BOX86_BIN:-}${MGS2_WINED3D_DLL:-}${MGS2_WAYLAND_SO:-}" ]; then
-        echo "MGS2: identity check skipped, binaries overridden by environment" >&2
-        return 0
-    fi
-    if [ ! -r "$manifest" ]; then
-        echo "MGS2: no $manifest, cannot verify identity" >&2
-        return 1
-    fi
-    bad=0
-    while read -r path want src; do
-        case "$path" in ''|\#*) continue;; esac
-        got=$(sha256sum "$path" 2>/dev/null | cut -d" " -f1)
-        if [ "$got" != "$want" ]; then
-            echo "MGS2: $path is ${got:-missing}, manifest expects $want ($src)" >&2
-            bad=1
-        fi
-    done < "$manifest"
-    [ "$bad" = 0 ] || { echo "MGS2: refusing to launch, mounted files do not match the manifest" >&2; return 1; }
-    echo "MGS2: identity verified against FINALPLAY.manifest" >&2
-}
-mgs2_verify_identity || exit 1
 # Patch 31 is OFF. It replaces the culler's per-draw AABB scan -- 349 vertex walks
 # a frame in emulated x86 -- with one conservative box per buffer write. Measured
 # +74% on an autoloaded corridor route (48.68/48.39 against 27.92) with identical
@@ -404,6 +410,61 @@ mount_bind "$GAMEDIR/${MGS2_DMSYNTH_DLL:-dmsynth_p34_interp_reset.dll}" /usr/lib
 mount_bind "$GAMEDIR/${MGS2_DSOUND_DLL:-dsound_p36_native_fir_target.dll}" /usr/lib/wine/i386-windows/dsound.dll || exit 1
 mount_bind "$GAMEDIR/${MGS2_DMIME_DLL:-dmime_transition1.dll}" /usr/lib/wine/i386-windows/dmime.dll || exit 1
 mount_bind "$GAMEDIR/dmusic_shared_lifetime1.dll" /usr/lib/wine/i386-windows/dmusic.dll || exit 1
+
+# FINALPLAY14 identity check, on the MOUNTED files rather than on what was asked
+# for, and on ALL of them.
+#
+# It used to name three: box86, wined3d and the presenter -- the files
+# make_release.sh happened to build. The launcher also replaces win32u.so,
+# opengl32.so, user32.dll, d3d8.dll and four DirectMusic/DirectSound modules, so
+# eight of the eleven substitutions were never verified, and four of them were
+# mounted after the check even ran. harness/make_release.sh now generates the
+# manifest FROM the mount_bind lines below, and the coverage assertion here reads
+# the same lines back, so the two cannot drift apart again without failing.
+#
+# There is also no longer an off switch. The old version returned 0 whenever any
+# MGS2_*_BIN/DLL/SO variable was set, which meant one override disabled
+# verification of the whole bundle; overrides are now rejected outright at the top
+# unless MGS2_RESEARCH_RUN says a research launcher asked for them, and then a
+# mismatch is expected and reported rather than fatal.
+mgs2_verify_identity() {
+    manifest="$GAMEDIR/FINALPLAY.manifest"
+    if [ ! -r "$manifest" ]; then
+        echo "MGS2: no $manifest, cannot verify identity" >&2
+        return 1
+    fi
+    mounts=$(grep -c '^mount_bind "$GAMEDIR/' "$0" 2>/dev/null || echo 0)
+    checked=0
+    bad=0
+    while read -r path want src; do
+        case "$path" in ''|\#*) continue;; esac
+        checked=$((checked + 1))
+        got=$(sha256sum "$path" 2>/dev/null | cut -d" " -f1)
+        if [ "$got" != "$want" ]; then
+            echo "MGS2: $path is ${got:-missing}, manifest expects $want ($src)" >&2
+            bad=$((bad + 1))
+        fi
+    done < "$manifest"
+    if [ "$checked" -lt "$mounts" ]; then
+        echo "MGS2: refusing to launch -- the manifest covers $checked files and this" \
+             "launcher binds $mounts; regenerate it with harness/make_release.sh" >&2
+        return 1
+    fi
+    if [ "$bad" != 0 ]; then
+        if [ -n "${MGS2_RESEARCH_RUN:-}" ]; then
+            echo "MGS2: $bad of $checked mounted files differ from the manifest," \
+                 "which is expected on a research run" >&2
+            return 0
+        fi
+        echo "MGS2: refusing to launch -- $bad of $checked mounted files do not" \
+             "match the manifest" >&2
+        return 1
+    fi
+    echo "MGS2: identity verified, $checked of $checked mounted files match" \
+         "FINALPLAY.manifest" >&2
+}
+
+mgs2_verify_identity || exit 1
 
 save_cpu_state
 set_final_cpu_cap

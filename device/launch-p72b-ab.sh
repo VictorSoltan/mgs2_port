@@ -23,6 +23,12 @@ set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
+# This launcher substitutes binaries, so it has to say so: launch-play.sh refuses
+# to accept MGS2_BOX86_BIN and friends from a plain environment, because that used
+# to switch off identity verification for every other mounted file at the same
+# time. The run is still verified -- a mismatch is reported instead of ignored.
+export MGS2_RESEARCH_RUN=1
+
 MGS2_ISLAND_AB_MEASURE=41 \
 MGS2_BOX86_BIN="${MGS2_BOX86_BIN:-box86-island54-p72b-ab}" \
 MGS2_WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_p72b_fused_abc_ab.dll}" \

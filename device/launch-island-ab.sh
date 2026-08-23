@@ -31,6 +31,12 @@ set -eu
 
 ENTRY="${1:-10}"
 HERE=$(cd "$(dirname "$0")" && pwd)
+
+# This launcher substitutes binaries, so it has to say so: launch-play.sh refuses
+# to accept MGS2_BOX86_BIN and friends from a plain environment, because that used
+# to switch off identity verification for every other mounted file at the same
+# time. The run is still verified -- a mismatch is reported instead of ignored.
+export MGS2_RESEARCH_RUN=1
 PRODUCTION_ONLY="0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33"
 
 # A candidate outside the production set must still be armed before its A/B

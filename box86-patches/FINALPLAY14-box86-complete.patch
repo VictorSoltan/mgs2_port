@@ -1,4 +1,4 @@
-FINALPLAY13 -- the COMPLETE Box86-side delta, as one verifiable patch.
+FINALPLAY14 -- the COMPLETE Box86-side delta, as one verifiable patch.
 
 WHY THIS EXISTS ALONGSIDE THE NUMBERED PATCHES
 
@@ -1182,7 +1182,7 @@ index a995f271..561a8260 100755
                  printf_log(log_minimum, " x86opcode=%02X %02X %02X %02X %02X %02X %02X %02X\n", ((uint8_t*)x86pc)[0], ((uint8_t*)x86pc)[1], ((uint8_t*)x86pc)[2], ((uint8_t*)x86pc)[3], ((uint8_t*)x86pc)[4], ((uint8_t*)x86pc)[5], ((uint8_t*)x86pc)[6], ((uint8_t*)x86pc)[7]);
              else
 diff --git a/src/libtools/threads.c b/src/libtools/threads.c
-index d201f564..447b7f0f 100755
+index d201f564..9c7c9ef4 100755
 --- a/src/libtools/threads.c
 +++ b/src/libtools/threads.c
 @@ -3,6 +3,8 @@
@@ -1194,7 +1194,7 @@ index d201f564..447b7f0f 100755
  #include <pthread.h>
  #include <signal.h>
  #include <errno.h>
-@@ -41,6 +43,106 @@ static vFpi_t real_pthread_cleanup_pop_restore = NULL;
+@@ -41,6 +43,161 @@ static vFpi_t real_pthread_cleanup_pop_restore = NULL;
  // with glibc 2.34+, pthread_kill changed behaviour and might break some program, so using old version if possible
  // it will be pthread_kill@GLIBC_2.4 on arm, but it's GLIBC_2.0 on i386
  static iFli_t real_phtread_kill_old = NULL;
@@ -1210,7 +1210,15 @@ index d201f564..447b7f0f 100755
 + * are kept in a fixed memory ring and never logged from the calling thread. */
 +#define MGS2_DISPLAY_LOCK_MAGIC 0x314c444du /* MDL1 */
 +#define MGS2_DISPLAY_LOCK_CAPACITY 256
-+#define MGS2_DISPLAY_LOCK_STACK_WORDS 16
++/* P82: sixteen words reached about two frames past the pthread wrapper, which was
++ * enough to say "this thread is waiting on a mutex it already owns" and not enough
++ * to say WHICH win32u function took it first.  Both stacks are needed at once --
++ * the acquisition that is still standing and the call that walked back in -- and
++ * a self-deadlock in lock_display_devices() is reached through several frames of
++ * win32u before the wrapper is entered.  Sixty-four words is 256 bytes read
++ * upward from ESP, i.e. into stack that is already committed by definition, and
++ * it costs 76 KB of BSS that only exists in a diagnostic build. */
++#define MGS2_DISPLAY_LOCK_STACK_WORDS 64
 +
 +enum mgs2_display_lock_event
 +{
@@ -1223,7 +1231,20 @@ index d201f564..447b7f0f 100755
 +{
 +    uint32_t sequence, tid, event, mutex;
 +    uint32_t caller, stack_pointer, lock, owner;
-+    uint32_t result, stack[MGS2_DISPLAY_LOCK_STACK_WORDS];
++    uint32_t result;
++    /* P82.  The v1 capture ended at "owner == self, lock == 2, and here is the
++     * attempt", which names the deadlock but not its cause: a recursive ATTEMPT
++     * and a genuine contended ATTEMPT are the same record.  This is the missing
++     * half.  owner_acquire_seq is the sequence number of the acquisition this
++     * same thread is STILL holding, so the reader can put the two stacks side by
++     * side and read the recursion off them, instead of inferring it from an
++     * absent RELEASE.  Zero means the thread held nothing, i.e. ordinary
++     * contention with another thread and not the bug being hunted. */
++    uint32_t owner_acquire_seq;
++    /* FNV-1a over caller and the whole stack window, so that repeated arrivals
++     * through the same path are visibly one path rather than 40 similar dumps. */
++    uint32_t chain_hash;
++    uint32_t stack[MGS2_DISPLAY_LOCK_STACK_WORDS];
 +};
 +
 +struct mgs2_display_lock_public
@@ -1236,7 +1257,7 @@ index d201f564..447b7f0f 100755
 +
 +EXPORT struct mgs2_display_lock_public mgs2_display_lock_history =
 +{
-+    MGS2_DISPLAY_LOCK_MAGIC, 1,
++    MGS2_DISPLAY_LOCK_MAGIC, 2,
 +    sizeof(struct mgs2_display_lock_public) / sizeof(uint32_t),
 +    ~MGS2_DISPLAY_LOCK_MAGIC,
 +    0, MGS2_DISPLAY_LOCK_CAPACITY,
@@ -1277,11 +1298,29 @@ index d201f564..447b7f0f 100755
 +    return emu && !memcmp((const void *)(uintptr_t)R_EIP, after_call, sizeof(after_call));
 +}
 +
++/* The acquisition of the target that THIS thread has not released yet, by
++ * sequence number, or 0.  Per-thread because that is the only question worth
++ * asking of a self-deadlock: a process-wide "current owner" would be racing the
++ * very event being recorded. */
++static __thread uint32_t mgs2_display_lock_held_seq = 0;
++
++/* Read the guest stack window without being able to fault.  The words go upward
++ * from ESP, into frames that are committed by construction, so the only way off
++ * the end is a call this shallow arriving within 256 bytes of the top of the
++ * mapping.  That cannot happen on the path being investigated, and a diagnostic
++ * that can crash the run it is diagnosing is not worth the extra frames. */
++static uint32_t mgs2_display_lock_stack_word(uintptr_t addr)
++{
++    if (!(getProtection(addr) & PROT_READ))
++        return 0;
++    return *(uint32_t *)addr;
++}
++
 +static void mgs2_display_lock_record(unsigned int event, pthread_mutex_t *mutex, int result)
 +{
 +    struct mgs2_display_lock_record *record;
 +    x86emu_t *emu = thread_get_emu_nocreate();
-+    uint32_t ticket, i;
++    uint32_t ticket, i, hash = 0x811c9dc5u;
 +
 +    ticket = __atomic_fetch_add(&mgs2_display_lock_history.write_count, 1, __ATOMIC_RELAXED);
 +    record = &mgs2_display_lock_history.record[ticket % MGS2_DISPLAY_LOCK_CAPACITY];
@@ -1294,14 +1333,30 @@ index d201f564..447b7f0f 100755
 +    record->lock = mutex ? ((uint32_t *)mutex)[0] : 0;
 +    record->owner = mutex ? ((uint32_t *)mutex)[2] : 0;
 +    record->result = result;
++    /* Written for every event, not just ATTEMPT: a RELEASED that carries a
++     * non-zero value is a release of an acquisition the ring may no longer hold,
++     * and that is how a chain longer than the ring stays legible. */
++    record->owner_acquire_seq = mgs2_display_lock_held_seq;
 +    for (i = 0; i < MGS2_DISPLAY_LOCK_STACK_WORDS; ++i)
-+        record->stack[i] = emu ? ((uint32_t *)(uintptr_t)R_ESP)[i] : 0;
++        record->stack[i] = emu
++                ? mgs2_display_lock_stack_word((uintptr_t)R_ESP + i * sizeof(uint32_t)) : 0;
++    hash = (hash ^ record->caller) * 0x01000193u;
++    for (i = 0; i < MGS2_DISPLAY_LOCK_STACK_WORDS; ++i)
++        hash = (hash ^ record->stack[i]) * 0x01000193u;
++    record->chain_hash = hash;
 +    __atomic_store_n(&record->sequence, ticket + 1, __ATOMIC_RELEASE);
++
++    /* Publish the thread's own holding state only after the record is complete,
++     * so an ATTEMPT can never name an acquisition whose record is still torn. */
++    if (event == MGS2_DISPLAY_LOCK_ACQUIRED && !result)
++        mgs2_display_lock_held_seq = ticket + 1;
++    else if (event == MGS2_DISPLAY_LOCK_RELEASED && !result)
++        mgs2_display_lock_held_seq = 0;
 +}
  // those function can be used simply
  void _pthread_cleanup_push(void* buffer, void* routine, void* arg);	// declare hidden functions
  void _pthread_cleanup_pop(void* buffer, int exec);
-@@ -177,6 +279,20 @@ void thread_set_emu(x86emu_t* emu)
+@@ -177,6 +334,20 @@ void thread_set_emu(x86emu_t* emu)
  	pthread_setspecific(thread_key, et);
  }
  
@@ -1322,7 +1377,7 @@ index d201f564..447b7f0f 100755
  x86emu_t* thread_get_emu()
  {
  	emuthread_t *et = (emuthread_t*)pthread_getspecific(thread_key);
-@@ -756,8 +872,10 @@ static mutexes_block_t* NewMutexesBlock()
+@@ -756,8 +927,10 @@ static mutexes_block_t* NewMutexesBlock()
  	return ret;
  }
  
@@ -1335,7 +1390,7 @@ index d201f564..447b7f0f 100755
  	if(!mutexes) {
  		mutexes = NewMutexesBlock();
  	}
-@@ -774,10 +892,8 @@ static int NewMutex() {
+@@ -774,10 +947,8 @@ static int NewMutex() {
  	for (int i=0; i<MUTEXES_SIZE; ++i)
  		if(!m->taken[i]) {
  			m->taken[i] = 1;
@@ -1346,7 +1401,7 @@ index d201f564..447b7f0f 100755
  	printf_log(LOG_NONE, "Error: NewMutex unreachable part reached\n");
  	return (int)-1;	// error!!!!
  }
-@@ -832,14 +948,20 @@ static pthread_mutex_t* getAlignedMutexWithInit(pthread_mutex_t* m, int init)
+@@ -832,14 +1003,20 @@ static pthread_mutex_t* getAlignedMutexWithInit(pthread_mutex_t* m, int init)
  	if(!m)
  		return NULL;
  	aligned_mutex_t* am = (aligned_mutex_t*)m;
@@ -1373,7 +1428,7 @@ index d201f564..447b7f0f 100755
  	pthread_mutex_t* ret = GetMutex(k);
  
  	#ifndef __PTHREAD_MUTEX_HAVE_PREV
-@@ -854,10 +976,13 @@ static pthread_mutex_t* getAlignedMutexWithInit(pthread_mutex_t* m, int init)
+@@ -854,10 +1031,13 @@ static pthread_mutex_t* getAlignedMutexWithInit(pthread_mutex_t* m, int init)
  			((int*)ret)[3+__PTHREAD_MUTEX_HAVE_PREV] = kind;		// inject in new one (i.e. "init" it)
  		}
  	}
@@ -1389,7 +1444,7 @@ index d201f564..447b7f0f 100755
  	return ret;
  }
  static pthread_mutex_t* getAlignedMutex(pthread_mutex_t* m)
-@@ -870,12 +995,12 @@ EXPORT int my_pthread_mutex_destroy(pthread_mutex_t *m)
+@@ -870,12 +1050,12 @@ EXPORT int my_pthread_mutex_destroy(pthread_mutex_t *m)
  	if(box86_mutex_aligned)
  		return pthread_mutex_destroy(m);
  	aligned_mutex_t* am = (aligned_mutex_t*)m;
@@ -1404,7 +1459,7 @@ index d201f564..447b7f0f 100755
  	return ret;
  }
  #endif	//ANDROID
-@@ -889,7 +1014,31 @@ EXPORT int my___pthread_mutex_init(pthread_mutex_t *m, pthread_mutexattr_t *att)
+@@ -889,7 +1069,31 @@ EXPORT int my___pthread_mutex_init(pthread_mutex_t *m, pthread_mutexattr_t *att)
  
  EXPORT int my_pthread_mutex_lock(pthread_mutex_t *m)
  {
@@ -1437,7 +1492,7 @@ index d201f564..447b7f0f 100755
  }
  EXPORT int my___pthread_mutex_lock(pthread_mutex_t *m) __attribute__((alias("my_pthread_mutex_lock")));
  
-@@ -914,7 +1063,13 @@ EXPORT int my___pthread_mutex_trylock(pthread_mutex_t *m) __attribute__((alias("
+@@ -914,7 +1118,13 @@ EXPORT int my___pthread_mutex_trylock(pthread_mutex_t *m) __attribute__((alias("
  
  EXPORT int my_pthread_mutex_unlock(pthread_mutex_t *m)
  {
@@ -5937,7 +5992,7 @@ index 6da8dae7..46beecfc 100755
 +}
 --- a/src/mgs2_island_stubs.c
 +++ b/src/mgs2_island_stubs.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,176 @@
 +/* Generated abort stubs for the native ARM WineD3D island inside Box86.
 + *
 + * Win32/GDI/setup entry points the island links against but must never call.
@@ -5956,7 +6011,13 @@ index 6da8dae7..46beecfc 100755
 + *   wglCreateContext  wglDeleteContext  wglGetCurrentContext  wglGetCurrentDC
 + *   wglGetProcAddress  wglMakeCurrent  wglShareLists
 + * _recalloc is NOT in that set and stays an abort stub on purpose: it would
-+ * have to resize a block whose allocator is unknown. */
++ * have to resize a block whose allocator is unknown.  *
++ * FINALPLAY14 added three: CreateSemaphoreW, GetTickCount and ReleaseSemaphore.
++ * Patch 80 replaced the present-latency event protocol with a per-swapchain
++ * semaphore, so cs.c and swapchain.c now reference them. They are forbidden for
++ * the same reason SetEvent already was -- exec_present is reached through the CS
++ * dispatch loop, which no routed entry enters -- and a regeneration produces
++ * exactly these three, because they are simply the new undefined symbols. */
 +extern int printf(const char *, ...);
 +extern void abort(void);
 +
@@ -5981,6 +6042,7 @@ index 6da8dae7..46beecfc 100755
 +void CreateDCW(void) { mgs2_island_forbidden("CreateDCW"); }
 +void CreateEventW(void) { mgs2_island_forbidden("CreateEventW"); }
 +void CreateIconIndirect(void) { mgs2_island_forbidden("CreateIconIndirect"); }
++void CreateSemaphoreW(void) { mgs2_island_forbidden("CreateSemaphoreW"); }
 +void CreateThread(void) { mgs2_island_forbidden("CreateThread"); }
 +void CreateWindowExA(void) { mgs2_island_forbidden("CreateWindowExA"); }
 +void D3DKMTCloseAdapter(void) { mgs2_island_forbidden("D3DKMTCloseAdapter"); }
@@ -6027,6 +6089,7 @@ index 6da8dae7..46beecfc 100755
 +void GetObjectA(void) { mgs2_island_forbidden("GetObjectA"); }
 +void GetPixelFormat(void) { mgs2_island_forbidden("GetPixelFormat"); }
 +void GetProcAddress(void) { mgs2_island_forbidden("GetProcAddress"); }
++void GetTickCount(void) { mgs2_island_forbidden("GetTickCount"); }
 +void GetVersionExW(void) { mgs2_island_forbidden("GetVersionExW"); }
 +void GetWindowLongA(void) { mgs2_island_forbidden("GetWindowLongA"); }
 +void GetWindowLongW(void) { mgs2_island_forbidden("GetWindowLongW"); }
@@ -6064,6 +6127,7 @@ index 6da8dae7..46beecfc 100755
 +void RegQueryValueExA(void) { mgs2_island_forbidden("RegQueryValueExA"); }
 +void RegisterClassA(void) { mgs2_island_forbidden("RegisterClassA"); }
 +void ReleaseDC(void) { mgs2_island_forbidden("ReleaseDC"); }
++void ReleaseSemaphore(void) { mgs2_island_forbidden("ReleaseSemaphore"); }
 +void RtlIsCriticalSectionLockedByThread(void) { mgs2_island_forbidden("RtlIsCriticalSectionLockedByThread"); }
 +void ScreenToClient(void) { mgs2_island_forbidden("ScreenToClient"); }
 +void SelectObject(void) { mgs2_island_forbidden("SelectObject"); }

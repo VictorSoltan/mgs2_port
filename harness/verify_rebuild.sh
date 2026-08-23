@@ -141,7 +141,7 @@ if [ "${1:-}" = "--build" ]; then
                 dlls/wined3d/i386-windows/wined3d.dll >/dev/null 2>&1 \
         && sha256sum dlls/wined3d/i386-windows/wined3d.dll ) > "$WORK/built.txt" 2>&1
     got=$(awk 'NF==2 {print $1}' "$WORK/built.txt" | tail -1)
-    want=$(lock wined3d_fp13_sha256)
+    want=$(lock wined3d_sha256)
     if [ -z "$got" ]; then
         echo "FAIL   the build produced no hash; last output below"; fail=1
         tail -3 "$WORK/built.txt" | sed 's/^/       /'

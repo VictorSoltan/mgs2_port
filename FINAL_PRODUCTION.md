@@ -1,14 +1,35 @@
-# MGS2 Substance on the Anbernic RG353VS — FINALPLAY12
+# MGS2 Substance on the Anbernic RG353VS — FINALPLAY14
 
-Promoted 23 August 2026. The chain, because it is now three deep and the
-sections below are in reverse order:
+Built 23 August 2026, NOT yet played. The chain, because the sections below are
+in reverse order:
 
 ```text
 FINALPLAY9   P75A separable stage selector + dmabuf presenter   22 Aug
 FINALPLAY10  + native ARM dither converter                      23 Aug
 FINALPLAY11  + FFP light-colour cache, + PBC machinery (off)    23 Aug
 FINALPLAY12  no renderer change: the first release with provenance 23 Aug
+FINALPLAY13  + the present wait rechecks its condition (P81A)   23 Aug
+FINALPLAY14  P81A replaced by upstream's semaphore; the manifest
+             covers all eleven mounted files; display_lock ring v2  23 Aug
 ```
+
+The bundle this release ships:
+
+```text
+box86      box86-fp14
+           e227b39f151e99efd75f353f1a521cb2d82cb0bb82cb384a4f28b70b3a3556ba
+wined3d    wined3d_fp14.dll
+           f266e9febdc2dd98a277bfe785aec949b929acaae606e0eb996c9c9bbdd5f341
+presenter  winewayland_dmabuf_prod.so   (MGS2_GL_DMABUF=1, SYNC=3) -- unchanged
+           51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169
+island     0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41
+```
+
+Both rebuilt binaries are byte-reproducible: built twice, same hashes.
+
+FINALPLAY14 has not been on the device. Nothing below claims a measurement for
+it -- the present change removes a hang mechanism and is not expected to move
+frame times, and that expectation is untested.
 
 FINALPLAY12 changes nothing a player can see. It exists because FINALPLAY11's
 binaries could not be traced to any recorded source, and this is the first pair
@@ -45,12 +66,134 @@ hashes, once `-Wl,--no-insert-timestamp` and `SOURCE_DATE_EPOCH` are pinned. The
 first pinned three bytes of PE header, the second twenty-three bytes that
 followed `__DATE__`/`__TIME__` in `src/build_info.c`.
 
-`launch-play.sh` hashes the three MOUNTED files against `FINALPLAY.manifest`
-before it starts the game and refuses to run if any differs, saying which. Overrides
-downgrade it to a notice, because that is how experiments are run. The class-B
+`launch-play.sh` hashes the MOUNTED files against `FINALPLAY.manifest` before it
+starts the game and refuses to run if any differs, saying which. The class-B
 registry made this worth automating: it maps guest WineD3D RVAs, so a mismatched
 pair does not fail cleanly, and "almost FINALPLAY10" is the worst thing to
 profile.
+
+Two things about that check changed in FINALPLAY14, and both were holes rather
+than choices -- see the section below. It covers eleven files instead of three,
+and an override no longer switches it off.
+
+## What FINALPLAY13 and FINALPLAY14 add
+
+Neither release changes the renderer. FINALPLAY13 was a hang fix with a timer in
+it; FINALPLAY14 removes the timer by removing the protocol that needed one, and
+closes two holes that were making other investigations less trustworthy than they
+looked.
+
+### The present wait: from a recheck to a semaphore
+
+The 2026-08-23 freeze: the CS thread wedged inside one handler -- `executes` and
+the DEFAULT queue `tail` stood still for minutes while `head` kept growing -- then
+came back and ran tens of thousands of commands. The game never did. The main
+thread stayed in `ntsync_schedule`, so simulation and input were dead while
+`wined3d_cs` redrew the last frame, and the item-pickup overlay sat frozen on
+screen for an hour.
+
+FINALPLAY13's reading of it was right: the producer waits for
+`pending_presents < max_frame_latency`, `cs->present_event` is only the wakeup
+mechanism and not the condition, so a lost `SetEvent()` makes the wait permanent
+even after the condition became true. Its fix was to recheck every 250 ms, plus
+`MGS2_PRESENT_DROP_WAKE` to inject the lost wake and prove the recheck catches it.
+
+That is a net over a hand-written protocol -- three pieces of shared state that
+have to stay in step. Wine 11.15 deleted the protocol instead, and FINALPLAY14
+backports that: one counting semaphore per swapchain, taken in
+`wined3d_swapchain_present()` before the D3D mutex and returned by
+`wined3d_cs_exec_present()` once the present has actually run. The count IS the
+condition; a release that lands before the wait was already counted, so there is
+nothing to lose. `pending_presents`, `waiting_for_present`, `present_event`,
+`MGS2_PRESENT_RECHECK_MS` and `MGS2_PRESENT_DROP_WAKE` are gone.
+
+Two upstream changes were deliberately NOT taken. `max_frame_latency` keeps the
+11.0 value, `device->max_frame_latency - 1`; 11.15 uses the device value
+unreduced, which lets the producer run one further frame ahead, and shipping a
+latency change inside a hang fix would confound both. And
+`WINED3D_SWAPCHAIN_FRAME_LATENCY_WAITABLE_OBJECT` does not exist in 11.0, so the
+wait upstream guards with it is simply unconditional here.
+
+The token comes back when the CS thread finishes that PRESENT, which includes
+whatever the dmabuf presenter does synchronously -- exactly where
+`InterlockedDecrement()` sat before. The semaphore bounds how far the producer
+runs ahead of the CS worker. It is not a compositor fence and must not become one.
+
+What this does NOT fix is the freeze itself. The CS thread still wedged inside a
+handler for minutes, and why is open. What changes is that the producer can no
+longer be permanently stuck behind it, and the witness now says which half is at
+fault: `mgs2_present_watch.acquires` climbing while `releases` stands still,
+parked at `max_frame_latency`, is the consumer. The old counters said "the wait
+timed out", which cannot tell a lost wake from a stalled consumer.
+
+### The manifest covered three of eleven mounted files
+
+`launch-play.sh` bind-mounts eleven files. The manifest named three -- the two
+`make_release.sh` builds plus the presenter -- so `win32u.so`, `opengl32.so`,
+`user32.dll`, `d3d8.dll` and the four DirectMusic/DirectSound modules were
+substituted with nothing checking what they were. Four of them were mounted after
+the check even ran.
+
+Worse, the check had an off switch nobody meant to build:
+
+```sh
+if [ -n "${MGS2_BOX86_BIN:-}${MGS2_WINED3D_DLL:-}${MGS2_WAYLAND_SO:-}" ]; then
+    echo "identity check skipped, binaries overridden by environment" >&2
+    return 0
+fi
+```
+
+One stale exported variable -- `MGS2_WINED3D_DLL` left in a shell -- disabled
+verification of the whole bundle and swapped a binary, so the run reported frame
+times for a mixture nobody had assembled, with box86's class-B registry mapping
+the RVAs of a DLL that was no longer mounted.
+
+Now:
+
+* `harness/make_release.sh` generates the manifest from the launcher's own
+  `mount_bind` lines, so it cannot cover fewer files than the launcher mounts.
+* the launcher counts those same lines and refuses to start if the manifest has
+  fewer rows, which is the assertion that keeps the two together.
+* the check runs after the last mount, and has no off switch.
+* the override variables are rejected outright unless `MGS2_RESEARCH_RUN` says a
+  research launcher asked for them -- the same rename trick
+  `MGS2_ISLAND_AB_MEASURE` already used, for the same reason: the variable that
+  can leak must not be the variable that arms the change. `device/launch-research.sh`
+  is the deliberate opt-in for an ad-hoc run; the named `launch-*.sh` set it
+  themselves.
+* `make_release.sh` also points the launcher at what it just built and rewrites
+  the release hashes in `FINALPLAY.lock`. Both used to be a printed reminder.
+
+`binaries/winewayland_dmabuf_prod.so` was missing from the repository -- the one
+production file that could not be restored without a build tree. It is there now.
+
+### The display_lock ring can now name the first acquirer
+
+FINALPLAY13's capture said: owner is `wine_dinput_worker`, `lock == 2`, kind is
+regular, and that thread is calling `pthread_mutex_lock()` on the mutex it owns.
+That names the deadlock and stops. It is not enough to fix, for two reasons.
+
+A recursive ATTEMPT and an ordinary contended ATTEMPT produce the same record --
+recursion was inferred from `owner == tid`, a snapshot of the mutex rather than of
+what this thread did, and from a missing RELEASE, which is an argument from
+silence over a ring that wraps. And sixteen stack words reached about two frames
+past the pthread wrapper, so the win32u function that took `display_lock` FIRST
+was never in the window.
+
+v2 adds the missing half: `owner_acquire_seq`, per-thread, naming the acquisition
+this thread has not released yet, and a 64-word window, so
+`harness/display_lock_history.py` prints the still-standing ACQUIRED and the
+re-entering ATTEMPT side by side. `chain_hash` collapses repeated arrivals down
+one path into one path. Both versions are read, because the rollback binaries
+carry v1.
+
+What comes after the next natural freeze is a `_locked()`/`_nolock()` split at the
+ONE helper the pair names. Not `PTHREAD_MUTEX_RECURSIVE`, and not
+`if (owner == GetTID()) return 0`: either removes the hang and lets win32u read
+`gpus`/`sources`/`monitors` while `pUpdateDisplayDevices()` is halfway through
+rebuilding them, turning a hard hang into rare corruption. Nor unlocking around
+the driver callback -- the `device_manager` callbacks in this Wine populate those
+structures directly.
 
 ## What FINALPLAY11 adds
 

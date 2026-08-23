@@ -1,0 +1,167 @@
+Patch 17 -- the display_lock history learns to name the first acquirer.
+
+SCOPE: src/libtools/threads.c only. No behaviour outside MGS2_DISPLAY_LOCK_HISTORY
+changes, and the ring stays memory-only and never logs from the faulting thread.
+
+WHY v1 WAS NOT ENOUGH TO FIX ANYTHING
+
+Patch 11 built the ring and FINALPLAY13's capture used it. What it produced was:
+
+  owner = wine_dinput_worker
+  lock  = 2
+  kind  = regular
+  owner thread -> pthread_mutex_lock(the same mutex)
+
+which names the deadlock and stops. Two things were missing, and both are needed
+before anyone can write a fix rather than a workaround:
+
+  1. A recursive ATTEMPT and an ordinary contended ATTEMPT are the SAME record.
+     The reader inferred recursion from owner == tid, which is a snapshot of the
+     mutex, not of what this thread did -- and from the absence of a RELEASE,
+     which is an argument from silence over a ring that wraps.
+
+  2. Sixteen stack words reached about two frames past the pthread wrapper. The
+     win32u function that took display_lock FIRST was never in the window, so the
+     capture could say "something re-entered" and never "THIS re-entered THAT".
+
+WHAT THIS ADDS
+
+  MGS2_DISPLAY_LOCK_STACK_WORDS  16 -> 64
+      256 bytes read upward from ESP, into frames that are committed by
+      construction. 76 KB of BSS, in a build that only exists for diagnosis.
+      Each word now goes through getProtection() first: a diagnostic that can
+      fault inside the run it is diagnosing is not worth the extra frames.
+
+  owner_acquire_seq
+      Per-thread (__thread), the sequence number of the acquisition THIS thread
+      has not released yet, or 0. Written on every event, so the reader can put
+      the still-standing ACQUIRED and the re-entering ATTEMPT side by side. Zero
+      on an ATTEMPT means ordinary contention with another thread -- which is the
+      case v1 could not rule out. Published after the record is complete, so an
+      ATTEMPT can never point at an acquisition whose record is still torn.
+
+  chain_hash
+      FNV-1a over caller and the whole stack window, so forty arrivals down one
+      path read as one path.
+
+Version goes 1 -> 2. harness/display_lock_history.py reads both, because the
+rollback binaries carry v1, and it prints the pair plus the verdict.
+
+WHAT THIS DELIBERATELY DOES NOT DO
+
+Not PTHREAD_MUTEX_RECURSIVE, and not "if owner == GetTID() return 0". Either
+removes the hang and lets win32u read gpus/sources/monitors while
+pUpdateDisplayDevices() is halfway through rebuilding them. A hard hang becomes
+rare corruption, which is strictly worse. Nor does it unlock around the driver
+callback: the device_manager callbacks in this Wine populate those structures
+directly. The fix is a _locked()/_nolock() split at ONE named helper, and this
+patch exists to name it.
+
+--- a/src/libtools/threads.c
++++ b/src/libtools/threads.c
+@@ -55,7 +55,15 @@
+  * are kept in a fixed memory ring and never logged from the calling thread. */
+ #define MGS2_DISPLAY_LOCK_MAGIC 0x314c444du /* MDL1 */
+ #define MGS2_DISPLAY_LOCK_CAPACITY 256
+-#define MGS2_DISPLAY_LOCK_STACK_WORDS 16
++/* P82: sixteen words reached about two frames past the pthread wrapper, which was
++ * enough to say "this thread is waiting on a mutex it already owns" and not enough
++ * to say WHICH win32u function took it first.  Both stacks are needed at once --
++ * the acquisition that is still standing and the call that walked back in -- and
++ * a self-deadlock in lock_display_devices() is reached through several frames of
++ * win32u before the wrapper is entered.  Sixty-four words is 256 bytes read
++ * upward from ESP, i.e. into stack that is already committed by definition, and
++ * it costs 76 KB of BSS that only exists in a diagnostic build. */
++#define MGS2_DISPLAY_LOCK_STACK_WORDS 64
+ 
+ enum mgs2_display_lock_event
+ {
+@@ -68,7 +76,20 @@
+ {
+     uint32_t sequence, tid, event, mutex;
+     uint32_t caller, stack_pointer, lock, owner;
+-    uint32_t result, stack[MGS2_DISPLAY_LOCK_STACK_WORDS];
++    uint32_t result;
++    /* P82.  The v1 capture ended at "owner == self, lock == 2, and here is the
++     * attempt", which names the deadlock but not its cause: a recursive ATTEMPT
++     * and a genuine contended ATTEMPT are the same record.  This is the missing
++     * half.  owner_acquire_seq is the sequence number of the acquisition this
++     * same thread is STILL holding, so the reader can put the two stacks side by
++     * side and read the recursion off them, instead of inferring it from an
++     * absent RELEASE.  Zero means the thread held nothing, i.e. ordinary
++     * contention with another thread and not the bug being hunted. */
++    uint32_t owner_acquire_seq;
++    /* FNV-1a over caller and the whole stack window, so that repeated arrivals
++     * through the same path are visibly one path rather than 40 similar dumps. */
++    uint32_t chain_hash;
++    uint32_t stack[MGS2_DISPLAY_LOCK_STACK_WORDS];
+ };
+ 
+ struct mgs2_display_lock_public
+@@ -81,7 +102,7 @@
+ 
+ EXPORT struct mgs2_display_lock_public mgs2_display_lock_history =
+ {
+-    MGS2_DISPLAY_LOCK_MAGIC, 1,
++    MGS2_DISPLAY_LOCK_MAGIC, 2,
+     sizeof(struct mgs2_display_lock_public) / sizeof(uint32_t),
+     ~MGS2_DISPLAY_LOCK_MAGIC,
+     0, MGS2_DISPLAY_LOCK_CAPACITY,
+@@ -122,11 +143,29 @@
+     return emu && !memcmp((const void *)(uintptr_t)R_EIP, after_call, sizeof(after_call));
+ }
+ 
++/* The acquisition of the target that THIS thread has not released yet, by
++ * sequence number, or 0.  Per-thread because that is the only question worth
++ * asking of a self-deadlock: a process-wide "current owner" would be racing the
++ * very event being recorded. */
++static __thread uint32_t mgs2_display_lock_held_seq = 0;
++
++/* Read the guest stack window without being able to fault.  The words go upward
++ * from ESP, into frames that are committed by construction, so the only way off
++ * the end is a call this shallow arriving within 256 bytes of the top of the
++ * mapping.  That cannot happen on the path being investigated, and a diagnostic
++ * that can crash the run it is diagnosing is not worth the extra frames. */
++static uint32_t mgs2_display_lock_stack_word(uintptr_t addr)
++{
++    if (!(getProtection(addr) & PROT_READ))
++        return 0;
++    return *(uint32_t *)addr;
++}
++
+ static void mgs2_display_lock_record(unsigned int event, pthread_mutex_t *mutex, int result)
+ {
+     struct mgs2_display_lock_record *record;
+     x86emu_t *emu = thread_get_emu_nocreate();
+-    uint32_t ticket, i;
++    uint32_t ticket, i, hash = 0x811c9dc5u;
+ 
+     ticket = __atomic_fetch_add(&mgs2_display_lock_history.write_count, 1, __ATOMIC_RELAXED);
+     record = &mgs2_display_lock_history.record[ticket % MGS2_DISPLAY_LOCK_CAPACITY];
+@@ -139,9 +178,25 @@
+     record->lock = mutex ? ((uint32_t *)mutex)[0] : 0;
+     record->owner = mutex ? ((uint32_t *)mutex)[2] : 0;
+     record->result = result;
++    /* Written for every event, not just ATTEMPT: a RELEASED that carries a
++     * non-zero value is a release of an acquisition the ring may no longer hold,
++     * and that is how a chain longer than the ring stays legible. */
++    record->owner_acquire_seq = mgs2_display_lock_held_seq;
+     for (i = 0; i < MGS2_DISPLAY_LOCK_STACK_WORDS; ++i)
+-        record->stack[i] = emu ? ((uint32_t *)(uintptr_t)R_ESP)[i] : 0;
++        record->stack[i] = emu
++                ? mgs2_display_lock_stack_word((uintptr_t)R_ESP + i * sizeof(uint32_t)) : 0;
++    hash = (hash ^ record->caller) * 0x01000193u;
++    for (i = 0; i < MGS2_DISPLAY_LOCK_STACK_WORDS; ++i)
++        hash = (hash ^ record->stack[i]) * 0x01000193u;
++    record->chain_hash = hash;
+     __atomic_store_n(&record->sequence, ticket + 1, __ATOMIC_RELEASE);
++
++    /* Publish the thread's own holding state only after the record is complete,
++     * so an ATTEMPT can never name an acquisition whose record is still torn. */
++    if (event == MGS2_DISPLAY_LOCK_ACQUIRED && !result)
++        mgs2_display_lock_held_seq = ticket + 1;
++    else if (event == MGS2_DISPLAY_LOCK_RELEASED && !result)
++        mgs2_display_lock_held_seq = 0;
+ }
+ // those function can be used simply
+ void _pthread_cleanup_push(void* buffer, void* routine, void* arg);	// declare hidden functions
