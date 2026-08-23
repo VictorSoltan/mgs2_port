@@ -1,0 +1,3617 @@
+Patch 79 -- FFP light-colour cache switched on, and the program-binary branch
+closed with proof.
+
+SCOPE: diff of dlls/wined3d/glsl_shader.c against the state before this session's
+program-binary work. It therefore also carries FRM1 (the frame denominator) and
+the UCT histogram, both of which were needed to reach a verdict at all.
+
+1. FFP LIGHT-COLOUR CACHE, now enabled=1.
+
+   Per field, keyed (vs_program_id, light, field), living in mgs2_ffp_vs_source
+   -- the object that owns stage_program. Sharing that owner across separable
+   entries is what corrupted the picture in P74A; this is the corrected form.
+
+   Verdict, once the instrument was fixed twice over:
+     - FRM1 counts presented frames in wined3d_swapchain_present(), per A/B arm.
+       The old denominator came from the game log, which prints one line per N
+       frames and therefore reported a multiple of N for any window.
+     - UCT gained a histogram. Its mean called the cache arm slower in one run
+       and faster in the next; a single preemption inside a 20 us timed group
+       moves a mean over a few hundred samples by microseconds. Median instead.
+
+     arm A (off)  median 19.5 us/group, 3.000 uploads
+     arm B (on)   median 14.5 us/group, 0.029 uploads   => 1.68 us per call removed
+
+   ~0.7 ms/frame in combat (552 attempted/frame at 87% redundancy), ~0.04 in a
+   quiet scene. A miss is three 16-byte memcmps. The 1.68 us is reusable: it
+   converts "calls removed per frame" into ms/frame for any future candidate.
+
+2. PROGRAM-BINARY CACHE -- BUILT, MEASURED, DEFAULT OFF.
+
+   The census came first and redirected the work: 12 separable-stage LINKS cost
+   2.0 s in one run against 16-88 ms for all glCompileShader calls, and every
+   source in a run is distinct. So the target is linking, and only a cache that
+   survives between runs could pay.
+
+   Built on glGetProgramBinary/glProgramBinary, keyed on the GLSL text, the
+   stage, the bound attribute indices and a hash of GL_VENDOR/RENDERER/VERSION.
+   It does not work on this driver, and the proof has no file in it:
+
+     roundtrip_tried 1 / roundtrip_ok 0 / roundtrip_err 0
+
+   The blob is handed straight back to glProgramBinary on a fresh program in the
+   same context. No GL error is raised and LINK_STATUS stays false. Twelve
+   file-backed loads behaved the same way.
+
+   Kept behind MGS2_GL_PROGRAM_CACHE=1 with its PBC1 accounting record so that
+   retesting after a driver update is a single run.
+
+   Two things learned that outlive the branch:
+     - The island links a SECOND, native ARM copy of this file into Box86, where
+       kernel32 does not exist. CreateFileA compiled and then failed at link
+       time with six undefined references; stdio works on both sides.
+     - The game leaves GL errors pending (20479 GL_INVALID_OPERATION from
+       glAlphaFunc in one run), so any error check here must drain first or it
+       reads somebody else's.
+
+SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
+
+--- glsl_shader.c.orig	2026-08-12 09:30:14.507361319 +0300
++++ glsl_shader.c	2026-08-23 11:38:20.439559803 +0300
+@@ -123,9 +123,21 @@
+ };
+ 
+ /* GLSL shader private data */
++/* Patch 30: stage programs for programmable vertex shaders. Declared after
++ * glsl_vs_program, which this file defines below, so priv only carries a pointer
++ * and the table is allocated on first use. */
++struct mgs2_vs_stage_cache;
++
+ struct shader_glsl_priv
+ {
+     bool use_vkd3d;
++    BOOL mgs2_separable_enabled;
++    BOOL mgs2_separable_validate;
++    BOOL mgs2_separable_vs_enabled;
++    BOOL mgs2_ffp_source_dedup_enabled;
++    struct mgs2_vs_stage_cache *mgs2_vs_stages;
++    struct list mgs2_ffp_vs_sources;
++    struct list mgs2_ffp_ps_sources;
+ 
+     struct wined3d_string_buffer shader_buffer;
+     struct wined3d_string_buffer_list string_buffers;
+@@ -247,12 +259,461 @@
+     struct glsl_ps_program ps;
+     struct glsl_cs_program cs;
+     GLuint id;
++    GLuint pipeline_id;
++    GLuint vs_program_id;
++    GLuint ps_program_id;
++    BOOL separable;
+     DWORD constant_update_mask;
+     unsigned int constant_version;
+     DWORD shader_controlled_clip_distances : 1;
+     DWORD clip_distance_mask : 8; /* WINED3D_MAX_CLIP_DISTANCES, 8 */
+     DWORD padding : 23;
++
++    /*
++     * Program-local cache of the FFP texture matrices this program was last
++     * given.
++     *
++     * Uniform values are state of a linked GL program and survive glUseProgram,
++     * but wined3d re-dirties a program's constants every time it becomes
++     * current, so the same matrix is uploaded again and again. Measured on this
++     * device: 331 redundant uploads per frame standing still, 410 in combat,
++     * ~96-97% of all calls to shader_glsl_ffp_vertex_texmatrix_uniform().
++     *
++     * The cache lives here and nowhere else on purpose. This struct IS one
++     * linked GL program, so (program, texture stage) is the natural key, with no
++     * hash table, no allocation on the hot path and no lookup by GLuint.
++     *
++     * A newly linked program gets a fresh entry, so its cache starts invalid by
++     * construction: all four allocation sites in this file use
++     * calloc(1, sizeof(*entry)) -- checked, not assumed -- and none of the four
++     * glLinkProgram() calls relinks an id that a live entry already holds, so
++     * there is no in-place relink to invalidate on. glUseProgram does not
++     * invalidate anything either: uniform values belong to the program.
++     */
++    /* The object that owns this entry's VS uniforms; NULL when not separable. */
++    struct mgs2_ffp_vs_source *mgs_vs_source;
++
++    uint32_t mgs_texmatrix_valid_mask;
++    struct wined3d_matrix mgs_texmatrix_cache[WINED3D_MAX_FFP_TEXTURES];
++};
++
++/*
++ * Counters for the cache above, in a self-identifying record so the A/B reader
++ * can find them by scanning. `enabled` is writable from outside: the
++ * same-process ABBA flips it, which is why the cache is updated even when the
++ * skip is off -- an arm that started with a cold cache would be measuring the
++ * warm-up and not the optimisation.
++ */
++#define MGS2_TEXMATRIX_MAGIC 0x314D5854u /* TXM1 */
++struct mgs2_texmatrix_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled;
++    unsigned int attempted, skipped, executed;
++    unsigned int cold_miss, changed_miss, program_cache_resets;
++    unsigned int per_tex_attempted[WINED3D_MAX_FFP_TEXTURES];
++    unsigned int per_tex_skipped[WINED3D_MAX_FFP_TEXTURES];
++};
++
++/* Bisection switch, compiled in for one experiment: the owner sees the frame
++ * height jumping on this build and not on production, so the skip has to be
++ * separated from everything else the build changed -- the regenerated class-B
++ * registry, the new island binary and the A/B tick in present. With this set,
++ * the cache is still filled and the A/B still flips arms and prints blocks, but
++ * no upload is ever skipped. If the artefact survives that, it is not the cache. */
++/* P74A is CLOSED: the cache lived on glsl_shader_prog_link while the uniforms
++ * belong to vs_program_id, which separable entries SHARE. Kept compiled in as a
++ * counted, non-skipping record of a measured negative; never re-enable without
++ * moving the cache to mgs2_ffp_vs_source, which is the real owner. */
++static const BOOL mgs2_texmatrix_skip_disabled = TRUE;
++
++struct mgs2_texmatrix_stats_public mgs2_texmatrix_stats =
++{
++    MGS2_TEXMATRIX_MAGIC, 1,
++    sizeof(struct mgs2_texmatrix_stats_public) / sizeof(unsigned int),
++    ~MGS2_TEXMATRIX_MAGIC,
++    1,
++};
++
++/*
++ * Same-process ABBA, driven from the swapchain's own present.
++ *
++ * The presenter in winewayland.drv already has an A/B harness, and the first
++ * attempt drove this flag from there by locating the record in memory. That was
++ * a mistake twice over: the scan ran inside the probe context wined3d builds to
++ * enumerate pixel formats and killed adapter initialisation, and once deferred
++ * it silently found nothing. The frame counter this needs is right here --
++ * swapchain_gl_present() is called once per displayed frame -- so the A/B lives
++ * where the optimisation lives and crosses no module boundary.
++ *
++ * The block line is printed in the exact format harness/present_ab_read.py
++ * already parses, so the reducer, its ABBA pairing, its depth and stability
++ * filters and its negative control are reused unchanged. Arm A ("sync") is
++ * always the incumbent: skipping disabled.
++ */
++void mgs2_texmatrix_ab_present(void);
++
++/*
++ * P75A: stop selecting a uniform target that nothing is about to write.
++ *
++ * With separable programs shader_glsl_load_constants() calls
++ * MGS2_LOCAL(mgs2_glActiveShaderProgram)() twice -- once for the VS program, once for the
++ * PS program -- unconditionally, before each stage's upload block. The census
++ * counts 1112-1304 constant loads per combat frame, so that is roughly
++ * 2200-2600 driver calls per frame, and NONE of them appear in the GL_EXTCALL
++ * histogram: this is a project-resolved function pointer, not a GL_EXTCALL
++ * site. The texture-matrix candidate just closed was 410.
++ *
++ * glActiveShaderProgram only chooses which program subsequent glUniform* calls
++ * write into; it does not change which stages execute. So selecting a stage
++ * that no upload follows is pure cost. No cached state, no value comparison,
++ * no payload changes -- the only question is whether an upload follows.
++ *
++ * need_vs/need_ps mirror the guards of the two blocks, and a mirror can drift
++ * from what it mirrors, so it is checked rather than trusted: the upload
++ * helpers bump a witness, and a witness raised while need_* said no is counted
++ * as MISSED. A run with any MISSED is not a result.
++ */
++#define MGS2_ASP_MAGIC 0x31505341u /* ASP1 */
++struct mgs2_asp_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int lazy;
++    unsigned int separable_loads;
++    unsigned int need_vs, need_ps;
++    unsigned int avoided_vs, avoided_ps;
++    unsigned int missed_vs, missed_ps;
++};
++struct mgs2_asp_stats_public mgs2_asp_stats =
++{
++    MGS2_ASP_MAGIC, 1,
++    sizeof(struct mgs2_asp_stats_public) / sizeof(unsigned int),
++    ~MGS2_ASP_MAGIC,
++    1,   /* lazy ON: steady build. The A/B below is compiled out. */
++};
++
++/*
++ * The A/B alternates arms every 12 frames, and with -14.8 ms between them that
++ * alternation is VISIBLE as a ~1 Hz stutter -- the owner reported exactly that
++ * while the measurement was running. A steady build must therefore not carry
++ * the harness at all, which is what this constant turns off. Set it back to
++ * TRUE only to re-measure.
++ */
++static const BOOL mgs2_asp_ab_enabled = FALSE;  /* production: no A/B, no ERR spam */
++static unsigned int mgs2_asp_witness;
++
++/*
++ * Simulator for an FFP light/material cache. Counts only; every upload still
++ * happens.
++ *
++ * The measurement that justifies looking here: between a quiet scene and combat
++ * the light uniforms go from 548 to 986 calls per frame, and lights do not move
++ * within a frame -- they are re-sent because each program needs its own copy.
++ *
++ * THE KEY IS THE POINT. Two previous simulators overstated redundancy by keying
++ * on something GL does not attribute the state to: glVertexAttribPointer was
++ * keyed with the buffer in the lookup instead of the value, and the texture
++ * matrix was keyed on prog->id, which is 0 for every separable entry. Uniforms
++ * belong to the PROGRAM OBJECT, which under separable programs is
++ * prog->vs_program_id -- shared between entries, exactly the sharing that made
++ * the texture-matrix cache corrupt the screen. So the key here is
++ * (vs_program_id, light index, field), which is what GL actually stores.
++ */
++/*
++ * P77: the real light-colour cache. Counters and a runtime switch, so the
++ * same-process ABBA can flip it. `enabled` has one owner --
++ * mgs2_texmatrix_ab_present() -- for the reason the texture-matrix arm was
++ * mislabelled once already: a lazily env-seeded flag in the hot path raced the
++ * A/B and won.
++ */
++#define MGS2_LCA_MAGIC 0x3141434Cu /* LCA1 */
++struct mgs2_lca_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled;
++    unsigned int attempted, skipped, executed, cold, changed, no_owner;
+ };
++struct mgs2_lca_stats_public mgs2_lca_stats =
++{
++    MGS2_LCA_MAGIC, 1,
++    sizeof(struct mgs2_lca_stats_public) / sizeof(unsigned int),
++    ~MGS2_LCA_MAGIC,
++    /* enabled = 1. Measured with the UCT median, not its mean: the mean over a
++     * few hundred 20 us intervals flipped sign between two runs because one
++     * preemption inside a timed group moves it by microseconds. Median 19.5 us
++     * per three-field group with the cache off against 14.5 us with it on, at
++     * 3.000 versus 0.029 uploads per group, gives 1.68 us saved per upload
++     * removed. That is ~0.04 ms/frame in a quiet scene, which is nothing, and
++     * ~0.7 ms/frame in combat, where the same path attempts 552 uploads per
++     * frame at 87% redundancy. A miss costs three 16-byte memcmps. */
++    1,
++};
++
++/* UCT1 -- what one GL call actually costs on this stack.
++ *
++ * The light-cache A/B could not be settled by frame time: 90% of the blocks in
++ * a run sit on the 30/60 fps cap, where vsync absorbs any CPU saving, and the
++ * 2.5% that are combat gave a CI of +-4.2 ms against an effect of about 2. More
++ * combat is the wrong answer -- the calls are removed in EVERY frame, capped or
++ * not, so the sample is already there; only the metric was blind to it.
++ *
++ * So this times the three-field light group directly, one call in `period`.
++ * Both arms run the same memcmp work and differ only in how many uniforms they
++ * upload, so
++ *
++ *     (ticks_A/samples_A - ticks_B/samples_B) / (exec_A/samples_A - exec_B/samples_B)
++ *
++ * is the cost of one glUniform4fv, with the per-group overhead and the memcmp
++ * cancelling out. That constant then converts "calls removed per frame" into
++ * ms/frame for this candidate and for every later one, with no scene noise.
++ */
++/* FRM1 -- the frame denominator, counted where frames actually happen.
++ *
++ * Every per-frame number in this project used to be divided by a frame count
++ * scraped out of the game log, and that count was wrong: the presenter prints
++ * one stats line per N frames, so any window that contained k lines reported
++ * exactly k*N frames no matter how long it really was. Two 20-second windows at
++ * 312 and 190 fps both came back as "300 frames", and a whole calls-per-frame
++ * table had to be recomputed by hand afterwards.
++ *
++ * So the counter lives next to the thing it counts. It is incremented in
++ * wined3d_swapchain_present(), before every early return, so it is valid in
++ * production builds where the A/B is compiled out -- a denominator that only
++ * exists in instrumented builds is the same trap one level down.
++ *
++ * arm_frames[] is what an A/B needs and what sample counts cannot substitute
++ * for: skips happen only in the enabled arm, so the steady-state rate is
++ * skipped / arm_frames[1], with no ratio of timer samples anywhere in it.
++ */
++#define MGS2_FRM_MAGIC 0x314D5246u /* FRM1 */
++struct mgs2_frm_public
++{
++    unsigned int magic, version, size_words, signature;
++    unsigned int presented_frames;
++    unsigned int arm;
++    unsigned int arm_frames[2];
++    unsigned int blocks;
++};
++struct mgs2_frm_public mgs2_frm =
++{
++    MGS2_FRM_MAGIC, 1,
++    sizeof(struct mgs2_frm_public) / sizeof(unsigned int),
++    ~MGS2_FRM_MAGIC,
++};
++
++#define MGS2_UCT_MAGIC 0x31544355u /* UCT1 */
++#define MGS2_UCT_BINS 40u
++struct mgs2_uct_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    unsigned int period, qpc_khz;
++    unsigned int samples[2], ticks_lo[2], ticks_hi[2], exec[2];  /* [0]=A [1]=B */
++    /* A mean over a few hundred wall-clock intervals of ~20 us is not a usable
++     * statistic: one preemption inside a timed group adds milliseconds, and the
++     * first run of this instrument reported the cache arm as SLOWER while it was
++     * doing almost no work. The histogram gives a median instead, which a
++     * handful of outliers cannot move. Bin k holds [k, k+1) microseconds up to
++     * 32 us, then coarser, then everything above in the last bin. */
++    unsigned int hist[2][MGS2_UCT_BINS];
++};
++struct mgs2_uct_stats_public mgs2_uct_stats =
++{
++    MGS2_UCT_MAGIC, 2,
++    sizeof(struct mgs2_uct_stats_public) / sizeof(unsigned int),
++    ~MGS2_UCT_MAGIC,
++    16,
++};
++static unsigned __int64 mgs2_uct_ticks[2];
++static unsigned int mgs2_uct_calls;
++
++static void mgs2_uct_init(void)
++{
++    const char *v = getenv("MGS2_UCT_PERIOD");
++    LARGE_INTEGER freq;
++    int n = (v && *v) ? atoi(v) : 0;
++
++    if (n > 0) mgs2_uct_stats.period = n;
++    QueryPerformanceFrequency(&freq);
++    /* Last, and non-zero: it is also the "initialised" flag. */
++    mgs2_uct_stats.qpc_khz = freq.QuadPart ? (unsigned int)(freq.QuadPart / 1000) : 1;
++}
++
++#define MGS2_LGT_MAGIC 0x3154474Cu /* LGT1 */
++struct mgs2_lgt_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    unsigned int attempted, redundant, cold, changed, table_full;
++};
++struct mgs2_lgt_stats_public mgs2_lgt_stats =
++{
++    MGS2_LGT_MAGIC, 1,
++    sizeof(struct mgs2_lgt_stats_public) / sizeof(unsigned int),
++    ~MGS2_LGT_MAGIC,
++};
++
++#define MGS2_LGT_BITS 13
++#define MGS2_LGT_SIZE (1u << MGS2_LGT_BITS)
++static struct { unsigned __int64 key, val; } mgs2_lgt_table[MGS2_LGT_SIZE];
++
++static unsigned __int64 mgs2_lgt_hash(const void *d, unsigned int len)
++{
++    const unsigned char *p = d;
++    unsigned __int64 h = 0xcbf29ce484222325ull;
++    unsigned int i;
++
++    for (i = 0; i < len; ++i) { h ^= p[i]; h *= 0x100000001b3ull; }
++    return h ? h : 1;
++}
++
++/* field: a small constant per uniform in the light block, so two different
++ * uniforms of the same light never share a slot. */
++static void mgs2_lgt_probe(GLuint program, unsigned int light, unsigned int field,
++        const void *value, unsigned int len)
++{
++    unsigned __int64 key, vh;
++    unsigned int i, n;
++
++    key = ((unsigned __int64)program << 20) ^ ((unsigned __int64)light << 8) ^ field;
++    if (!key) key = 1;
++    vh = mgs2_lgt_hash(value, len);
++    ++mgs2_lgt_stats.attempted;
++
++    i = (unsigned int)((key * 0x9E3779B97F4A7C15ull) >> (64 - MGS2_LGT_BITS));
++    for (n = 0; n < 8; ++n, i = (i + 1) & (MGS2_LGT_SIZE - 1))
++    {
++        if (!mgs2_lgt_table[i].key)
++        {
++            mgs2_lgt_table[i].key = key;
++            mgs2_lgt_table[i].val = vh;
++            ++mgs2_lgt_stats.cold;
++            return;
++        }
++        if (mgs2_lgt_table[i].key == key)
++        {
++            if (mgs2_lgt_table[i].val == vh) ++mgs2_lgt_stats.redundant;
++            else { mgs2_lgt_table[i].val = vh; ++mgs2_lgt_stats.changed; }
++            return;
++        }
++    }
++    ++mgs2_lgt_stats.table_full;
++}
++
++#define MGS2_LGT(field, val, len) \
++    mgs2_lgt_probe(prog->separable ? prog->vs_program_id : prog->id, light, \
++                   (field), (val), (len))
++
++/*
++ * Every uniform upload in this file raises the witness, which is what makes the
++ * need_vs/need_ps mirror checkable rather than merely plausible. The first
++ * version raised it in ONE helper (the texture matrix) and checked only the VS
++ * side, so "MISSED = 0" was a far weaker statement than it looked.
++ *
++ * GL_EXTCALL takes the whole call as its argument, so the wrapper takes it too
++ * and uses the comma operator: safe inside an `if` with no braces.
++ */
++#define MGS2_UNIFORM_CALL(call) ((void)(++mgs2_asp_witness), GL_EXTCALL(call))
++static BOOL mgs2_asp_need_vs, mgs2_asp_need_ps;
++
++/*
++ * `enabled` has exactly one owner: mgs2_texmatrix_ab_present(). An earlier
++ * version also seeded it lazily from MGS2_GL_TEXMATRIX_SHADOW on the first
++ * uniform upload, and whichever of the two ran first won -- which is why the
++ * first block came out labelled as the wrong arm. The env variable is read once,
++ * in the A/B initialiser, and nowhere else.
++ */
++
++void mgs2_texmatrix_ab_present(void)
++{
++    static const unsigned int arm[4] = { 0, 1, 1, 0 };
++    static int block_len = -1, settle, seen, block;
++    static double stamp[1024];
++    static unsigned int nstamp;
++    static double ms_per_tick;
++    LARGE_INTEGER qpc;
++    double now, iv[1024];
++    unsigned int i, k, n;
++
++    /* First, and above every early return: this is the frame denominator, and
++     * it has to be right in builds that do no A/B at all. */
++    ++mgs2_frm.presented_frames;
++    mgs2_frm.arm = mgs2_lca_stats.enabled ? 1 : 0;
++    ++mgs2_frm.arm_frames[mgs2_frm.arm];
++
++    if (!mgs2_asp_ab_enabled) return;
++
++    if (block_len < 0)
++    {
++        const char *v = getenv("MGS2_PRESENT_AB");
++        const char *w = getenv("MGS2_PRESENT_AB_SETTLE");
++
++        /* Default 12, not 0. getenv() on the PE side did not see
++         * MGS2_PRESENT_AB even though the Unix-side presenter did, and a
++         * silently disabled A/B in a build whose only purpose is the A/B is a
++         * waste of a run. The variable still overrides when it does arrive. */
++        block_len = (v && *v) ? atoi(v) : 12;
++        settle = (w && *w) ? atoi(w) : 1;
++        if (block_len < 2) block_len = 12;
++        if (settle < 0) settle = 0;
++        mgs2_texmatrix_stats.enabled = 0;   /* P74A closed: never skips */
++        mgs2_asp_stats.lazy = 1;            /* production, on in both arms */
++        mgs2_lca_stats.enabled = 0;         /* block 0 is arm A: no light cache */
++        ERR("MGS2 texmatrix A/B: %d-frame blocks, settle %d, arm A = cache off "
++            "(MGS2_PRESENT_AB said %s)\n", block_len, settle, v ? v : "nothing");
++    }
++    if (!block_len) return;
++
++    /* QueryPerformanceCounter, not clock_gettime: this is the PE side. */
++    if (ms_per_tick == 0.0)
++    {
++        LARGE_INTEGER freq;
++
++        QueryPerformanceFrequency(&freq);
++        ms_per_tick = freq.QuadPart ? 1000.0 / (double)freq.QuadPart : 0.0;
++        if (ms_per_tick == 0.0) { block_len = 0; return; }
++    }
++    QueryPerformanceCounter(&qpc);
++    now = (double)qpc.QuadPart * ms_per_tick;
++
++    /* Timestamps first; intervals are differences between consecutive ones, so
++     * a block of N stamps yields N-1 frame times. The settle frames after an
++     * arm flip are dropped: the first frame of a new arm straddles both. */
++    if (seen >= settle && nstamp < ARRAY_SIZE(stamp))
++        stamp[nstamp++] = now;
++    ++seen;
++    if (seen < block_len) return;
++
++    n = nstamp > 1 ? nstamp - 1 : 0;
++    if (n)
++    {
++        double span = stamp[nstamp - 1] - stamp[0], sum = 0.0;
++
++        for (i = 0; i < n; ++i)
++        {
++            iv[i] = stamp[i + 1] - stamp[i];
++            sum += iv[i];
++        }
++        for (i = 0; i + 1 < n; ++i)
++            for (k = 0; k + 1 < n - i; ++k)
++                if (iv[k] > iv[k + 1])
++                {
++                    double t = iv[k]; iv[k] = iv[k + 1]; iv[k + 1] = t;
++                }
++
++        ERR("MGS2 PRESENT A/B block=%u arm=%s frames=%u span=%.1f fps=%.3f "
++            "ft_mean=%.2f p50=%.2f p95=%.2f p99=%.2f ftmax=%.2f "
++            "readback=0.000 wait=0.000 pixel=0.000 gpucopy=0.000 copy=0.000 "
++            "acquire=0.000 slow=0/0/0/0 drop=0 tick=%.0f\n",
++            block, mgs2_lca_stats.enabled ? "async" : "sync",
++            n, span, n * 1000.0 / span, sum / n,
++            iv[n / 2], iv[(n * 95) / 100], iv[(n * 99) / 100], iv[n - 1], now);
++    }
++
++    ++block;
++    mgs2_frm.blocks = block;
++    seen = 0;
++    nstamp = 0;
++    mgs2_lca_stats.enabled = arm[block & 3];
++}
+ 
+ struct glsl_program_key
+ {
+@@ -276,6 +737,10 @@
+ struct glsl_context_data
+ {
+     struct glsl_shader_prog_link *glsl_program;
++    /* The FFP shaders behind glsl_program's vs.id / ps.id, so that a
++     * non-dirty stage can still be identified as fixed-function. */
++    struct glsl_ffp_vertex_shader *ffp_vs;
++    struct glsl_ffp_fragment_shader *ffp_ps;
+     GLenum vertex_color_clamp;
+     BOOL rasterization_disabled;
+ };
+@@ -328,11 +793,18 @@
+     unsigned int num_gl_shaders, shader_array_size;
+ };
+ 
++/* One bit per slot in mgs_light_valid_mask, so this must not exceed 32. */
++#define MGS2_FFP_MAX_LIGHTS 10   /* 3 bits each -> 30 bits, fits uint32_t */
++
++struct mgs2_ffp_vs_source;
++struct mgs2_ffp_ps_source;
++
+ struct glsl_ffp_vertex_shader
+ {
+     struct wined3d_ffp_vs_desc desc;
+     GLuint id;
+     struct list linked_programs;
++    struct mgs2_ffp_vs_source *source;
+ };
+ 
+ struct glsl_ffp_fragment_shader
+@@ -340,6 +812,59 @@
+     struct ffp_frag_desc entry;
+     GLuint id;
+     struct list linked_programs;
++    struct mgs2_ffp_ps_source *source;
++};
++
++/* The normal FFP caches are keyed by the complete D3D settings structures.
++ * MGS2 reaches multiple settings keys that generate byte-identical GLSL.  On
++ * this Mali driver each of those aliases used to compile a new shader and,
++ * more importantly, link a new separable stage program on first use.  Keep the
++ * generated source as the canonical key and let all settings descriptors point
++ * at one GL shader / stage-program owner.  Exact length + memcmp is the
++ * correctness check; the hash is only a cheap rejection filter. */
++struct mgs2_ffp_vs_source
++{
++    struct list entry;
++    uint64_t hash;
++    size_t size;
++    char *text;
++    GLuint shader_id;
++    GLuint stage_program;
++    struct glsl_vs_program stage;
++
++    /*
++     * Cache of the FFP light colours this PROGRAM already holds.
++     *
++     * It lives here and not on glsl_shader_prog_link because uniform values are
++     * state of the program object, and under separable programs one
++     * stage_program is SHARED by every entry that links it. P74A put an
++     * equivalent cache on the entry, two entries sharing a program then skipped
++     * each other's uploads, and the frame height visibly jumped. This struct is
++     * the owner: one stage_program, one cache.
++     *
++     * Measured before it was written: 86.7% of these uploads repeat, 380 calls
++     * per combat frame, key (vs_program_id, light, field).
++     */
++    /* Three bits per light slot -- diffuse, specular, ambient -- because the
++     * uniforms are independent and an all-or-nothing cache throws away most of
++     * the win: measured, per-field redundancy is 84.9% while all-three-match is
++     * only 25.8%. */
++    uint32_t mgs_light_valid_mask;
++    struct
++    {
++        struct wined3d_color diffuse, specular, ambient;
++    } mgs_light_cache[MGS2_FFP_MAX_LIGHTS];
++};
++
++struct mgs2_ffp_ps_source
++{
++    struct list entry;
++    uint64_t hash;
++    size_t size;
++    char *text;
++    GLuint shader_id;
++    GLuint stage_program;
++    struct glsl_ps_program stage;
+ };
+ 
+ struct glsl_ffp_destroy_ctx
+@@ -348,6 +873,467 @@
+     const struct wined3d_context_gl *context_gl;
+ };
+ 
++/* Kept outside Wine's desktop-version capability table deliberately.  The
++ * mounted opengl32 facade exposes GLES 3.2 entry points through wglGetProcAddress;
++ * if one is unavailable we retain the ordinary monolithic program path. */
++static PFN_glProgramParameteri mgs2_glProgramParameteri;
++typedef void (WINE_GLAPI *PFN_mgs2_glGetProgramBinary)(GLuint, GLsizei, GLsizei *,
++        GLenum *, void *);
++typedef void (WINE_GLAPI *PFN_mgs2_glProgramBinary)(GLuint, GLenum, const void *,
++        GLsizei);
++static PFN_mgs2_glGetProgramBinary mgs2_glGetProgramBinary;
++static PFN_mgs2_glProgramBinary mgs2_glProgramBinary;
++static PFN_glGenProgramPipelines mgs2_glGenProgramPipelines;
++static PFN_glDeleteProgramPipelines mgs2_glDeleteProgramPipelines;
++static PFN_glUseProgramStages mgs2_glUseProgramStages;
++static PFN_glBindProgramPipeline mgs2_glBindProgramPipeline;
++static PFN_glActiveShaderProgram mgs2_glActiveShaderProgram;
++static PFN_glValidateProgramPipeline mgs2_glValidateProgramPipeline;
++static PFN_glGetProgramPipelineiv mgs2_glGetProgramPipelineiv;
++static PFN_glGetProgramPipelineInfoLog mgs2_glGetProgramPipelineInfoLog;
++
++#ifdef MGS2_ISLAND_ARM
++void *mgs2_island_gl_by_name(const char *name);
++#endif
++
++/* wined3d fills gl_ops.ext from a hand-maintained list in load_gl_funcs(), and
++ * the ARB_separate_shader_objects entry points are not in it -- reading the
++ * table alone returned NULL for all eight, so the candidate disabled itself on
++ * every pair and measured as doing nothing at all.  Resolve the same way
++ * mgs_get_gl_func() does: wglGetProcAddress() serves extension spellings,
++ * while these are GL 4.1 core and therefore reachable as ordinary opengl32
++ * exports. */
++static void *mgs2_get_gl_func(const char *name)
++{
++#ifdef MGS2_ISLAND_ARM
++    /* wglGetProcAddress() is a reverse guest call in the island and therefore
++     * returns an x86 opengl32 thunk.  Caching that address in these file-local
++     * separable pointers made the next native DRAW branch into x86 bytes.
++     * Resolve against the host GL exactly like the translated gl_ops table;
++     * NULL keeps the existing monolithic-program fallback intact. */
++    return mgs2_island_gl_by_name(name);
++#else
++    static HMODULE opengl32;
++    void *pointer;
++
++    if ((pointer = (void *)wglGetProcAddress(name)))
++        return pointer;
++
++    if (!opengl32)
++        opengl32 = GetModuleHandleA("opengl32.dll");
++    return opengl32 ? (void *)GetProcAddress(opengl32, name) : NULL;
++#endif
++}
++
++#define MGS2_RESOLVE_GL(f) \
++    do { \
++        if (!mgs2_##f && !(mgs2_##f = MGS2_GL_INFO(gl_info)->gl_ops.ext.p_##f)) \
++            mgs2_##f = mgs2_get_gl_func(#f); \
++    } while (0)
++
++
++/* ---------------------------------------------------------------------------
++ * Persistent program-binary cache for separable stage programs.
++ *
++ * Measured before it was written, which decided its shape. In one autoload run
++ * the GPU probe recorded 54 events: five glCompileShader calls costing 16 ms in
++ * total, and five separable-stage LINKS costing 611 ms -- 122 ms each. So the
++ * expensive thing is linking, not compiling, and the "shader compile freeze" is
++ * really a link freeze.
++ *
++ * The same run showed all five sources DISTINCT. That closes the obvious design:
++ * a cache that lives only inside one run has nothing to hit. The win has to come
++ * from carrying the linked binaries ACROSS runs, which is what this does.
++ *
++ * The driver is OpenGL ES 3.2, where glGetProgramBinary/glProgramBinary are core
++ * and the format is implementation-defined -- a binary is only valid for the
++ * exact driver that produced it, so GL_VENDOR/GL_RENDERER/GL_VERSION go into the
++ * key and a failed load must fall back silently rather than being an error.
++ *
++ * Worth 611 ms per run from the second run onward, and nothing at all on a
++ * first run or after a driver update. That is the honest size of it.
++ */
++#define MGS2_PROGBIN_VERSION 1u
++#ifndef GL_PROGRAM_BINARY_RETRIEVABLE_HINT
++#define GL_PROGRAM_BINARY_RETRIEVABLE_HINT 0x8257
++#endif
++#ifndef MGS2_PROGBIN_PATH_MAX
++#define MGS2_PROGBIN_PATH_MAX 260
++#endif
++/* stdio, not CreateFileA: the island links a SECOND, native ARM copy of this
++ * translation unit into Box86, where kernel32 does not exist. The Win32 calls
++ * compiled fine and then failed at link time with six undefined references.
++ * fopen/fread/fwrite exist on both sides, and the directory is created by the
++ * launcher so that no mkdir spelling has to work in both either. */
++
++static int mgs2_progbin_state;      /* 0 unknown, 1 usable, -1 off */
++static unsigned int mgs2_progbin_driver;
++static char mgs2_progbin_dir[MGS2_PROGBIN_PATH_MAX];
++/* PBC1 -- why the cache is or is not working, readable by a /proc scan so it
++ * does not depend on which WINEDEBUG channel is open. The first build stored 19
++ * binaries and hit zero of them, and "the key is unstable" and "the driver
++ * rejects the binary" are indistinguishable from the outside. */
++#define MGS2_PBC_MAGIC 0x31434250u /* PBC1 */
++struct mgs2_pbc_public
++{
++    unsigned int magic, version, size_words, signature;
++    unsigned int state;            /* 1 on, (unsigned)-1 off */
++    unsigned int hits, misses, stores;
++    unsigned int open_fail, short_file, gl_error, link_false;
++    unsigned int store_no_len, store_no_data, store_write_fail;
++    unsigned int last_format, last_size, last_src_len;
++    unsigned int roundtrip_tried, roundtrip_ok, roundtrip_err;
++};
++struct mgs2_pbc_public mgs2_pbc =
++{
++    MGS2_PBC_MAGIC, 1,
++    sizeof(struct mgs2_pbc_public) / sizeof(unsigned int),
++    ~MGS2_PBC_MAGIC,
++};
++#define mgs2_progbin_hits   mgs2_pbc.hits
++#define mgs2_progbin_misses mgs2_pbc.misses
++#define mgs2_progbin_stores mgs2_pbc.stores
++
++static unsigned long long mgs2_progbin_fnv(const void *data, size_t len,
++        unsigned long long h)
++{
++    const unsigned char *p = data;
++
++    while (len--)
++    {
++        h ^= *p++;
++        h *= 1099511628211ull;
++    }
++    return h;
++}
++
++static BOOL mgs2_progbin_ready(const struct wined3d_gl_info *gl_info)
++{
++    const struct wined3d_gl_info *gi = MGS2_GL_INFO(gl_info);
++    const char *env, *str;
++    GLint formats = 0;
++    unsigned long long h = 14695981039346656037ull;
++
++    if (mgs2_progbin_state)
++        return mgs2_progbin_state > 0;
++    mgs2_progbin_state = -1;
++
++    /* OFF by default, and the reason is measured rather than cautious.
++     *
++     * This driver produces a program binary, reports its length, hands back
++     * 12280 bytes in its own format 0x8f61 -- and will not take them back. The
++     * in-memory round trip below (roundtrip_ok in PBC1) hands the blob straight
++     * to glProgramBinary on a fresh program in the same context, with no file
++     * and no key involved: GL raises NO error and LINK_STATUS is still false.
++     * Twelve file-backed loads behaved identically. So the entry points exist,
++     * the format enum is real, and reloading simply does not work here.
++     *
++     * The code stays because retesting after a driver update is then one run:
++     * MGS2_GL_PROGRAM_CACHE=1 and read roundtrip_ok. */
++    env = getenv("MGS2_GL_PROGRAM_CACHE");
++    if (!env || strcmp(env, "1"))
++        return FALSE;
++
++    MGS2_RESOLVE_GL(glProgramParameteri);
++    if (!mgs2_glGetProgramBinary)
++        mgs2_glGetProgramBinary = mgs2_get_gl_func("glGetProgramBinary");
++    if (!mgs2_glProgramBinary)
++        mgs2_glProgramBinary = mgs2_get_gl_func("glProgramBinary");
++    if (!mgs2_glGetProgramBinary || !mgs2_glProgramBinary || !mgs2_glProgramParameteri)
++    {
++        ERR("MGS2 program cache: entry points unavailable, cache off\n");
++        return FALSE;
++    }
++
++    /* The one capability question worth asking. A driver may expose the calls
++     * and still offer no format, in which case nothing can be stored. */
++    gi->gl_ops.gl.p_glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &formats);
++    while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { /* GLES-only enum on some stacks */ }
++    if (formats < 1)
++    {
++        ERR("MGS2 program cache: GL_NUM_PROGRAM_BINARY_FORMATS is %d, cache off\n", formats);
++        return FALSE;
++    }
++
++    /* A binary is valid only for the driver that produced it. */
++    if ((str = (const char *)gi->gl_ops.gl.p_glGetString(GL_VENDOR)))
++        h = mgs2_progbin_fnv(str, strlen(str), h);
++    if ((str = (const char *)gi->gl_ops.gl.p_glGetString(GL_RENDERER)))
++        h = mgs2_progbin_fnv(str, strlen(str), h);
++    if ((str = (const char *)gi->gl_ops.gl.p_glGetString(GL_VERSION)))
++        h = mgs2_progbin_fnv(str, strlen(str), h);
++    mgs2_progbin_driver = (unsigned int)(h ^ (h >> 32));
++
++    env = getenv("MGS2_GL_PROGRAM_CACHE_DIR");
++    snprintf(mgs2_progbin_dir, sizeof(mgs2_progbin_dir), "%s", (env && *env) ? env
++            : "Z:\\storage\\roms\\ports\\MGS2-Substance\\shadercache");
++
++    mgs2_progbin_state = 1;
++    mgs2_pbc.state = 1;
++    ERR("MGS2 program cache: on, %d binary format(s), driver %08x, dir %s\n",
++            formats, mgs2_progbin_driver, mgs2_progbin_dir);
++    return TRUE;
++}
++
++/* Key over what actually changes the linked result: the GLSL text, which stage
++ * it is, which attribute indices were bound before linking, and the driver. */
++static void mgs2_progbin_path(const struct wined3d_gl_info *gl_info, GLuint shader_id,
++        GLenum stage_bit, unsigned int attribs, char *out, size_t out_len)
++{
++    const struct wined3d_gl_info *gi = MGS2_GL_INFO(gl_info);
++    unsigned long long h = 14695981039346656037ull;
++    GLint len = 0;
++    char *src;
++
++    GL_EXTCALL(glGetShaderiv(shader_id, GL_SHADER_SOURCE_LENGTH, &len));
++    if (len > 0 && (src = malloc(len)))
++    {
++        GLsizei got = 0;
++
++        GL_EXTCALL(glGetShaderSource(shader_id, len, &got, src));
++        if (got > 0)
++            h = mgs2_progbin_fnv(src, got, h);
++        mgs2_pbc.last_src_len = (unsigned int)got;
++        free(src);
++    }
++    h = mgs2_progbin_fnv(&stage_bit, sizeof(stage_bit), h);
++    h = mgs2_progbin_fnv(&attribs, sizeof(attribs), h);
++    h = mgs2_progbin_fnv(&mgs2_progbin_driver, sizeof(mgs2_progbin_driver), h);
++    (void)gi;
++    snprintf(out, out_len, "%s\\v%u-%016llx.bin", mgs2_progbin_dir,
++            MGS2_PROGBIN_VERSION, h);
++}
++
++static BOOL mgs2_progbin_load(const struct wined3d_gl_info *gl_info, GLuint program,
++        const char *path)
++{
++    const struct wined3d_gl_info *gi = MGS2_GL_INFO(gl_info);
++    GLenum format;
++    GLint linked = 0;
++    long size;
++    void *blob;
++    FILE *f;
++
++    if (!(f = fopen(path, "rb")))
++    {
++        ++mgs2_pbc.open_fail;
++        return FALSE;
++    }
++    if (fseek(f, 0, SEEK_END) || (size = ftell(f)) <= (long)sizeof(format))
++    {
++        ++mgs2_pbc.short_file;
++        fclose(f);
++        return FALSE;
++    }
++    rewind(f);
++    if (!(blob = malloc(size)))
++    {
++        fclose(f);
++        return FALSE;
++    }
++    if (fread(blob, 1, size, f) != (size_t)size)
++    {
++        fclose(f);
++        free(blob);
++        return FALSE;
++    }
++    fclose(f);
++
++    memcpy(&format, blob, sizeof(format));
++    /* The game leaves GL errors pending -- 20479 GL_INVALID_OPERATION from
++     * glAlphaFunc in one measured run -- so without draining first, whatever we
++     * read afterwards is somebody else's. */
++    while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++    mgs2_glProgramBinary(program, format, (const char *)blob + sizeof(format),
++            (GLsizei)(size - sizeof(format)));
++    /* A stale or foreign binary is a normal outcome, not an error: the spec lets
++     * the driver reject one after any software change. Swallow the GL error and
++     * let the caller link from source. */
++    {
++        GLenum err, first = GL_NO_ERROR;
++
++        while ((err = gi->gl_ops.gl.p_glGetError()) != GL_NO_ERROR)
++            if (first == GL_NO_ERROR) first = err;
++        if (first != GL_NO_ERROR) mgs2_pbc.gl_error = first;
++    }
++    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &linked));
++    mgs2_pbc.last_format = format;
++    mgs2_pbc.last_size = (unsigned int)size;
++    if (!linked) ++mgs2_pbc.link_false;
++    free(blob);
++    return linked != 0;
++}
++
++static void mgs2_progbin_store(const struct wined3d_gl_info *gl_info, GLuint program,
++        const char *path)
++{
++    const struct wined3d_gl_info *gi = MGS2_GL_INFO(gl_info);
++    GLint size = 0;
++    GLsizei got = 0;
++    GLenum format = 0;
++    char *blob;
++    FILE *f;
++
++    GL_EXTCALL(glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &size));
++    while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++    if (size <= 0) { ++mgs2_pbc.store_no_len; return; }
++    if (!(blob = malloc(size + sizeof(format))))
++        return;
++    mgs2_glGetProgramBinary(program, size, &got, &format, blob + sizeof(format));
++    while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++    if (got <= 0)
++    {
++        ++mgs2_pbc.store_no_data;
++        free(blob);
++        return;
++    }
++    memcpy(blob, &format, sizeof(format));
++
++    /* One in-memory round trip, once per process: hand the blob straight back
++     * to the driver in a fresh program and see whether it links. This is the
++     * only thing that separates "this driver will not reload its own binaries"
++     * from "our file handling is wrong" -- with the file out of the picture,
++     * a failure here closes the whole branch and a success blames persistence. */
++    if (!mgs2_pbc.roundtrip_tried)
++    {
++        GLuint probe = GL_EXTCALL(glCreateProgram());
++
++        ++mgs2_pbc.roundtrip_tried;
++        if (probe)
++        {
++            GLint ok = 0;
++            GLenum err, first = GL_NO_ERROR;
++
++            while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++            mgs2_glProgramBinary(probe, format, blob + sizeof(format), got);
++            while ((err = gi->gl_ops.gl.p_glGetError()) != GL_NO_ERROR)
++                if (first == GL_NO_ERROR) first = err;
++            GL_EXTCALL(glGetProgramiv(probe, GL_LINK_STATUS, &ok));
++            mgs2_pbc.roundtrip_ok = ok ? 1 : 0;
++            mgs2_pbc.roundtrip_err = first;
++            GL_EXTCALL(glDeleteProgram(probe));
++        }
++    }
++
++    if ((f = fopen(path, "wb")))
++    {
++        if (fwrite(blob, 1, got + sizeof(format), f) == (size_t)(got + sizeof(format)))
++            ++mgs2_progbin_stores;
++        else
++            ++mgs2_pbc.store_write_fail;
++        fclose(f);
++    }
++    else ++mgs2_pbc.store_write_fail;
++    free(blob);
++}
++
++static BOOL mgs2_resolve_separable(const struct wined3d_gl_info *gl_info)
++{
++    static BOOL reported;
++
++    MGS2_RESOLVE_GL(glProgramParameteri);
++    MGS2_RESOLVE_GL(glGenProgramPipelines);
++    MGS2_RESOLVE_GL(glDeleteProgramPipelines);
++    MGS2_RESOLVE_GL(glUseProgramStages);
++    MGS2_RESOLVE_GL(glBindProgramPipeline);
++    MGS2_RESOLVE_GL(glActiveShaderProgram);
++    MGS2_RESOLVE_GL(glValidateProgramPipeline);
++    MGS2_RESOLVE_GL(glGetProgramPipelineiv);
++    /* Diagnostic only; not required for the path to work. */
++    MGS2_RESOLVE_GL(glGetProgramPipelineInfoLog);
++
++    if (!reported)
++    {
++        reported = TRUE;
++        ERR("separable entry points: ProgramParameteri=%p GenProgramPipelines=%p "
++                "DeleteProgramPipelines=%p UseProgramStages=%p BindProgramPipeline=%p "
++                "ActiveShaderProgram=%p ValidateProgramPipeline=%p GetProgramPipelineiv=%p\n",
++                mgs2_glProgramParameteri, mgs2_glGenProgramPipelines,
++                mgs2_glDeleteProgramPipelines, mgs2_glUseProgramStages,
++                mgs2_glBindProgramPipeline, mgs2_glActiveShaderProgram,
++                mgs2_glValidateProgramPipeline, mgs2_glGetProgramPipelineiv);
++    }
++
++    return mgs2_glProgramParameteri && mgs2_glGenProgramPipelines && mgs2_glDeleteProgramPipelines
++            && mgs2_glUseProgramStages && mgs2_glBindProgramPipeline && mgs2_glActiveShaderProgram
++            && mgs2_glValidateProgramPipeline && mgs2_glGetProgramPipelineiv;
++}
++
++/* Bounded, memory-only transition probe, read from outside the process through
++ * /proc/<pid>/mem by harness/gpu_transition_probe.py.  The hot thread only
++ * stores into a fixed ring: no file, no debug channel, no allocation.  Rule 2
++ * of this project exists because logging from a hot thread changed the very
++ * timings being judged. */
++#define MGS2_PROBE_MAGIC 0x32555047
++#define MGS2_PROBE_CAPACITY 512
++
++#define MGS2_PROBE_OP_LINK_PROGRAM 5
++#define MGS2_PROBE_OP_COMPILE_SHADER 6
++#define MGS2_PROBE_OP_LINK_SEPARABLE_STAGE 8
++#define MGS2_PROBE_OP_VALIDATE_PIPELINE 9
++#define MGS2_PROBE_OP_SLOW_BIND 10
++
++struct mgs2_probe_event
++{
++    LONG commit;
++    unsigned int op;
++    unsigned int tid;
++    unsigned int duration_us;
++    unsigned int a;
++    unsigned int b;
++    unsigned int c;
++    unsigned int d;
++    unsigned int object;
++};
++
++struct mgs2_probe_ring
++{
++    unsigned int magic;
++    unsigned int version;
++    unsigned int capacity;
++    LONG next_sequence;
++    struct mgs2_probe_event events[MGS2_PROBE_CAPACITY];
++};
++
++struct mgs2_probe_ring mgs2_gpu_probe = {MGS2_PROBE_MAGIC, 1, MGS2_PROBE_CAPACITY, 0};
++static BOOL mgs2_probe_enabled;
++static LONGLONG mgs2_probe_frequency;
++
++static LONGLONG mgs2_probe_now(void)
++{
++    LARGE_INTEGER now;
++
++    if (!mgs2_probe_enabled)
++        return 0;
++    QueryPerformanceCounter(&now);
++    return now.QuadPart;
++}
++
++static void mgs2_probe_record(unsigned int op, LONGLONG start, unsigned int a,
++        unsigned int b, unsigned int c, unsigned int d, unsigned int object)
++{
++    struct mgs2_probe_event *event;
++    LARGE_INTEGER now;
++    LONG sequence;
++
++    if (!mgs2_probe_enabled || !mgs2_probe_frequency)
++        return;
++
++    QueryPerformanceCounter(&now);
++    sequence = InterlockedIncrement(&mgs2_gpu_probe.next_sequence);
++    event = &mgs2_gpu_probe.events[(sequence - 1) % MGS2_PROBE_CAPACITY];
++    event->op = op;
++    event->tid = GetCurrentThreadId();
++    event->duration_us = (unsigned int)((now.QuadPart - start) * 1000000 / mgs2_probe_frequency);
++    event->a = a;
++    event->b = b;
++    event->c = c;
++    event->d = d;
++    event->object = object;
++    /* Published last, so the reader never accepts a half-written slot. */
++    InterlockedExchange(&event->commit, sequence);
++}
++
+ static void shader_glsl_generate_shader_epilogue(const struct wined3d_shader_context *ctx);
+ 
+ static const char *debug_gl_shader_type(GLenum type)
+@@ -548,368 +1534,13 @@
+ }
+ 
+ /* Context activation is done by the caller. */
+-/*
+- * MGS2 shader triage.
+- *
+- * This game is fixed-function, so wined3d builds a GLSL variant per state
+- * combination and compiles it when that combination first appears -- which is
+- * exactly on entering a new area or a cutscene, where the owner reports freezes.
+- * Counters and total milliseconds, reported at most once a second, are enough to
+- * say whether a hitch coincides with a compile or a link. MGS2_WINED3D_STATS=1.
+- */
+-static LONG mgs2_compiles, mgs2_links;
+-static double mgs2_compile_ms, mgs2_link_ms;
+-
+-static BOOL mgs2_wined3d_stats(void)
+-{
+-    static int on = -1;
+-    char value[8];
+-    DWORD len;
+-
+-    if (on != -1) return on;
+-    len = GetEnvironmentVariableA("MGS2_WINED3D_STATS", value, sizeof(value));
+-    on = len && len < sizeof(value) && value[0] != '0';
+-    return on;
+-}
+-
+-static double mgs2_now_ms(void)
+-{
+-    LARGE_INTEGER counter, frequency;
+-
+-    QueryPerformanceFrequency(&frequency);
+-    QueryPerformanceCounter(&counter);
+-    return frequency.QuadPart ? counter.QuadPart * 1000.0 / frequency.QuadPart : 0.0;
+-}
+-
+-static void mgs2_shader_report(void)
+-{
+-    static DWORD last;
+-    DWORD now;
+-
+-    if (!mgs2_wined3d_stats()) return;
+-    now = GetTickCount();
+-    if (now - last < 1000) return;
+-    last = now;
+-    if (!mgs2_compiles && !mgs2_links) return;
+-
+-    ERR("MGS2 SHADERSTAT tick=%lu compiles=%ld in %.1f ms | links=%ld in %.1f ms\n",
+-            now, mgs2_compiles, mgs2_compile_ms, mgs2_links, mgs2_link_ms);
+-    mgs2_compiles = mgs2_links = 0;
+-    mgs2_compile_ms = mgs2_link_ms = 0.0;
+-}
+-
+-
+-/*
+- * MGS2 program binary cache.
+- *
+- * Measured on this device: compiling a GLSL shader costs 2-4 ms, but linking one
+- * program on the Mali blob costs about 195 ms, and it happens synchronously in
+- * whatever frame first needs that state combination. That is exactly the freeze
+- * the owner reports on entering an open area or a cutscene -- a 236 ms frame was
+- * caught in the same second as a 198 ms link.
+- *
+- * GLES gives the fix: keep the linked program's binary and hand it back with
+- * glProgramBinary next time instead of linking again. The link disappears; the
+- * cheap compile stays. Nothing is cached in the first session that produced it,
+- * so the win shows from the second run of a scene onwards.
+- *
+- * The key is a hash over every attached shader's final source plus the driver
+- * identity, so a driver update or a wined3d change invalidates entries instead of
+- * feeding a stale binary to the GPU. glProgramBinary is always checked with
+- * GL_LINK_STATUS, and any failure falls back to a normal link -- the spec
+- * explicitly requires that, binaries are allowed to be rejected at any time.
+- *
+- *   MGS2_GLSL_CACHE=<dos path>   enable, e.g. D:\\roms\\ports\\MGS2-Substance\\cache
+- *   MGS2_GLSL_CACHE_STATS=1      one line per hit/miss decision
+- */
+-static const char *mgs2_glsl_cache_dir(void)
+-{
+-    static char dir[MAX_PATH];
+-    static int checked;
+-
+-    if (!checked)
+-    {
+-        DWORD len = GetEnvironmentVariableA("MGS2_GLSL_CACHE", dir, sizeof(dir));
+-
+-        checked = 1;
+-        if (!len || len >= sizeof(dir)) dir[0] = 0;
+-        else CreateDirectoryA(dir, NULL);
+-    }
+-    return dir[0] ? dir : NULL;
+-}
+-
+-static BOOL mgs2_glsl_cache_stats(void)
+-{
+-    static int on = -1;
+-    char value[8];
+-    DWORD len;
+-
+-    if (on != -1) return on;
+-    len = GetEnvironmentVariableA("MGS2_GLSL_CACHE_STATS", value, sizeof(value));
+-    on = len && len < sizeof(value) && value[0] != '0';
+-    return on;
+-}
+-
+-/*
+- * Resolve the program-binary entry points ourselves.
+- *
+- * Measured on this stack: the driver reports one binary format, so it can do
+- * this, but wined3d's tables come back NULL for both functions. Same cause as
+- * the ES2_compatibility functions documented in adapter_gl.c -- these are core
+- * GL 4.1 by the desktop spelling, and what a GLES blob actually exports is the
+- * OES spelling. Try both, once.
+- */
+-static PFN_glGetProgramBinary mgs2_p_get_program_binary;
+-static PFN_glProgramBinary mgs2_p_program_binary;
+-
+-static void mgs2_resolve_binary_funcs(const struct wined3d_gl_info *gl_info)
+-{
+-    static int resolved;
+-    HMODULE opengl32;
+-
+-    if (resolved) return;
+-    resolved = 1;
+-
+-    mgs2_p_get_program_binary = gl_info->gl_ops.ext.p_glGetProgramBinary;
+-    mgs2_p_program_binary = gl_info->gl_ops.ext.p_glProgramBinary;
+-    if (mgs2_p_get_program_binary && mgs2_p_program_binary) return;
+-
+-    if (!mgs2_p_get_program_binary)
+-        mgs2_p_get_program_binary = (void *)wglGetProcAddress("glGetProgramBinary");
+-    if (!mgs2_p_get_program_binary)
+-        mgs2_p_get_program_binary = (void *)wglGetProcAddress("glGetProgramBinaryOES");
+-    if (!mgs2_p_program_binary)
+-        mgs2_p_program_binary = (void *)wglGetProcAddress("glProgramBinary");
+-    if (!mgs2_p_program_binary)
+-        mgs2_p_program_binary = (void *)wglGetProcAddress("glProgramBinaryOES");
+-
+-    if ((!mgs2_p_get_program_binary || !mgs2_p_program_binary)
+-            && (opengl32 = GetModuleHandleA("opengl32.dll")))
+-    {
+-        if (!mgs2_p_get_program_binary)
+-            mgs2_p_get_program_binary = (void *)GetProcAddress(opengl32, "glGetProgramBinary");
+-        if (!mgs2_p_program_binary)
+-            mgs2_p_program_binary = (void *)GetProcAddress(opengl32, "glProgramBinary");
+-    }
+-}
+-
+-static void mgs2_hash_bytes(ULONGLONG *hash, const void *data, SIZE_T size)
+-{
+-    const BYTE *p = data;
+-    SIZE_T i;
+-
+-    for (i = 0; i < size; ++i)
+-        *hash = (*hash ^ p[i]) * 0x100000001b3ull;
+-}
+-
+-/* Hash every attached shader's source, plus who is going to run it. */
+-static BOOL mgs2_glsl_program_key(const struct wined3d_gl_info *gl_info, GLuint program,
+-        char *out, SIZE_T out_size)
+-{
+-    ULONGLONG hash = 0xcbf29ce484222325ull;
+-    GLuint shaders[8];
+-    GLsizei count = 0, i;
+-    const char *ident;
+-
+-    if (!gl_info->gl_ops.ext.p_glGetAttachedShaders || !gl_info->gl_ops.ext.p_glGetShaderSource)
+-        return FALSE;
+-
+-    GL_EXTCALL(glGetAttachedShaders(program, ARRAY_SIZE(shaders), &count, shaders));
+-    if (count <= 0) return FALSE;
+-
+-    for (i = 0; i < count; ++i)
+-    {
+-        GLint length = 0;
+-        char *src;
+-
+-        GL_EXTCALL(glGetShaderiv(shaders[i], GL_SHADER_SOURCE_LENGTH, &length));
+-        if (length <= 0 || !(src = malloc(length + 1))) return FALSE;
+-        GL_EXTCALL(glGetShaderSource(shaders[i], length + 1, NULL, src));
+-        mgs2_hash_bytes(&hash, src, strlen(src));
+-        free(src);
+-    }
+-
+-    if ((ident = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_VERSION)))
+-        mgs2_hash_bytes(&hash, ident, strlen(ident));
+-    if ((ident = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_RENDERER)))
+-        mgs2_hash_bytes(&hash, ident, strlen(ident));
+-    if ((ident = (const char *)gl_info->gl_ops.gl.p_glGetString(GL_VENDOR)))
+-        mgs2_hash_bytes(&hash, ident, strlen(ident));
+-
+-    snprintf(out, out_size, "%s\\glsl-%016I64x.bin", mgs2_glsl_cache_dir(), hash);
+-    return TRUE;
+-}
+-
+-/* TRUE if the program is now linked from a cached binary. */
+-static BOOL mgs2_glsl_load_binary(const struct wined3d_gl_info *gl_info, GLuint program)
+-{
+-    char path[MAX_PATH];
+-    HANDLE file;
+-    DWORD size, read = 0;
+-    GLenum format;
+-    void *blob;
+-    GLint status = 0;
+-
+-    mgs2_resolve_binary_funcs(gl_info);
+-    if (!mgs2_glsl_cache_dir() || !mgs2_p_program_binary) return FALSE;
+-    if (!mgs2_glsl_program_key(gl_info, program, path, sizeof(path))) return FALSE;
+-
+-    file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+-            FILE_ATTRIBUTE_NORMAL, NULL);
+-    if (file == INVALID_HANDLE_VALUE) return FALSE;
+-
+-    size = GetFileSize(file, NULL);
+-    if (size <= sizeof(GLenum) || size == INVALID_FILE_SIZE || !(blob = malloc(size)))
+-    {
+-        CloseHandle(file);
+-        return FALSE;
+-    }
+-    if (!ReadFile(file, blob, size, &read, NULL) || read != size)
+-    {
+-        CloseHandle(file);
+-        free(blob);
+-        return FALSE;
+-    }
+-    CloseHandle(file);
+-
+-    memcpy(&format, blob, sizeof(format));
+-    mgs2_p_program_binary(program, format, (char *)blob + sizeof(format),
+-            size - sizeof(format));
+-    free(blob);
+-
+-    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &status));
+-    if (!status)
+-    {
+-        /* Stale or rejected: drop it and let the caller link normally. */
+-        DeleteFileA(path);
+-        if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE reject %s\n", path);
+-        return FALSE;
+-    }
+-    if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE hit %s\n", path);
+-    return TRUE;
+-}
+-
+-
+-/*
+- * MGS2_LINK_TWICE=1: does the driver cache programs by source?
+- *
+- * The prewarm idea -- link everything during loading so no link lands inside a
+- * frame -- only works if the blob recognises a source it has already compiled.
+- * wined3d looks programs up by its own state key, not by shader text, so a
+- * pre-linked program is invisible to that lookup; the game will still call
+- * glLinkProgram for its combination. The only way prewarm can pay off is if that
+- * second link is cheap because the driver kept the result.
+- *
+- * So measure exactly that, once: right after the first real link, build a second
+- * program from the same shader objects and time linking it. Costs one extra link
+- * at startup and answers the question outright.
+- */
+-static void mgs2_link_twice_probe(const struct wined3d_gl_info *gl_info, GLuint program,
+-        double first_ms)
+-{
+-    static int done;
+-    char value[8];
+-    DWORD len;
+-    GLuint shaders[8], probe_program;
+-    GLsizei count = 0, i;
+-    double t0;
+-    GLint status = 0;
+-
+-    if (done) return;
+-    len = GetEnvironmentVariableA("MGS2_LINK_TWICE", value, sizeof(value));
+-    if (!len || len >= sizeof(value) || value[0] == '0') return;
+-    done = 1;
+-
+-    GL_EXTCALL(glGetAttachedShaders(program, ARRAY_SIZE(shaders), &count, shaders));
+-    if (count <= 0) return;
+-
+-    probe_program = GL_EXTCALL(glCreateProgram());
+-    for (i = 0; i < count; ++i)
+-        GL_EXTCALL(glAttachShader(probe_program, shaders[i]));
+-
+-    t0 = mgs2_now_ms();
+-    GL_EXTCALL(glLinkProgram(probe_program));
+-    GL_EXTCALL(glGetProgramiv(probe_program, GL_LINK_STATUS, &status));
+-    ERR("MGS2 LINKTWICE first=%.1f ms second=%.1f ms status=%d shaders=%d "
+-        "(second cheap => the driver caches by source and prewarm works; "
+-        "second as slow => prewarm is pointless, only program binaries help)\n",
+-        first_ms, mgs2_now_ms() - t0, status, count);
+-
+-    GL_EXTCALL(glDeleteProgram(probe_program));
+-}
+-
+-/* One line, once, saying whether this driver can do program binaries at all --
+- * without it a silent zero store count is indistinguishable from a bug. */
+-static void mgs2_glsl_cache_probe(const struct wined3d_gl_info *gl_info)
+-{
+-    static int done;
+-    GLint formats = -1;
+-
+-    if (done) return;
+-    done = 1;
+-
+-    gl_info->gl_ops.gl.p_glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &formats);
+-
+-    mgs2_resolve_binary_funcs(gl_info);
+-    ERR("MGS2 GLSLCACHE probe: dir=%s binary_formats=%d get_binary=%p program_binary=%p "
+-        "attached=%p get_source=%p\n",
+-        mgs2_glsl_cache_dir() ? mgs2_glsl_cache_dir() : "(unset)", formats,
+-        mgs2_p_get_program_binary, mgs2_p_program_binary,
+-        gl_info->gl_ops.ext.p_glGetAttachedShaders, gl_info->gl_ops.ext.p_glGetShaderSource);
+-}
+-
+-static void mgs2_glsl_save_binary(const struct wined3d_gl_info *gl_info, GLuint program)
+-{
+-    char path[MAX_PATH], tmp[MAX_PATH];
+-    GLint length = 0, status = 0;
+-    GLenum format = 0;
+-    HANDLE file;
+-    DWORD written;
+-    void *blob;
+-
+-    mgs2_glsl_cache_probe(gl_info);
+-    if (!mgs2_glsl_cache_dir() || !mgs2_p_get_program_binary) return;
+-    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &status));
+-    if (mgs2_glsl_cache_stats() && !status) ERR("MGS2 GLSLCACHE skip: link status 0\n");
+-    if (!status) return;
+-    GL_EXTCALL(glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &length));
+-    if (length <= 0)
+-    {
+-        if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE skip: binary length %d\n", length);
+-        return;
+-    }
+-    if (!mgs2_glsl_program_key(gl_info, program, path, sizeof(path)))
+-    {
+-        if (mgs2_glsl_cache_stats()) ERR("MGS2 GLSLCACHE skip: no key\n");
+-        return;
+-    }
+-    if (!(blob = malloc(length + sizeof(GLenum)))) return;
+-
+-    mgs2_p_get_program_binary(program, length, NULL, &format,
+-            (char *)blob + sizeof(GLenum));
+-    memcpy(blob, &format, sizeof(format));
+-
+-    /* Write beside the target and rename, so a kill mid-write cannot leave a
+-     * truncated binary that the next run would feed to the driver. */
+-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+-    file = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+-    if (file != INVALID_HANDLE_VALUE)
+-    {
+-        BOOL ok = WriteFile(file, blob, length + sizeof(GLenum), &written, NULL)
+-                && written == length + sizeof(GLenum);
+-        CloseHandle(file);
+-        if (ok) MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING);
+-        else DeleteFileA(tmp);
+-        if (mgs2_glsl_cache_stats())
+-            ERR("MGS2 GLSLCACHE store %s %d bytes %s\n", path, length, ok ? "ok" : "FAILED");
+-    }
+-    free(blob);
+-}
+ 
+ static void shader_glsl_compile(const struct wined3d_gl_info *gl_info, GLuint shader, const char *src)
+ {
+-    double mgs2_t0 = mgs2_wined3d_stats() ? mgs2_now_ms() : 0.0;
+     const char *ptr, *end, *line;
++    uint64_t source_hash = 14695981039346656037ull;
++    unsigned int source_size = 0;
++    LONGLONG probe_start;
+ 
+     TRACE("Compiling shader object %u.\n", shader);
+ 
+@@ -925,15 +1556,23 @@
+ 
+     GL_EXTCALL(glShaderSource(shader, 1, &src, NULL));
+     checkGLcall("glShaderSource");
++    probe_start = mgs2_probe_now();
+     GL_EXTCALL(glCompileShader(shader));
+     checkGLcall("glCompileShader");
+-    print_glsl_info_log(gl_info, shader, FALSE);
+-    if (mgs2_wined3d_stats())
++    if (mgs2_probe_enabled)
+     {
+-        mgs2_compiles++;
+-        mgs2_compile_ms += mgs2_now_ms() - mgs2_t0;
+-        mgs2_shader_report();
++        const unsigned char *p = (const unsigned char *)src;
++
++        while (*p)
++        {
++            source_hash ^= *p++;
++            source_hash *= 1099511628211ull;
++            ++source_size;
++        }
+     }
++    mgs2_probe_record(MGS2_PROBE_OP_COMPILE_SHADER, probe_start,
++            (unsigned int)source_hash, (unsigned int)(source_hash >> 32), source_size, 0, shader);
++    print_glsl_info_log(gl_info, shader, FALSE);
+ 
+ }
+ 
+@@ -1241,7 +1880,7 @@
+ 
+         string_buffer_sprintf(name, "block_%s_cb%u", prefix, i);
+         block_idx = GL_EXTCALL(glGetUniformBlockIndex(program_id, name->buffer));
+-        GL_EXTCALL(glUniformBlockBinding(program_id, block_idx, base + i));
++        MGS2_UNIFORM_CALL(glUniformBlockBinding(program_id, block_idx, base + i));
+     }
+     checkGLcall("glUniformBlockBinding");
+     string_buffer_release(&priv->string_buffers, name);
+@@ -1271,7 +1910,7 @@
+         }
+ 
+         TRACE("Loading sampler %s on unit %u.\n", sampler_name->buffer, mapped_unit);
+-        GL_EXTCALL(glUniform1i(name_loc, mapped_unit));
++        MGS2_UNIFORM_CALL(glUniform1i(name_loc, mapped_unit));
+     }
+     checkGLcall("Load sampler bindings");
+     string_buffer_release(&priv->string_buffers, sampler_name);
+@@ -1336,7 +1975,7 @@
+ 
+         string_buffer_sprintf(icb_name, "%s_icb", prefix);
+         icb_location = GL_EXTCALL(glGetUniformLocation(program_id, icb_name->buffer));
+-        GL_EXTCALL(glUniform4fv(icb_location, icb->vec4_count, (const GLfloat *)icb->data));
++        MGS2_UNIFORM_CALL(glUniform4fv(icb_location, icb->vec4_count, (const GLfloat *)icb->data));
+         checkGLcall("Load immediate constant buffer");
+ 
+         string_buffer_release(&priv->string_buffers, icb_name);
+@@ -1367,7 +2006,7 @@
+             continue;
+ 
+         TRACE("Loading image %s on unit %u.\n", name->buffer, i);
+-        GL_EXTCALL(glUniform1i(location, i));
++        MGS2_UNIFORM_CALL(glUniform1i(location, i));
+     }
+     checkGLcall("Load image bindings");
+     string_buffer_release(&priv->string_buffers, name);
+@@ -1671,7 +2310,7 @@
+         }
+     }
+     if (start <= end)
+-        GL_EXTCALL(glUniform4fv(constant_locations[start], end - start + 1, &constants[start].x));
++        MGS2_UNIFORM_CALL(glUniform4fv(constant_locations[start], end - start + 1, &constants[start].x));
+     checkGLcall("walk_constant_heap()");
+ }
+ 
+@@ -1688,7 +2327,7 @@
+     clamped_constant[2] = data->z < -1.0f ? -1.0f : data->z > 1.0f ? 1.0f : data->z;
+     clamped_constant[3] = data->w < -1.0f ? -1.0f : data->w > 1.0f ? 1.0f : data->w;
+ 
+-    GL_EXTCALL(glUniform4fv(location, 1, clamped_constant));
++    MGS2_UNIFORM_CALL(glUniform4fv(location, 1, clamped_constant));
+ }
+ 
+ /* Context activation is done by the caller. */
+@@ -1779,7 +2418,7 @@
+     /* Immediate constants are clamped to [-1;1] at shader creation time if needed */
+     LIST_FOR_EACH_ENTRY(lconst, &shader->constantsF, struct wined3d_shader_lconst, entry)
+     {
+-        GL_EXTCALL(glUniform4fv(constant_locations[lconst->idx], 1, (const GLfloat *)lconst->value));
++        MGS2_UNIFORM_CALL(glUniform4fv(constant_locations[lconst->idx], 1, (const GLfloat *)lconst->value));
+     }
+     checkGLcall("glUniform4fv()");
+ }
+@@ -1800,7 +2439,7 @@
+         {
+             /* We found this uniform name in the program - go ahead and send the data */
+             i = wined3d_bit_scan(&constants_set);
+-            GL_EXTCALL(glUniform4iv(locations[i], 1, &constants[i].x));
++            MGS2_UNIFORM_CALL(glUniform4iv(locations[i], 1, &constants[i].x));
+         }
+     }
+ 
+@@ -1813,7 +2452,7 @@
+         const GLint *values = (const GLint *)lconst->value;
+ 
+         /* We found this uniform name in the program - go ahead and send the data */
+-        GL_EXTCALL(glUniform4iv(locations[idx], 1, values));
++        MGS2_UNIFORM_CALL(glUniform4iv(locations[idx], 1, values));
+         ptr = list_next(&shader->constantsI, ptr);
+     }
+     checkGLcall("glUniform4iv()");
+@@ -1834,7 +2473,7 @@
+         while (constants_set)
+         {
+             i = wined3d_bit_scan(&constants_set);
+-            GL_EXTCALL(glUniform1iv(locations[i], 1, &constants[i]));
++            MGS2_UNIFORM_CALL(glUniform1iv(locations[i], 1, &constants[i]));
+         }
+     }
+ 
+@@ -1846,7 +2485,7 @@
+         unsigned int idx = lconst->idx;
+         const GLint *values = (const GLint *)lconst->value;
+ 
+-        GL_EXTCALL(glUniform1iv(locations[idx], 1, values));
++        MGS2_UNIFORM_CALL(glUniform1iv(locations[idx], 1, values));
+         ptr = list_next(&shader->constantsB, ptr);
+     }
+     checkGLcall("glUniform1iv()");
+@@ -1950,7 +2589,7 @@
+     if (prog->vs.normal_matrix_location == -1)
+         return;
+ 
+-    GL_EXTCALL(glUniformMatrix4fv(prog->vs.normal_matrix_location,
++    MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.normal_matrix_location,
+             1, FALSE, &constants->modelview.not_blended.normal_matrix._11));
+     checkGLcall("glUniformMatrix4fv");
+ }
+@@ -1960,14 +2599,42 @@
+ {
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
++    const struct wined3d_matrix *matrix;
++    uint32_t bit;
++
+     if (tex >= WINED3D_MAX_FFP_TEXTURES)
+         return;
+     if (prog->vs.texture_matrix_location[tex] == -1)
+         return;
+ 
+-    GL_EXTCALL(glUniformMatrix4fv(prog->vs.texture_matrix_location[tex],
+-            1, FALSE, &constants->texture_matrices[tex]._11));
++    matrix = &constants->texture_matrices[tex];
++    bit = 1u << tex;
++
++    ++mgs2_texmatrix_stats.attempted;
++    ++mgs2_texmatrix_stats.per_tex_attempted[tex];
++
++    if (!(prog->mgs_texmatrix_valid_mask & bit))
++        ++mgs2_texmatrix_stats.cold_miss;
++    else if (memcmp(&prog->mgs_texmatrix_cache[tex], matrix, sizeof(*matrix)))
++        ++mgs2_texmatrix_stats.changed_miss;
++    else if (mgs2_texmatrix_stats.enabled && !mgs2_texmatrix_skip_disabled)
++    {
++        /* Bit-identical to what this program already holds. */
++        ++mgs2_texmatrix_stats.skipped;
++        ++mgs2_texmatrix_stats.per_tex_skipped[tex];
++        return;
++    }
++
++    MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.texture_matrix_location[tex],
++            1, FALSE, &matrix->_11));
+     checkGLcall("glUniformMatrix4fv");
++
++    /* Updated on BOTH arms. With the skip off this costs one 64-byte copy and
++     * keeps the cache warm, so switching the arm on does not first have to pay
++     * for a cold cache and understate the win. */
++    prog->mgs_texmatrix_cache[tex] = *matrix;
++    prog->mgs_texmatrix_valid_mask |= bit;
++    ++mgs2_texmatrix_stats.executed;
+ }
+ 
+ static void shader_glsl_ffp_vertex_material_uniform(struct wined3d_context_gl *context_gl,
+@@ -1979,11 +2646,11 @@
+     constants = wined3d_buffer_load_sysmem(
+             context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], &context_gl->c);
+ 
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_specular_location, 1, &constants->material.specular.r));
+-    GL_EXTCALL(glUniform1f(prog->vs.material_shininess_location, constants->material.power));
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_ambient_location, 1, &constants->material.ambient.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_diffuse_location, 1, &constants->material.diffuse.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.material_emissive_location, 1, &constants->material.emissive.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_specular_location, 1, &constants->material.specular.r));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.material_shininess_location, constants->material.power));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_ambient_location, 1, &constants->material.ambient.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_diffuse_location, 1, &constants->material.diffuse.r));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.material_emissive_location, 1, &constants->material.emissive.r));
+     checkGLcall("setting FFP material uniforms");
+ }
+ 
+@@ -1993,40 +2660,125 @@
+ {
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
+-    GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].diffuse, 1, &constants->diffuse.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].specular, 1, &constants->specular.r));
+-    GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].ambient, 1, &constants->ambient.r));
++    MGS2_LGT(1, &constants->diffuse.r, 4 * sizeof(float));
++    MGS2_LGT(2, &constants->specular.r, 4 * sizeof(float));
++    MGS2_LGT(3, &constants->ambient.r, 4 * sizeof(float));
++
++    {
++        /* The owner of these uniforms is the stage program, and
++         * mgs2_ffp_vs_source is the object that owns it. A non-separable entry
++         * has no such object and is never cached: correctness first, and the
++         * separable path is the one that carries the traffic here. */
++        struct mgs2_ffp_vs_source *owner = prog->separable ? prog->mgs_vs_source : NULL;
++        BOOL cacheable = owner && light < MGS2_FFP_MAX_LIGHTS;
++
++        if (!cacheable)
++        {
++            mgs2_lca_stats.attempted += 3;
++            mgs2_lca_stats.no_owner += 3;
++            mgs2_lca_stats.executed += 3;
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].diffuse, 1, &constants->diffuse.r));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].specular, 1, &constants->specular.r));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].ambient, 1, &constants->ambient.r));
++        }
++        else
++        {
++            unsigned int timed, exec0;
++            LARGE_INTEGER t0, t1;
++
++            if (!mgs2_uct_stats.qpc_khz) mgs2_uct_init();
++            /* The sample decision must not depend on the arm, or the two arms
++             * would be timed on different calls. A plain counter does that. */
++            timed = ++mgs2_uct_calls % mgs2_uct_stats.period == 0;
++            exec0 = mgs2_lca_stats.executed;
++            if (timed) QueryPerformanceCounter(&t0);
++
++#define MGS2_LIGHT_FIELD(slot, member, loc)                                    \
++            do {                                                               \
++                uint32_t bit_ = 1u << (light * 3 + (slot));                    \
++                BOOL same_;                                                    \
++                ++mgs2_lca_stats.attempted;                                    \
++                if (!(owner->mgs_light_valid_mask & bit_))                     \
++                { same_ = FALSE; ++mgs2_lca_stats.cold; }                      \
++                else if (memcmp(&owner->mgs_light_cache[light].member,         \
++                                &constants->member, sizeof(constants->member)))\
++                { same_ = FALSE; ++mgs2_lca_stats.changed; }                   \
++                else same_ = TRUE;                                             \
++                if (same_ && mgs2_lca_stats.enabled)                           \
++                    ++mgs2_lca_stats.skipped;                                  \
++                else                                                           \
++                {                                                              \
++                    MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].loc, \
++                            1, &constants->member.r));                         \
++                    ++mgs2_lca_stats.executed;                                 \
++                    /* Updated on BOTH arms: an arm that started cold would    \
++                     * measure the warm-up instead of the optimisation. */     \
++                    owner->mgs_light_cache[light].member = constants->member;  \
++                    owner->mgs_light_valid_mask |= bit_;                       \
++                }                                                              \
++            } while (0)
++
++            MGS2_LIGHT_FIELD(0, diffuse, diffuse);
++            MGS2_LIGHT_FIELD(1, specular, specular);
++            MGS2_LIGHT_FIELD(2, ambient, ambient);
++#undef MGS2_LIGHT_FIELD
++
++            if (timed)
++            {
++                unsigned int a = mgs2_lca_stats.enabled ? 1 : 0;
++
++                QueryPerformanceCounter(&t1);
++                mgs2_uct_ticks[a] += (unsigned __int64)(t1.QuadPart - t0.QuadPart);
++                mgs2_uct_stats.ticks_lo[a] = (unsigned int)mgs2_uct_ticks[a];
++                mgs2_uct_stats.ticks_hi[a] = (unsigned int)(mgs2_uct_ticks[a] >> 32);
++                ++mgs2_uct_stats.samples[a];
++                mgs2_uct_stats.exec[a] += mgs2_lca_stats.executed - exec0;
++                {
++                    unsigned int us = mgs2_uct_stats.qpc_khz
++                            ? (unsigned int)(((t1.QuadPart - t0.QuadPart) * 1000)
++                                    / mgs2_uct_stats.qpc_khz)
++                            : 0;
++                    unsigned int bin = us < 32 ? us
++                            : us < 256 ? 32 + (us - 32) / 32
++                            : MGS2_UCT_BINS - 1;
++
++                    if (bin >= MGS2_UCT_BINS) bin = MGS2_UCT_BINS - 1;
++                    ++mgs2_uct_stats.hist[a][bin];
++                }
++            }
++        }
++    }
+ 
+     switch (type)
+     {
+         case WINED3D_LIGHT_POINT:
+-            GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
+             break;
+ 
+         case WINED3D_LIGHT_SPOT:
+-            GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
+ 
+-            GL_EXTCALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
++            MGS2_UNIFORM_CALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
+ 
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].falloff, constants->falloff));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].cos_htheta, constants->cos_half_theta));
+-            GL_EXTCALL(glUniform1f(prog->vs.light_location[light].cos_hphi, constants->cos_half_phi));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].range, constants->range));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].falloff, constants->falloff));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].c_att, constants->const_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].l_att, constants->linear_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].q_att, constants->quad_att));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].cos_htheta, constants->cos_half_theta));
++            MGS2_UNIFORM_CALL(glUniform1f(prog->vs.light_location[light].cos_hphi, constants->cos_half_phi));
+             break;
+ 
+         case WINED3D_LIGHT_DIRECTIONAL:
+-            GL_EXTCALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
++            MGS2_UNIFORM_CALL(glUniform3fv(prog->vs.light_location[light].direction, 1, &constants->direction.x));
+             break;
+ 
+         case WINED3D_LIGHT_PARALLELPOINT:
+-            GL_EXTCALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.light_location[light].position, 1, &constants->position.x));
+             break;
+ 
+         default:
+@@ -2044,18 +2796,18 @@
+     constants = wined3d_buffer_load_sysmem(
+             context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], &context_gl->c);
+ 
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_min_location, constants->point_clamp.min));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_min_location, constants->point_clamp.min));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_max_location, constants->point_clamp.max));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_max_location, constants->point_clamp.max));
+     checkGLcall("glUniform1f");
+ 
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_location, constants->point.size));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_location, constants->point.size));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_c_att_location, constants->point.scale_const));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_c_att_location, constants->point.scale_const));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_l_att_location, constants->point.scale_linear));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_l_att_location, constants->point.scale_linear));
+     checkGLcall("glUniform1f");
+-    GL_EXTCALL(glUniform1f(prog->vs.pointsize_q_att_location, constants->point.scale_quad));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->vs.pointsize_q_att_location, constants->point.scale_quad));
+     checkGLcall("glUniform1f");
+ }
+ 
+@@ -2066,10 +2818,10 @@
+             context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
+-    GL_EXTCALL(glUniform4fv(prog->ps.fog_color_location, 1, &constants->fog.colour.r));
+-    GL_EXTCALL(glUniform1f(prog->ps.fog_density_location, constants->fog.density));
+-    GL_EXTCALL(glUniform1f(prog->ps.fog_end_location, constants->fog.end));
+-    GL_EXTCALL(glUniform1f(prog->ps.fog_scale_location, constants->fog.scale));
++    MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.fog_color_location, 1, &constants->fog.colour.r));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->ps.fog_density_location, constants->fog.density));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->ps.fog_end_location, constants->fog.end));
++    MGS2_UNIFORM_CALL(glUniform1f(prog->ps.fog_scale_location, constants->fog.scale));
+     checkGLcall("fog emulation uniforms");
+ }
+ 
+@@ -2080,25 +2832,26 @@
+     {
+         GLdouble plane[4];
+ 
+-        gl_info->gl_ops.gl.p_glMatrixMode(GL_MODELVIEW);
+-        gl_info->gl_ops.gl.p_glPushMatrix();
+-        gl_info->gl_ops.gl.p_glLoadIdentity();
++        MGS2_CORE(glMatrixMode, gl_info)->gl_ops.gl.p_glMatrixMode(GL_MODELVIEW);
++        MGS2_CORE(glPushMatrix, gl_info)->gl_ops.gl.p_glPushMatrix();
++        MGS2_CORE(glLoadIdentity, gl_info)->gl_ops.gl.p_glLoadIdentity();
+ 
+         plane[0] = constants->clip_planes[i].x;
+         plane[1] = constants->clip_planes[i].y;
+         plane[2] = constants->clip_planes[i].z;
+         plane[3] = constants->clip_planes[i].w;
+ 
+-        gl_info->gl_ops.gl.p_glClipPlane(GL_CLIP_PLANE0 + i, plane);
++        MGS2_CORE(glClipPlane, gl_info)->gl_ops.gl.p_glClipPlane(GL_CLIP_PLANE0 + i, plane);
+         checkGLcall("glClipPlane");
+ 
+-        gl_info->gl_ops.gl.p_glPopMatrix();
++        MGS2_CORE(glPopMatrix, gl_info)->gl_ops.gl.p_glPopMatrix();
+     }
+ }
+ 
+ static void shader_glsl_load_constants(struct shader_glsl_priv *priv,
+         struct wined3d_context *context, const struct wined3d_state *state)
+ {
++    MGS2_CENSUS_INC(uniform_loads);
+     const struct wined3d_shader *vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
+     const struct wined3d_shader *pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
+     const struct glsl_context_data *ctx_data = context->shader_backend_data;
+@@ -2115,9 +2868,47 @@
+     if (!prog)
+         return;
+ 
++    if (prog->separable)
++        mgs2_resolve_separable(gl_info);
++
+     constant_version = prog->constant_version;
+     update_mask = context->constant_update_mask & prog->constant_update_mask;
+ 
++    if (prog->separable)
++    {
++        static const uint32_t vs_any = WINED3D_SHADER_CONST_VS_F
++                | WINED3D_SHADER_CONST_VS_I | WINED3D_SHADER_CONST_VS_B
++                | WINED3D_SHADER_CONST_VS_CLIP_PLANES
++                | WINED3D_SHADER_CONST_VS_POINTSIZE
++                | WINED3D_SHADER_CONST_POS_FIXUP
++                | WINED3D_SHADER_CONST_BASE_VERTEX_ID
++                | WINED3D_SHADER_CONST_FFP_MODELVIEW
++                | WINED3D_SHADER_CONST_FFP_VERTEXBLEND
++                | WINED3D_SHADER_CONST_FFP_PROJ
++                | WINED3D_SHADER_CONST_FFP_TEXMATRIX
++                | WINED3D_SHADER_CONST_FFP_MATERIAL
++                | WINED3D_SHADER_CONST_FFP_LIGHTS;
++        static const uint32_t vs_ffp = WINED3D_SHADER_CONST_VS_F
++                | WINED3D_SHADER_CONST_FFP_LIGHTS
++                | WINED3D_SHADER_CONST_FFP_MATERIAL
++                | WINED3D_SHADER_CONST_FFP_MODELVIEW
++                | WINED3D_SHADER_CONST_FFP_PROJ
++                | WINED3D_SHADER_CONST_FFP_TEXMATRIX
++                | WINED3D_SHADER_CONST_FFP_VERTEXBLEND
++                | WINED3D_SHADER_CONST_VS_POINTSIZE;
++
++        mgs2_asp_need_vs = (vshader && vshader->is_ffp_vs)
++                ? !!(context->constant_update_mask & vs_ffp)
++                : !!(update_mask & vs_any);
++        ++mgs2_asp_stats.separable_loads;
++        if (mgs2_asp_need_vs) ++mgs2_asp_stats.need_vs;
++        else ++mgs2_asp_stats.avoided_vs;
++
++        if (mgs2_asp_need_vs || !mgs2_asp_stats.lazy)
++            MGS2_LOCAL(mgs2_glActiveShaderProgram)(prog->pipeline_id, prog->vs_program_id);
++        mgs2_asp_witness = 0;
++    }
++
+     if (vshader && vshader->is_ffp_vs)
+     {
+         /* The shader's constant update mask is WINED3D_SHADER_CONST_VS_F.
+@@ -2160,7 +2951,7 @@
+         if (gl_info->supported[WINED3D_GLSL_130])
+         {
+             for (i = 0; i < gl_info->limits.user_clip_distances; ++i)
+-                GL_EXTCALL(glUniform4fv(prog->vs.clip_planes_location + i, 1, &constants->clip_planes[i].x));
++                MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.clip_planes_location + i, 1, &constants->clip_planes[i].x));
+         }
+         else
+         {
+@@ -2177,17 +2968,17 @@
+                 max(state->viewport_count, 1) : 1;
+         shader_get_position_fixup(context, state, fixup_count, position_fixup);
+         if (state->shader[WINED3D_SHADER_TYPE_GEOMETRY])
+-            GL_EXTCALL(glUniform4fv(prog->gs.pos_fixup_location, fixup_count, position_fixup));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->gs.pos_fixup_location, fixup_count, position_fixup));
+         else if (state->shader[WINED3D_SHADER_TYPE_DOMAIN])
+-            GL_EXTCALL(glUniform4fv(prog->ds.pos_fixup_location, 1, position_fixup));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->ds.pos_fixup_location, 1, position_fixup));
+         else
+-            GL_EXTCALL(glUniform4fv(prog->vs.pos_fixup_location, 1, position_fixup));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->vs.pos_fixup_location, 1, position_fixup));
+         checkGLcall("glUniform4fv");
+     }
+ 
+     if (update_mask & WINED3D_SHADER_CONST_BASE_VERTEX_ID)
+     {
+-        GL_EXTCALL(glUniform1i(prog->vs.base_vertex_id_location, state->base_vertex_index));
++        MGS2_UNIFORM_CALL(glUniform1i(prog->vs.base_vertex_id_location, state->base_vertex_index));
+         checkGLcall("base vertex id");
+     }
+ 
+@@ -2197,7 +2988,7 @@
+ 
+         constants = wined3d_buffer_load_sysmem(context->device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], context);
+ 
+-        GL_EXTCALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[0], 1,
++        MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[0], 1,
+                 FALSE, &constants->modelview.modelview_matrices[0]._11));
+         checkGLcall("glUniformMatrix4fv");
+ 
+@@ -2215,7 +3006,7 @@
+             if (prog->vs.modelview_matrix_location[i] == -1)
+                 break;
+ 
+-            GL_EXTCALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[i],
++            MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.modelview_matrix_location[i],
+                     1, FALSE, &constants->modelview.modelview_matrices[i]._11));
+             checkGLcall("glUniformMatrix4fv");
+         }
+@@ -2229,7 +3020,7 @@
+         constants = wined3d_buffer_load_sysmem(context->device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], context);
+ 
+         get_projection_matrix(context, constants, state, &projection);
+-        GL_EXTCALL(glUniformMatrix4fv(prog->vs.projection_matrix_location, 1, FALSE, &projection._11));
++        MGS2_UNIFORM_CALL(glUniformMatrix4fv(prog->vs.projection_matrix_location, 1, FALSE, &projection._11));
+         checkGLcall("glUniformMatrix4fv");
+     }
+ 
+@@ -2281,7 +3072,7 @@
+             }
+         }
+ 
+-        GL_EXTCALL(glUniform3fv(prog->vs.light_ambient_location, 1, &constants->light.ambient.r));
++        MGS2_UNIFORM_CALL(glUniform3fv(prog->vs.light_ambient_location, 1, &constants->light.ambient.r));
+         checkGLcall("glUniform3fv");
+ 
+         for (i = 0; i < point_count; ++i)
+@@ -2298,6 +3089,37 @@
+                     WINED3D_LIGHT_PARALLELPOINT, &constants->light.lights[i], prog);
+     }
+ 
++    if (prog->separable)
++    {
++        static const uint32_t ps_any = WINED3D_SHADER_CONST_PS_F
++                | WINED3D_SHADER_CONST_PS_I | WINED3D_SHADER_CONST_PS_B
++                | WINED3D_SHADER_CONST_PS_BUMP_ENV
++                | WINED3D_SHADER_CONST_FFP_COLOR_KEY
++                | WINED3D_SHADER_CONST_FFP_PS
++                | WINED3D_SHADER_CONST_PS_FOG
++                | WINED3D_SHADER_CONST_PS_ALPHA_TEST;
++        static const uint32_t ps_ffp = WINED3D_SHADER_CONST_PS_F
++                | WINED3D_SHADER_CONST_FFP_COLOR_KEY
++                | WINED3D_SHADER_CONST_FFP_PS
++                | WINED3D_SHADER_CONST_PS_BUMP_ENV;
++        BOOL need_ps;
++
++        /* The VS block has finished: an upload while need_vs said there would be
++         * none means the mirror is wrong, and the run is void. */
++        if (mgs2_asp_witness && !mgs2_asp_need_vs) ++mgs2_asp_stats.missed_vs;
++
++        need_ps = (pshader && pshader->is_ffp_ps)
++                ? !!(context->constant_update_mask & ps_ffp)
++                : !!(update_mask & ps_any);
++        if (need_ps) ++mgs2_asp_stats.need_ps;
++        else ++mgs2_asp_stats.avoided_ps;
++
++        mgs2_asp_need_ps = need_ps;
++        if (need_ps || !mgs2_asp_stats.lazy)
++            MGS2_LOCAL(mgs2_glActiveShaderProgram)(prog->pipeline_id, prog->ps_program_id);
++        mgs2_asp_witness = 0;
++    }
++
+     if (pshader && pshader->is_ffp_ps)
+     {
+         static const uint32_t ps_update_mask = WINED3D_SHADER_CONST_PS_F
+@@ -2334,14 +3156,14 @@
+             if (prog->ps.bumpenv_mat_location[i] == -1)
+                 continue;
+ 
+-            GL_EXTCALL(glUniformMatrix2fv(prog->ps.bumpenv_mat_location[i], 1, GL_FALSE,
++            MGS2_UNIFORM_CALL(glUniformMatrix2fv(prog->ps.bumpenv_mat_location[i], 1, GL_FALSE,
+                     &constants->bumpenv.matrices[i]._00));
+ 
+             if (prog->ps.bumpenv_lum_scale_location[i] != -1)
+             {
+-                GL_EXTCALL(glUniform1fv(prog->ps.bumpenv_lum_scale_location[i], 1,
++                MGS2_UNIFORM_CALL(glUniform1fv(prog->ps.bumpenv_lum_scale_location[i], 1,
+                         &constants->bumpenv.lscale[i]));
+-                GL_EXTCALL(glUniform1fv(prog->ps.bumpenv_lum_offset_location[i], 1,
++                MGS2_UNIFORM_CALL(glUniform1fv(prog->ps.bumpenv_lum_offset_location[i], 1,
+                         &constants->bumpenv.loffset[i]));
+             }
+         }
+@@ -2354,7 +3176,7 @@
+         const struct wined3d_ffp_ps_constants *constants = wined3d_buffer_load_sysmem(
+                 context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+ 
+-        GL_EXTCALL(glUniform4fv(prog->ps.color_key_location, 2, &constants->color_key[0].r));
++        MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.color_key_location, 2, &constants->color_key[0].r));
+     }
+ 
+     if (update_mask & WINED3D_SHADER_CONST_FFP_PS)
+@@ -2365,16 +3187,16 @@
+                 context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+ 
+         if (prog->ps.tex_factor_location != -1)
+-            GL_EXTCALL(glUniform4fv(prog->ps.tex_factor_location, 1, &constants->texture_factor.r));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.tex_factor_location, 1, &constants->texture_factor.r));
+ 
+-        GL_EXTCALL(glUniform4fv(prog->ps.specular_enable_location, 1, &constants->specular_enable.r));
++        MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.specular_enable_location, 1, &constants->specular_enable.r));
+ 
+         for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
+         {
+             if (prog->ps.tss_constant_location[i] == -1)
+                 continue;
+ 
+-            GL_EXTCALL(glUniform4fv(prog->ps.tss_constant_location[i], 1, &constants->texture_constants[i].r));
++            MGS2_UNIFORM_CALL(glUniform4fv(prog->ps.tss_constant_location[i], 1, &constants->texture_constants[i].r));
+         }
+ 
+         checkGLcall("fixed function uniforms");
+@@ -2388,7 +3210,7 @@
+         const struct wined3d_ffp_ps_constants *constants = wined3d_buffer_load_sysmem(
+                 context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
+ 
+-        GL_EXTCALL(glUniform1f(prog->ps.alpha_test_ref_location, constants->alpha_test_ref));
++        MGS2_UNIFORM_CALL(glUniform1f(prog->ps.alpha_test_ref_location, constants->alpha_test_ref));
+         checkGLcall("alpha test emulation uniform");
+     }
+ 
+@@ -2402,6 +3224,12 @@
+     {
+         prog->constant_version = priv->next_constant_version++;
+     }
++    /* The PS block has finished. Same check as the VS side: an upload while
++     * need_ps said there would be none means the mirror is wrong, and the run
++     * is void. Without this the "MISSED = 0" line spoke for the VS side only. */
++    if (prog && prog->separable && mgs2_asp_witness && !mgs2_asp_need_ps)
++        ++mgs2_asp_stats.missed_ps;
++
+ }
+ 
+ static void update_heap_entry(struct constant_heap *heap, unsigned int idx, DWORD new_version)
+@@ -7416,7 +8244,10 @@
+ {
+     wine_rb_remove(&priv->program_lookup, &entry->program_lookup_entry);
+ 
+-    GL_EXTCALL(glDeleteProgram(entry->id));
++    if (entry->separable)
++        MGS2_LOCAL(mgs2_glDeleteProgramPipelines)(1, &entry->pipeline_id);
++    else
++        GL_EXTCALL(glDeleteProgram(entry->id));
+     if (entry->vs.id)
+         list_remove(&entry->vs.shader_entry);
+     if (entry->hs.id)
+@@ -9603,8 +10434,55 @@
+         shader_addline(buffer, "ffp_varying_specular = ffp_attrib_specular;\n");
+ }
+ 
++static uint64_t mgs2_glsl_source_hash(const char *text, size_t *size)
++{
++    uint64_t hash = 14695981039346656037ull;
++    const unsigned char *p = (const unsigned char *)text;
++
++    while (*p)
++    {
++        hash ^= *p++;
++        hash *= 1099511628211ull;
++    }
++    *size = p - (const unsigned char *)text;
++    return hash;
++}
++
++static struct mgs2_ffp_vs_source *mgs2_get_ffp_vs_source(struct shader_glsl_priv *priv,
++        const struct wined3d_gl_info *gl_info, const char *text)
++{
++    struct mgs2_ffp_vs_source *source;
++    size_t size;
++    uint64_t hash;
++
++    hash = mgs2_glsl_source_hash(text, &size);
++    if (priv->mgs2_ffp_source_dedup_enabled)
++    {
++        LIST_FOR_EACH_ENTRY(source, &priv->mgs2_ffp_vs_sources, struct mgs2_ffp_vs_source, entry)
++        {
++            if (source->hash == hash && source->size == size && !memcmp(source->text, text, size + 1))
++                return source;
++        }
++    }
++
++    if (!(source = calloc(1, sizeof(*source))))
++        return NULL;
++    if (!(source->text = malloc(size + 1)))
++    {
++        free(source);
++        return NULL;
++    }
++    memcpy(source->text, text, size + 1);
++    source->hash = hash;
++    source->size = size;
++    source->shader_id = GL_EXTCALL(glCreateShader(GL_VERTEX_SHADER));
++    shader_glsl_compile(gl_info, source->shader_id, source->text);
++    list_add_head(&priv->mgs2_ffp_vs_sources, &source->entry);
++    return source;
++}
++
+ /* Context activation is done by the caller. */
+-static GLuint shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *priv,
++static struct mgs2_ffp_vs_source *shader_glsl_generate_ffp_vertex_shader(struct shader_glsl_priv *priv,
+         const struct wined3d_ffp_vs_settings *settings, const struct wined3d_gl_info *gl_info)
+ {
+     static const struct attrib_info
+@@ -9627,7 +10505,6 @@
+     struct wined3d_string_buffer *buffer = &priv->shader_buffer;
+     BOOL output_legacy_fogcoord = legacy_syntax;
+     BOOL legacy_lighting = priv->legacy_lighting;
+-    GLuint shader_obj;
+     unsigned int i;
+ 
+     string_buffer_clear(buffer);
+@@ -9899,10 +10776,7 @@
+ 
+     shader_addline(buffer, "}\n");
+ 
+-    shader_obj = GL_EXTCALL(glCreateShader(GL_VERTEX_SHADER));
+-    shader_glsl_compile(gl_info, shader_obj, buffer->buffer);
+-
+-    return shader_obj;
++    return mgs2_get_ffp_vs_source(priv, gl_info, buffer->buffer);
+ }
+ 
+ static const char *shader_glsl_get_ffp_fragment_op_arg(struct wined3d_string_buffer *buffer,
+@@ -9998,50 +10872,6 @@
+     return ret;
+ }
+ 
+-/* MGS2_ALPHA_PROBE=1 turns every FFP fragment shader into a diagnostic that reports
+- * the alpha stage instead of shading: R = effective alpha operand 1, G = effective
+- * alpha operand 2, B = the alpha the stage computed, A = 1.
+- *
+- * The point is to separate three things the existing measurements cannot tell apart.
+- * Texture alpha, vertex alpha, UVs and the GL blend state have all been verified
+- * correct, yet normal SRC_ALPHA/INV_SRC_ALPHA draws come out white. What is still
+- * unmeasured is the value the *sampler* returns after filtering and colour fixup, and
+- * whether the generated MODULATE2X arithmetic actually evaluates as written. With this
+- * probe both are readable straight off a screenshot: for every pixel,
+- * B should equal clamp(2 * R * G, 0, 1). Where it does not, the shader or the Mali
+- * compiler is at fault; where it does but B is already 1, the inputs saturate.
+- *
+- * Alpha is forced to 1 so the diagnostic survives the normal blend equation unchanged
+- * and no blend state has to be touched for the capture. */
+-/* Companion to the alpha probe. Every measurement so far has been about alpha;
+- * the defect is white, which is a property of colour, and the sampled RGB has
+- * never been looked at. MGS2_TEX_RGB_PROBE=1 outputs the stage-0 sample's RGB
+- * directly, so a texture that reads back correct on the CPU but samples as
+- * white is immediately visible. */
+-static BOOL mgs_tex_rgb_probe(void)
+-{
+-    static int enabled = -1;
+-
+-    if (enabled < 0)
+-    {
+-        const char *e = getenv("MGS2_TEX_RGB_PROBE");
+-        enabled = e && *e != '0';
+-    }
+-    return enabled;
+-}
+-
+-static BOOL mgs_alpha_probe(void)
+-{
+-    static int enabled = -1;
+-
+-    if (enabled < 0)
+-    {
+-        const char *e = getenv("MGS2_ALPHA_PROBE");
+-        enabled = e && *e != '0';
+-    }
+-    return enabled;
+-}
+-
+ static void shader_glsl_ffp_fragment_op(struct wined3d_string_buffer *buffer, unsigned int stage, BOOL color,
+         BOOL alpha, BOOL tmp_dst, unsigned int op, DWORD dw_arg0, DWORD dw_arg1, DWORD dw_arg2)
+ {
+@@ -10060,9 +10890,6 @@
+     arg1 = shader_glsl_get_ffp_fragment_op_arg(buffer, 1, stage, dw_arg1);
+     arg2 = shader_glsl_get_ffp_fragment_op_arg(buffer, 2, stage, dw_arg2);
+ 
+-    if (alpha && arg1 && arg2 && mgs_alpha_probe())
+-        shader_addline(buffer, "mgs_probe.xy = vec2((%s).w, (%s).w);\n", arg1, arg2);
+-
+     switch (op)
+     {
+         case WINED3D_TOP_DISABLE:
+@@ -10190,12 +11017,43 @@
+             break;
+     }
+ 
+-    if (alpha && arg1 && arg2 && mgs_alpha_probe())
+-        shader_addline(buffer, "mgs_probe.z = %s.w;\n", dstreg);
++}
++
++static struct mgs2_ffp_ps_source *mgs2_get_ffp_ps_source(struct shader_glsl_priv *priv,
++        const struct wined3d_gl_info *gl_info, const char *text)
++{
++    struct mgs2_ffp_ps_source *source;
++    size_t size;
++    uint64_t hash;
++
++    hash = mgs2_glsl_source_hash(text, &size);
++    if (priv->mgs2_ffp_source_dedup_enabled)
++    {
++        LIST_FOR_EACH_ENTRY(source, &priv->mgs2_ffp_ps_sources, struct mgs2_ffp_ps_source, entry)
++        {
++            if (source->hash == hash && source->size == size && !memcmp(source->text, text, size + 1))
++                return source;
++        }
++    }
++
++    if (!(source = calloc(1, sizeof(*source))))
++        return NULL;
++    if (!(source->text = malloc(size + 1)))
++    {
++        free(source);
++        return NULL;
++    }
++    memcpy(source->text, text, size + 1);
++    source->hash = hash;
++    source->size = size;
++    source->shader_id = GL_EXTCALL(glCreateShader(GL_FRAGMENT_SHADER));
++    shader_glsl_compile(gl_info, source->shader_id, source->text);
++    list_add_head(&priv->mgs2_ffp_ps_sources, &source->entry);
++    return source;
+ }
+ 
+ /* Context activation is done by the caller. */
+-static GLuint shader_glsl_generate_ffp_fragment_shader(struct shader_glsl_priv *priv,
++static struct mgs2_ffp_ps_source *shader_glsl_generate_ffp_fragment_shader(struct shader_glsl_priv *priv,
+         const struct ffp_frag_settings *settings, const struct wined3d_context_gl *context_gl)
+ {
+     struct wined3d_string_buffer *tex_reg_name = string_buffer_get(&priv->string_buffers);
+@@ -10205,7 +11063,6 @@
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     const BOOL legacy_syntax = needs_legacy_glsl_syntax(gl_info);
+     BOOL tempreg_used = FALSE, tfactor_used = FALSE;
+-    GLuint shader_id;
+     DWORD arg0, arg1, arg2;
+     unsigned int stage;
+ 
+@@ -10289,8 +11146,6 @@
+ 
+     shader_addline(buffer, "vec4 tmp0, tmp1;\n");
+     shader_addline(buffer, "vec4 ret;\n");
+-    if (mgs_alpha_probe())
+-        shader_addline(buffer, "vec4 mgs_probe = vec4(0.0, 0.0, 0.0, 1.0);\n");
+     if (tempreg_used || settings->sRGB_write)
+         shader_addline(buffer, "vec4 temp_reg = vec4(0.0);\n");
+     shader_addline(buffer, "vec4 arg0, arg1, arg2;\n");
+@@ -10494,48 +11349,6 @@
+ 
+     shader_addline(buffer, "ret = ffp_varying_diffuse;\n");
+ 
+-    /* With MGS2_ALPHA_PROBE the probe reports two alpha operands but not which
+-     * D3D source each one is. R was measured constant at 1.0 while G varied, so
+-     * naming the arguments is what separates "the sampler returns 1" from "the
+-     * game asked for a constant". Log the canonical descriptor once per unique
+-     * FFP shader; the transient GL program id is not stable across runs. */
+-    if (mgs_alpha_probe())
+-    {
+-        static FILE *df;
+-
+-        if (!df)
+-            df = fopen("/tmp/mgsffp.log", "w");
+-        if (df)
+-        {
+-            unsigned int st;
+-
+-            fprintf(df, "FFP shader:");
+-            for (st = 0; st < WINED3D_MAX_FFP_TEXTURES; ++st)
+-            {
+-                if (settings->op[st].cop == WINED3D_TOP_DISABLE)
+-                    break;
+-                /* color_fixup is the prime suspect: the probe showed the
+-                 * TEXTURE operand's alpha sampling as exactly 1.0 while the
+-                 * stored texels are known good, and a fixup whose w source is
+-                 * CHANNEL_SOURCE_ONE does precisely that. Channel sources are
+-                 * 0=ZERO 1=ONE 2=X 3=Y 4=Z 5=W. */
+-                fprintf(df, " [%u cop=%#x carg=%#x,%#x,%#x aop=%#x aarg=%#x,%#x,%#x tex=%u"
+-                        " fixup=%u%u%u%u]",
+-                        st, settings->op[st].cop, settings->op[st].carg0,
+-                        settings->op[st].carg1, settings->op[st].carg2,
+-                        settings->op[st].aop, settings->op[st].aarg0,
+-                        settings->op[st].aarg1, settings->op[st].aarg2,
+-                        settings->op[st].tex_type,
+-                        settings->op[st].color_fixup.x_source,
+-                        settings->op[st].color_fixup.y_source,
+-                        settings->op[st].color_fixup.z_source,
+-                        settings->op[st].color_fixup.w_source);
+-            }
+-            fprintf(df, " alpha_test=%#x\n", settings->alpha_test_func + 1);
+-            fflush(df);
+-        }
+-    }
+-
+     /* Generate the main shader */
+     for (stage = 0; stage < WINED3D_MAX_FFP_TEXTURES; ++stage)
+     {
+@@ -10595,20 +11408,13 @@
+     shader_glsl_generate_fog_code(buffer, gl_info, settings->fog);
+ 
+     shader_glsl_generate_alpha_test(buffer, gl_info, alpha_test_func);
+-    if (mgs_alpha_probe())
+-        shader_addline(buffer, "ps_out[0] = vec4(mgs_probe.xyz, 1.0);\n");
+-    else if (mgs_tex_rgb_probe() && settings->op[0].cop != WINED3D_TOP_DISABLE)
+-        shader_addline(buffer, "ps_out[0] = vec4(tex0.xyz, 1.0);\n");
+     if (!use_legacy_fragment_output(gl_info))
+         shader_addline(buffer, "color_out0 = ps_out[0];\n");
+ 
+     shader_addline(buffer, "}\n");
+ 
+-    shader_id = GL_EXTCALL(glCreateShader(GL_FRAGMENT_SHADER));
+-    shader_glsl_compile(gl_info, shader_id, buffer->buffer);
+-
+     string_buffer_release(&priv->string_buffers, tex_reg_name);
+-    return shader_id;
++    return mgs2_get_ffp_ps_source(priv, gl_info, buffer->buffer);
+ }
+ 
+ static struct glsl_ffp_vertex_shader *shader_glsl_find_ffp_vertex_shader(struct shader_glsl_priv *priv,
+@@ -10620,11 +11426,17 @@
+     if ((entry = wine_rb_get(&priv->ffp_vertex_shaders, settings)))
+         return WINE_RB_ENTRY_VALUE(entry, struct glsl_ffp_vertex_shader, desc.entry);
+ 
+-    if (!(shader = malloc(sizeof(*shader))))
++    /* calloc keeps any future cache-owned fields safely initialised. */
++    if (!(shader = calloc(1, sizeof(*shader))))
+         return NULL;
+ 
+     shader->desc.settings = *settings;
+-    shader->id = shader_glsl_generate_ffp_vertex_shader(priv, settings, gl_info);
++    if (!(shader->source = shader_glsl_generate_ffp_vertex_shader(priv, settings, gl_info)))
++    {
++        free(shader);
++        return NULL;
++    }
++    shader->id = shader->source->shader_id;
+     list_init(&shader->linked_programs);
+     if (wine_rb_put(&priv->ffp_vertex_shaders, &shader->desc.settings, &shader->desc.entry) == -1)
+         ERR("Failed to insert ffp vertex shader.\n");
+@@ -10641,11 +11453,17 @@
+     if ((desc = find_ffp_frag_shader(&priv->ffp_fragment_shaders, args)))
+         return CONTAINING_RECORD(desc, struct glsl_ffp_fragment_shader, entry);
+ 
+-    if (!(glsl_desc = malloc(sizeof(*glsl_desc))))
++    /* calloc, for the same reason as the vertex side above. */
++    if (!(glsl_desc = calloc(1, sizeof(*glsl_desc))))
+         return NULL;
+ 
+     glsl_desc->entry.settings = *args;
+-    glsl_desc->id = shader_glsl_generate_ffp_fragment_shader(priv, args, context_gl);
++    if (!(glsl_desc->source = shader_glsl_generate_ffp_fragment_shader(priv, args, context_gl)))
++    {
++        free(glsl_desc);
++        return NULL;
++    }
++    glsl_desc->id = glsl_desc->source->shader_id;
+     list_init(&glsl_desc->linked_programs);
+     add_ffp_frag_shader(&priv->ffp_fragment_shaders, &glsl_desc->entry);
+ 
+@@ -10801,6 +11619,470 @@
+     string_buffer_release(&priv->string_buffers, name);
+ }
+ 
++/* Context activation is done by the caller.  FFP stages are self-contained:
++ * no VS3 rasterizer helper, transform feedback, geometry, or custom shader is
++ * admitted here.  That keeps the production fallback exact for every complex
++ * combination while still covering MGS2's fixed-function radio/menu material
++ * permutations. */
++static BOOL mgs2_make_ffp_stage(const struct wined3d_gl_info *gl_info, struct shader_glsl_priv *priv,
++        GLuint shader_id, GLenum stage_bit, GLuint *stage_program, void *stage_uniforms,
++        uint32_t bind_attribs_map, unsigned int const_f_count)
++{
++    struct wined3d_string_buffer *tmp_name;
++    GLint linked = GL_FALSE;
++    LONGLONG probe_start;
++    uint32_t attribs_map;
++    unsigned int i;
++    GLuint program;
++    char cache_path[MAX_PATH];
++    BOOL cached = FALSE;
++
++    if (*stage_program)
++        return TRUE;
++    if (!mgs2_resolve_separable(gl_info))
++        return FALSE;
++
++    program = GL_EXTCALL(glCreateProgram());
++    if (!program)
++        return FALSE;
++
++    /* Try the cached binary on a BARE program, before anything is attached to
++     * it. The first build offered it a program that already had the shader
++     * attached and GL_PROGRAM_SEPARABLE set, and all twelve loads came back
++     * with LINK_STATUS false. A restored binary carries that state itself --
++     * separability included -- so there is nothing to set up beforehand, and a
++     * driver is within its rights to refuse a program that is not empty. */
++    if (mgs2_progbin_ready(gl_info))
++    {
++        mgs2_progbin_path(gl_info, shader_id, stage_bit, bind_attribs_map,
++                cache_path, sizeof(cache_path));
++        probe_start = mgs2_probe_now();
++        if (mgs2_progbin_load(gl_info, program, cache_path))
++        {
++            ++mgs2_progbin_hits;
++            mgs2_probe_record(MGS2_PROBE_OP_LINK_SEPARABLE_STAGE, probe_start,
++                    stage_bit == GL_VERTEX_SHADER_BIT ? 0 : 1, shader_id, GL_TRUE,
++                    1 /* d = came from the cache */, program);
++            if (stage_bit == GL_VERTEX_SHADER_BIT)
++                shader_glsl_init_vs_uniform_locations(gl_info, priv, program,
++                        stage_uniforms, const_f_count);
++            else
++                shader_glsl_init_ps_uniform_locations(gl_info, priv, program,
++                        stage_uniforms, const_f_count);
++            *stage_program = program;
++            return TRUE;
++        }
++        ++mgs2_progbin_misses;
++        cached = TRUE;   /* the path is valid; store into it after linking */
++    }
++
++    MGS2_LOCAL(mgs2_glProgramParameteri)(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
++    /* Without the hint the driver may keep no retrievable binary at all. */
++    if (cached)
++        MGS2_LOCAL(mgs2_glProgramParameteri)(program,
++                GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
++    GL_EXTCALL(glAttachShader(program, shader_id));
++
++    if (!shader_glsl_use_explicit_attrib_location(gl_info))
++    {
++        /* This context does not get ARB_explicit_attrib_location -- it is
++         * promoted at desktop GL 3.3 and the GLES 3.2 version parses as 3.2 --
++         * so the generated FFP vertex shader carries no layout(location=)
++         * qualifier and the monolithic path binds every attribute by name
++         * before linking.  A stage program is linked on its own and needs
++         * exactly the same bindings; without them the driver assigns its own
++         * locations while wined3d keeps feeding the arrays at the fixed FFP
++         * indices, and every vertex attribute reads from the wrong array.
++         * That, not the pipeline itself, is what corrupted the image. */
++        if (stage_bit == GL_VERTEX_SHADER_BIT)
++        {
++            tmp_name = string_buffer_get(&priv->string_buffers);
++            /* Patch 30: a programmable vertex shader declares only the inputs its
++             * signature names, so the caller passes reg_maps.input_registers and
++             * the FFP caller keeps passing the full fixed-function set. Binding a
++             * name the shader does not declare is harmless; failing to bind one it
++             * does declare is what corrupted the image for patch 27. */
++            attribs_map = bind_attribs_map;
++            while (attribs_map)
++            {
++                i = wined3d_bit_scan(&attribs_map);
++                string_buffer_sprintf(tmp_name, "vs_in%u", i);
++                GL_EXTCALL(glBindAttribLocation(program, i, tmp_name->buffer));
++            }
++            checkGLcall("glBindAttribLocation");
++            string_buffer_release(&priv->string_buffers, tmp_name);
++        }
++        else if (!use_legacy_fragment_output(gl_info) && !gl_info->is_gles)
++        {
++            /* The fragment outputs would need glBindFragDataLocation(), which
++             * is desktop-only and NULL in this stack.  On GLES the single
++             * output defaults to location 0, exactly as the monolithic path
++             * relies on. */
++            GL_EXTCALL(glDeleteProgram(program));
++            return FALSE;
++        }
++    }
++
++    probe_start = mgs2_probe_now();
++    GL_EXTCALL(glLinkProgram(program));
++    GL_EXTCALL(glGetProgramiv(program, GL_LINK_STATUS, &linked));
++    mgs2_probe_record(MGS2_PROBE_OP_LINK_SEPARABLE_STAGE, probe_start,
++            stage_bit == GL_VERTEX_SHADER_BIT ? 0 : 1, shader_id, linked, 0, program);
++    if (linked && cached)
++        mgs2_progbin_store(gl_info, program, cache_path);
++
++    if (!linked)
++    {
++        ERR("Separable %s stage program %u failed to link.\n",
++                stage_bit == GL_VERTEX_SHADER_BIT ? "vertex" : "fragment", program);
++        print_glsl_info_log(gl_info, program, TRUE);
++        GL_EXTCALL(glDeleteProgram(program));
++        return FALSE;
++    }
++
++    /* const_f_count is 0 for a fixed-function stage, which has no vs_c[]/ps_c[]
++     * array at all, and the shader's limits->constant_float for a programmable
++     * one. Passing 0 for a programmable vertex shader would leave every
++     * uniform_f_location invalid and the shader would run on stale constants. */
++    if (stage_bit == GL_VERTEX_SHADER_BIT)
++        shader_glsl_init_vs_uniform_locations(gl_info, priv, program, stage_uniforms, const_f_count);
++    else
++        shader_glsl_init_ps_uniform_locations(gl_info, priv, program, stage_uniforms, const_f_count);
++    *stage_program = program;
++    return TRUE;
++}
++
++/* Patch 30: stage programs for programmable vertex shaders, keyed on the compiled
++ * GL shader id. The whole gain is reuse -- the FFP side gets it from the shader
++ * cache wined3d already keeps, and a programmable shader has no such slot, so one
++ * lives here. Sized for MGS2: the measured session linked 27 pairs, and distinct
++ * vertex shaders are far fewer than pairs. A full table simply falls back to the
++ * monolithic path rather than evicting, because evicting a stage program that a
++ * live pipeline still references would be a use-after-free in the driver. */
++#define MGS2_VS_STAGE_CACHE_SIZE 64
++
++struct mgs2_vs_stage_cache
++{
++    unsigned int count;
++    struct
++    {
++        GLuint shader_id;
++        GLuint stage_program;
++        struct glsl_vs_program stage;
++    } entries[MGS2_VS_STAGE_CACHE_SIZE];
++};
++
++/* The FFP half of the monolithic path's constant_update_mask, derived from the
++ * uniform locations that the two stage programs actually exposed.  The first
++ * candidate hard-coded a fixed mask instead; that both requested updates for
++ * absent uniforms and, worse, omitted clip planes and point size. */
++static void mgs2_set_ffp_constant_update_mask(struct glsl_shader_prog_link *entry)
++{
++    unsigned int i;
++
++    entry->constant_update_mask = WINED3D_SHADER_CONST_FFP_MODELVIEW
++            | WINED3D_SHADER_CONST_FFP_PROJ | WINED3D_SHADER_CONST_FFP_LIGHTS
++            | WINED3D_SHADER_CONST_FFP_PS;
++
++    for (i = 1; i < MAX_VERTEX_BLENDS; ++i)
++    {
++        if (entry->vs.modelview_matrix_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_VERTEXBLEND;
++            break;
++        }
++    }
++
++    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
++    {
++        if (entry->vs.texture_matrix_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_TEXMATRIX;
++            break;
++        }
++    }
++
++    if (entry->vs.material_ambient_location != -1 || entry->vs.material_diffuse_location != -1
++            || entry->vs.material_specular_location != -1
++            || entry->vs.material_emissive_location != -1
++            || entry->vs.material_shininess_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_MATERIAL;
++
++    if (entry->vs.clip_planes_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_CLIP_PLANES;
++    if (entry->vs.pointsize_min_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_POINTSIZE;
++
++    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
++    {
++        if (entry->ps.bumpenv_mat_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_BUMP_ENV;
++            break;
++        }
++    }
++
++    if (entry->ps.fog_color_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_FOG;
++    if (entry->ps.alpha_test_ref_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_ALPHA_TEST;
++    if (entry->ps.color_key_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_COLOR_KEY;
++}
++
++/* Patch 30: the vertex half of the monolithic path's programmable branch, plus the
++ * fixed-function pixel half, because this pairing is a programmable vertex shader
++ * with an FFP pixel shader. Mirrors glsl_shader.c's monolithic assembly rather
++ * than inventing a mask: patch 27's first candidate hard-coded one and both asked
++ * for absent uniforms and dropped clip planes.
++ *
++ * VS_CLIP_PLANES and VS_POINTSIZE stay keyed on their locations, exactly as the
++ * FFP variant does, because both uniforms exist in either kind of vertex shader. */
++static void mgs2_set_programmable_vs_constant_update_mask(struct glsl_shader_prog_link *entry,
++        const struct wined3d_shader *vshader)
++{
++    unsigned int i;
++
++    entry->constant_update_mask = WINED3D_SHADER_CONST_VS_F | WINED3D_SHADER_CONST_FFP_PS;
++    if (vshader->reg_maps.integer_constants)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_I;
++    if (vshader->reg_maps.boolean_constants)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_B;
++    if (entry->vs.pos_fixup_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_POS_FIXUP;
++    if (entry->vs.base_vertex_id_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_BASE_VERTEX_ID;
++    if (entry->vs.clip_planes_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_CLIP_PLANES;
++    if (entry->vs.pointsize_min_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_VS_POINTSIZE;
++
++    for (i = 0; i < WINED3D_MAX_FFP_TEXTURES; ++i)
++    {
++        if (entry->ps.bumpenv_mat_location[i] != -1)
++        {
++            entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_BUMP_ENV;
++            break;
++        }
++    }
++
++    if (entry->ps.fog_color_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_FOG;
++    if (entry->ps.alpha_test_ref_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_PS_ALPHA_TEST;
++    if (entry->ps.color_key_location != -1)
++        entry->constant_update_mask |= WINED3D_SHADER_CONST_FFP_COLOR_KEY;
++}
++
++static BOOL mgs2_make_ffp_pipeline(const struct wined3d_context_gl *context_gl,
++        struct shader_glsl_priv *priv, struct glsl_ffp_vertex_shader *vs,
++        struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
++{
++    struct mgs2_ffp_vs_source *vs_source = vs->source;
++    struct mgs2_ffp_ps_source *ps_source = ps->source;
++    LONGLONG probe_start;
++    GLint valid = GL_FALSE;
++    GLuint pipeline;
++
++    /* The fixed-function pair keeps exactly the arguments it had before patch 30
++     * generalised this: the whole FFP attribute set, and no vs_c[]/ps_c[] array. */
++    if (!mgs2_make_ffp_stage(context_gl->gl_info, priv, vs_source->shader_id, GL_VERTEX_SHADER_BIT,
++            &vs_source->stage_program, &vs_source->stage, (1u << WINED3D_FFP_ATTRIBS_COUNT) - 1, 0)
++            || !mgs2_make_ffp_stage(context_gl->gl_info, priv, ps_source->shader_id, GL_FRAGMENT_SHADER_BIT,
++                    &ps_source->stage_program, &ps_source->stage, 0, 0))
++        return FALSE;
++
++    probe_start = mgs2_probe_now();
++    MGS2_LOCAL(mgs2_glGenProgramPipelines)(1, &pipeline);
++    if (!pipeline)
++        return FALSE;
++    MGS2_LOCAL(mgs2_glUseProgramStages)(pipeline, GL_VERTEX_SHADER_BIT, vs_source->stage_program);
++    MGS2_LOCAL(mgs2_glUseProgramStages)(pipeline, GL_FRAGMENT_SHADER_BIT, ps_source->stage_program);
++    if (priv->mgs2_separable_validate)
++    {
++        MGS2_LOCAL(mgs2_glValidateProgramPipeline)(pipeline);
++        MGS2_LOCAL(mgs2_glGetProgramPipelineiv)(pipeline, GL_VALIDATE_STATUS, &valid);
++        if (!valid)
++        {
++            /* Validation also reports on the *current* GL state, so a failure
++             * here is not by itself proof of an incompatible stage interface;
++             * MGS2_GL_SEPARABLE=2 keeps the pipeline anyway, for one run that
++             * can tell the two apart. */
++            ERR("Program pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
++                    pipeline, vs_source->stage_program, ps_source->stage_program);
++            if (mgs2_glGetProgramPipelineInfoLog)
++            {
++                char log[1024];
++
++                log[0] = '\0';
++                MGS2_LOCAL(mgs2_glGetProgramPipelineInfoLog)(pipeline, sizeof(log), NULL, log);
++                if (log[0])
++                    ERR("Pipeline info log: %s\n", debugstr_a(log));
++            }
++            mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++                    vs_source->stage_program, ps_source->stage_program, 0, 0, pipeline);
++            MGS2_LOCAL(mgs2_glDeleteProgramPipelines)(1, &pipeline);
++            return FALSE;
++        }
++    }
++    mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++            vs_source->stage_program, ps_source->stage_program, 1, 0, pipeline);
++
++    /* A pipeline name is not a program name: the two live in separate object
++     * namespaces, so entry->id must stay a program name.  The first candidate
++     * stored the pipeline here, which made glUseProgram() and the monolithic
++     * "did the program change" comparison operate on a foreign object.  Zero
++     * is correct -- a separable pair runs with no current program -- and
++     * transitions are detected on the entry pointer instead. */
++    entry->id = 0;
++    entry->pipeline_id = pipeline;
++    entry->vs_program_id = vs_source->stage_program;
++    entry->mgs_vs_source = vs_source;
++    entry->ps_program_id = ps_source->stage_program;
++    entry->separable = TRUE;
++
++    /* Take the stage uniform locations, but keep the shader object ids this
++     * entry was created with.  The whole-struct copy used to overwrite them
++     * with zero, and both the program lookup key and
++     * delete_glsl_program_entry() read entry->vs.id / entry->ps.id: every
++     * separable pair hashed to the same all-zero key, so no pair was ever
++     * found again, and the list_remove() that unlinks the entry from the FFP
++     * shader was skipped -- the entry was freed while still linked into
++     * ffp_vs->linked_programs.  Tearing those shaders down on a savegame load
++     * then walked freed memory.  shader_entry itself is linked by the caller. */
++    entry->vs = vs_source->stage;
++    entry->ps = ps_source->stage;
++    entry->vs.id = vs->id;
++    entry->ps.id = ps->id;
++    entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++
++    mgs2_set_ffp_constant_update_mask(entry);
++    return TRUE;
++}
++
++/* Patch 30: a pipeline whose vertex stage is a programmable shader and whose
++ * fragment stage is fixed function -- the pairing MGS2 uses for the world and its
++ * characters, and therefore the one that produced all 27 monolithic links and
++ * 5765 ms of stalls in the measured gameplay session.
++ *
++ * Written as a sibling of mgs2_make_ffp_pipeline rather than by generalising it.
++ * That duplicates the pipeline plumbing, and deliberately: the FFP path is
++ * production and each of the six defects patch 27 had to fix lived in exactly
++ * these lines, so an experimental path must not be able to change its behaviour.
++ *
++ * Feasible here only because the vertex shader needs no companion: the monolithic
++ * path attaches a VS3 rasterizer helper for shader_version.major < 4, but skips it
++ * when is_gles && major < 3, and MGS2 is D3D8 with 1.x vertex shaders on a GLES
++ * driver. The caller checks that. */
++static BOOL mgs2_make_programmable_vs_pipeline(const struct wined3d_context_gl *context_gl,
++        struct shader_glsl_priv *priv, const struct wined3d_shader *vshader, GLuint vs_id,
++        struct glsl_ffp_fragment_shader *ps, struct glsl_shader_prog_link *entry)
++{
++    const struct wined3d_gl_info *gl_info = context_gl->gl_info;
++    struct mgs2_ffp_ps_source *ps_source = ps->source;
++    struct glsl_vs_program *stage = NULL;
++    GLuint *stage_program = NULL;
++    struct mgs2_vs_stage_cache *cache;
++    GLint valid = GL_FALSE;
++    LONGLONG probe_start;
++    unsigned int i;
++    GLuint pipeline;
++
++    if (!(cache = priv->mgs2_vs_stages))
++    {
++        if (!(cache = calloc(1, sizeof(*cache))))
++            return FALSE;
++        priv->mgs2_vs_stages = cache;
++    }
++
++    for (i = 0; i < cache->count; ++i)
++    {
++        if (cache->entries[i].shader_id == vs_id)
++        {
++            stage_program = &cache->entries[i].stage_program;
++            stage = &cache->entries[i].stage;
++            break;
++        }
++    }
++    if (!stage_program)
++    {
++        /* A full table falls back to the monolithic path instead of evicting.
++         * Evicting a stage program that a live pipeline still names would be a
++         * use-after-free inside the driver, and pipelines outlive this call. */
++        if (cache->count >= MGS2_VS_STAGE_CACHE_SIZE)
++            return FALSE;
++        cache->entries[cache->count].shader_id = vs_id;
++        stage_program = &cache->entries[cache->count].stage_program;
++        stage = &cache->entries[cache->count].stage;
++        ++cache->count;
++    }
++
++    if (!mgs2_make_ffp_stage(gl_info, priv, vs_id, GL_VERTEX_SHADER_BIT, stage_program, stage,
++            vshader->reg_maps.input_registers, vshader->limits->constant_float)
++            || !mgs2_make_ffp_stage(gl_info, priv, ps_source->shader_id, GL_FRAGMENT_SHADER_BIT,
++                    &ps_source->stage_program, &ps_source->stage, 0, 0))
++        return FALSE;
++
++    probe_start = mgs2_probe_now();
++    MGS2_LOCAL(mgs2_glGenProgramPipelines)(1, &pipeline);
++    if (!pipeline)
++        return FALSE;
++    MGS2_LOCAL(mgs2_glUseProgramStages)(pipeline, GL_VERTEX_SHADER_BIT, *stage_program);
++    MGS2_LOCAL(mgs2_glUseProgramStages)(pipeline, GL_FRAGMENT_SHADER_BIT, ps_source->stage_program);
++    if (priv->mgs2_separable_validate)
++    {
++        MGS2_LOCAL(mgs2_glValidateProgramPipeline)(pipeline);
++        MGS2_LOCAL(mgs2_glGetProgramPipelineiv)(pipeline, GL_VALIDATE_STATUS, &valid);
++        if (!valid)
++        {
++            ERR("Programmable-VS pipeline %u (VS stage %u, PS stage %u) failed validation.\n",
++                    pipeline, *stage_program, ps_source->stage_program);
++            if (mgs2_glGetProgramPipelineInfoLog)
++            {
++                char log[1024];
++
++                log[0] = '\0';
++                MGS2_LOCAL(mgs2_glGetProgramPipelineInfoLog)(pipeline, sizeof(log), NULL, log);
++                if (log[0])
++                    ERR("Pipeline info log: %s\n", debugstr_a(log));
++            }
++            /* d = 1 marks the programmable-VS variant in the probe ring, so a
++             * capture can tell the two pairings apart. */
++            mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++                    *stage_program, ps_source->stage_program, 0, 1, pipeline);
++            MGS2_LOCAL(mgs2_glDeleteProgramPipelines)(1, &pipeline);
++            return FALSE;
++        }
++    }
++    mgs2_probe_record(MGS2_PROBE_OP_VALIDATE_PIPELINE, probe_start,
++            *stage_program, ps_source->stage_program, 1, 1, pipeline);
++
++    entry->id = 0;
++    entry->pipeline_id = pipeline;
++    entry->vs_program_id = *stage_program;
++    entry->ps_program_id = ps_source->stage_program;
++    entry->separable = TRUE;
++    entry->vs = *stage;
++    entry->ps = ps_source->stage;
++    entry->vs.id = vs_id;
++    entry->ps.id = ps->id;
++    entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++
++    mgs2_set_programmable_vs_constant_update_mask(entry, vshader);
++
++    /* Samplers and uniform blocks belong to the stage program, not the pipeline,
++     * and shader_glsl_load_program_resources() assigns them with plain glUniform1i.
++     * Make the stage current for that and drop back to no current program, which
++     * is what a bound pipeline needs -- the same sequence the FFP pair already uses
++     * for its fragment samplers, rather than glActiveShaderProgram, because that
++     * sequence is the one proven on this driver. */
++    GL_EXTCALL(glUseProgram(*stage_program));
++    shader_glsl_load_program_resources(context_gl, priv, *stage_program, vshader);
++    GL_EXTCALL(glUseProgram(0));
++    checkGLcall("separable programmable-VS resource setup");
++    return TRUE;
++}
++
+ static HRESULT shader_glsl_compile_compute_shader(struct shader_glsl_priv *priv,
+         const struct wined3d_context_gl *context_gl, struct wined3d_shader *shader)
+ {
+@@ -10812,7 +12094,13 @@
+     struct glsl_shader_prog_link *entry;
+     GLuint shader_id, program_id;
+ 
+-    if (!(entry = malloc(sizeof(*entry))))
++    /* calloc: the separable candidate added separable/pipeline_id/vs_program_id/
++     * ps_program_id to this structure and this path assigns neither, so with
++     * malloc entry->separable was garbage.  delete_glsl_program_entry() reads
++     * it, and a non-zero value there sent a *monolithic* entry into
++     * glDeleteProgramPipelines() -- a NULL entry point unless the separable
++     * path happened to have resolved it, i.e. a jump to address zero. */
++    if (!(entry = calloc(1, sizeof(*entry))))
+     {
+         ERR("Out of memory.\n");
+         return E_OUTOFMEMORY;
+@@ -10864,21 +12152,7 @@
+     list_add_head(&shader->linked_programs, &entry->cs.shader_entry);
+ 
+     TRACE("Linking GLSL shader program %u.\n", program_id);
+-    if (!mgs2_glsl_load_binary(gl_info, program_id))
+-    {
+-        if (mgs2_wined3d_stats())
+-        {
+-            double t0 = mgs2_now_ms();
+-
+-            GL_EXTCALL(glLinkProgram(program_id));
+-            mgs2_links++;
+-            mgs2_link_ms += mgs2_now_ms() - t0;
+-            mgs2_link_twice_probe(gl_info, program_id, mgs2_now_ms() - t0);
+-            mgs2_shader_report();
+-        }
+-        else GL_EXTCALL(glLinkProgram(program_id));
+-        mgs2_glsl_save_binary(gl_info, program_id);
+-    }
++    GL_EXTCALL(glLinkProgram(program_id));
+     shader_glsl_validate_link(gl_info, program_id);
+ 
+     GL_EXTCALL(glUseProgram(program_id));
+@@ -10942,6 +12216,7 @@
+ static void set_glsl_shader_program(const struct wined3d_context_gl *context_gl, const struct wined3d_state *state,
+         struct shader_glsl_priv *priv, struct glsl_context_data *ctx_data)
+ {
++    MGS2_CENSUS_INC(program_selects);
+     const struct wined3d_d3d_info *d3d_info = context_gl->c.d3d_info;
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     const struct wined3d_shader *pre_rasterization_shader;
+@@ -10949,6 +12224,8 @@
+     struct glsl_shader_prog_link *entry = NULL;
+     struct wined3d_shader *vshader = NULL;
+     struct wined3d_shader *pshader = NULL;
++    struct glsl_ffp_vertex_shader *ffp_vs = NULL;
++    struct glsl_ffp_fragment_shader *ffp_ps = NULL;
+     GLuint reorder_shader_id = 0;
+     struct glsl_program_key key;
+     uint32_t attribs_map;
+@@ -10959,14 +12236,23 @@
+     GLuint ds_id = 0;
+     GLuint gs_id = 0;
+     GLuint ps_id = 0;
+-    struct list *ps_list, *vs_list;
++    struct list *ps_list = NULL, *vs_list = NULL;
+     struct wined3d_string_buffer *tmp_name;
++    LONGLONG probe_start, probe_link;
+ 
+     if (!(context_gl->c.shader_update_mask & (1u << WINED3D_SHADER_TYPE_VERTEX)) && ctx_data->glsl_program)
+     {
+         vs_id = ctx_data->glsl_program->vs.id;
+         vs_list = &ctx_data->glsl_program->vs.shader_entry;
+ 
++        /* The vertex state is not dirty, so the FFP vertex shader selected the
++         * last time it was is still the right one.  Without this the separable
++         * path never engaged in the very case it was built for -- a new pixel
++         * shader paired with the unchanged vertex shader, which is exactly how
++         * a codec call links eight programs. */
++        if (ctx_data->ffp_vs && ctx_data->ffp_vs->id == vs_id)
++            ffp_vs = ctx_data->ffp_vs;
++
+         if (use_vs(state) || d3d_info->ffp_hlsl)
+             vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
+     }
+@@ -10979,16 +12265,17 @@
+         find_vs_compile_args(state, vshader, &vs_compile_args, &context_gl->c);
+         vs_id = find_glsl_vertex_shader(context_gl, priv, vshader, &vs_compile_args);
+         vs_list = &vshader->linked_programs;
++        ctx_data->ffp_vs = NULL;
+     }
+     else if (priv->vertex_pipe == &glsl_vertex_pipe)
+     {
+-        struct glsl_ffp_vertex_shader *ffp_shader;
+         struct wined3d_ffp_vs_settings settings;
+ 
+         wined3d_ffp_get_vs_settings(state, &context_gl->c.stream_info, d3d_info, &settings);
+-        ffp_shader = shader_glsl_find_ffp_vertex_shader(priv, gl_info, &settings);
+-        vs_id = ffp_shader->id;
+-        vs_list = &ffp_shader->linked_programs;
++        ffp_vs = shader_glsl_find_ffp_vertex_shader(priv, gl_info, &settings);
++        vs_id = ffp_vs->id;
++        vs_list = &ffp_vs->linked_programs;
++        ctx_data->ffp_vs = ffp_vs;
+     }
+ 
+     hshader = state->shader[WINED3D_SHADER_TYPE_HULL];
+@@ -11034,6 +12321,9 @@
+         ps_id = ctx_data->glsl_program->ps.id;
+         ps_list = &ctx_data->glsl_program->ps.shader_entry;
+ 
++        if (ctx_data->ffp_ps && ctx_data->ffp_ps->id == ps_id)
++            ffp_ps = ctx_data->ffp_ps;
++
+         if (use_ps(state))
+             pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
+     }
+@@ -11045,17 +12335,25 @@
+                 &ps_compile_args, &context_gl->c);
+         ps_id = find_glsl_fragment_shader(context_gl, priv, pshader, &ps_compile_args);
+         ps_list = &pshader->linked_programs;
++        ctx_data->ffp_ps = NULL;
+     }
+     else if (priv->fragment_pipe == &glsl_fragment_pipe
+             && !(vshader && vshader->reg_maps.shader_version.major >= 4))
+     {
+-        struct glsl_ffp_fragment_shader *ffp_shader;
+         struct ffp_frag_settings settings;
+ 
+-        wined3d_ffp_get_fs_settings(state, d3d_info, &settings);
+-        ffp_shader = shader_glsl_find_ffp_fragment_shader(priv, &settings, context_gl);
+-        ps_id = ffp_shader->id;
+-        ps_list = &ffp_shader->linked_programs;
++        /* Patch 43: with the island selected this call lands in native ARM
++         * code compiled from this same function's source. With it off, or with
++         * the Box86 bridge absent, the target is a plain call to the function
++         * below, so the rendering path is identical either way. */
++        if (mgs2_island_ffp_enabled())
++            mgs2_island_ffp_target(state, d3d_info, &settings);
++        else
++            wined3d_ffp_get_fs_settings(state, d3d_info, &settings);
++        ffp_ps = shader_glsl_find_ffp_fragment_shader(priv, &settings, context_gl);
++        ps_id = ffp_ps->id;
++        ps_list = &ffp_ps->linked_programs;
++        ctx_data->ffp_ps = ffp_ps;
+     }
+ 
+     key.vs_id = vs_id;
+@@ -11070,12 +12368,72 @@
+         return;
+     }
+ 
++    if (priv->mgs2_separable_enabled && ffp_vs && ffp_ps && !hshader && !dshader && !gshader)
++    {
++        if ((entry = calloc(1, sizeof(*entry))))
++        {
++            entry->vs.id = vs_id;
++            entry->ps.id = ps_id;
++            entry->constant_version = 0;
++            entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++            if (mgs2_make_ffp_pipeline(context_gl, priv, ffp_vs, ffp_ps, entry))
++            {
++                list_add_head(vs_list, &entry->vs.shader_entry);
++                list_add_head(ps_list, &entry->ps.shader_entry);
++                /* The sampler uniforms belong to the fragment stage program;
++                 * make it current for the plain glUniform1i() calls, then drop
++                 * back to no current program, which is what a bound pipeline
++                 * needs. */
++                GL_EXTCALL(glUseProgram(entry->ps_program_id));
++                shader_glsl_load_samplers(&context_gl->c, priv, entry->ps_program_id, NULL);
++                GL_EXTCALL(glUseProgram(0));
++                checkGLcall("separable sampler setup");
++                add_glsl_program_entry(priv, entry);
++                ctx_data->glsl_program = entry;
++                return;
++            }
++            free(entry);
++        }
++    }
++    /* Patch 30, off unless MGS2_GL_SEPARABLE_VS is set: the same treatment for a
++     * programmable vertex shader paired with an FFP pixel shader. Admitted only
++     * when the monolithic path would attach no VS3 rasterizer helper, because a
++     * stage program can carry just the one shader object; that is the is_gles and
++     * major < 3 case, which is every MGS2 vertex shader on this device. */
++    else if (priv->mgs2_separable_enabled && priv->mgs2_separable_vs_enabled
++            && vshader && vs_id && ffp_ps && !hshader && !dshader && !gshader
++            && vshader->reg_maps.shader_version.major < 3 && gl_info->is_gles)
++    {
++        if ((entry = calloc(1, sizeof(*entry))))
++        {
++            entry->vs.id = vs_id;
++            entry->ps.id = ps_id;
++            entry->constant_version = 0;
++            entry->vs.vertex_color_clamp = GL_FIXED_ONLY_ARB;
++            if (mgs2_make_programmable_vs_pipeline(context_gl, priv, vshader, vs_id, ffp_ps, entry))
++            {
++                list_add_head(vs_list, &entry->vs.shader_entry);
++                list_add_head(ps_list, &entry->ps.shader_entry);
++                GL_EXTCALL(glUseProgram(entry->ps_program_id));
++                shader_glsl_load_samplers(&context_gl->c, priv, entry->ps_program_id, NULL);
++                GL_EXTCALL(glUseProgram(0));
++                checkGLcall("separable programmable-VS sampler setup");
++                add_glsl_program_entry(priv, entry);
++                ctx_data->glsl_program = entry;
++                return;
++            }
++            free(entry);
++        }
++    }
++
+     /* If we get to this point, then no matching program exists, so we create one */
+     program_id = GL_EXTCALL(glCreateProgram());
+     TRACE("Created new GLSL shader program %u.\n", program_id);
+ 
+     /* Create the entry */
+-    entry = malloc(sizeof(*entry));
++    /* calloc, for the same reason as the compute path: entry->separable and
++     * the pipeline fields are not assigned here. */
++    entry = calloc(1, sizeof(*entry));
+     entry->id = program_id;
+     entry->vs.id = vs_id;
+     entry->hs.id = hs_id;
+@@ -11210,22 +12568,21 @@
+ 
+     /* Link the program */
+     TRACE("Linking GLSL shader program %u.\n", program_id);
+-    if (!mgs2_glsl_load_binary(gl_info, program_id))
+-    {
+-        if (mgs2_wined3d_stats())
+-        {
+-            double t0 = mgs2_now_ms();
+-
+-            GL_EXTCALL(glLinkProgram(program_id));
+-            mgs2_links++;
+-            mgs2_link_ms += mgs2_now_ms() - t0;
+-            mgs2_link_twice_probe(gl_info, program_id, mgs2_now_ms() - t0);
+-            mgs2_shader_report();
+-        }
+-        else GL_EXTCALL(glLinkProgram(program_id));
+-        mgs2_glsl_save_binary(gl_info, program_id);
+-    }
++    probe_start = mgs2_probe_now();
++    GL_EXTCALL(glLinkProgram(program_id));
++    probe_link = mgs2_probe_now();
+     shader_glsl_validate_link(gl_info, program_id);
++    /* c carries how much of the stall the LINK_STATUS query accounts for: on a
++     * driver that links lazily the cost shows up there, not in glLinkProgram. */
++    /* d says why this pair took the monolithic path: bit 0 programmable VS,
++     * 1 programmable PS, 2 FFP VS available, 3 FFP PS available, 4 a hull/
++     * domain/geometry stage is present, 5 the candidate is enabled at all. */
++    mgs2_probe_record(MGS2_PROBE_OP_LINK_PROGRAM, probe_start, vs_id, ps_id,
++            mgs2_probe_frequency ? (unsigned int)((mgs2_probe_now() - probe_link)
++            * 1000000 / mgs2_probe_frequency) : 0,
++            (vshader ? 1 : 0) | (pshader ? 2 : 0) | (ffp_vs ? 4 : 0) | (ffp_ps ? 8 : 0)
++            | ((hshader || dshader || gshader) ? 16 : 0)
++            | (priv->mgs2_separable_enabled ? 32 : 0), program_id);
+ 
+     shader_glsl_init_vs_uniform_locations(gl_info, priv, program_id, &entry->vs,
+             vshader ? vshader->limits->constant_float : 0);
+@@ -11392,14 +12749,22 @@
+ {
+     struct glsl_context_data *ctx_data = context_gl->c.shader_backend_data;
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+-    struct glsl_shader_prog_link *glsl_program;
++    struct glsl_shader_prog_link *glsl_program, *prev_program;
+     GLenum current_vertex_color_clamp;
+-    GLuint program_id, prev_id;
++    LONGLONG probe_bind, probe_us;
++    GLuint program_id;
+ 
+-    priv->vertex_pipe->vp_apply_draw_state(&context_gl->c, state);
+-    priv->fragment_pipe->fp_apply_draw_state(&context_gl->c, state);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_apply_draw_state)(&context_gl->c, state);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_apply_draw_state)(&context_gl->c, state);
++    /* Only when the candidate is enabled, so that a production build never
++     * resolves the pipeline entry points and every guarded call below stays a
++     * NULL test. */
++    if (priv->mgs2_separable_enabled)
++        mgs2_resolve_separable(gl_info);
+ 
+-    prev_id = ctx_data->glsl_program ? ctx_data->glsl_program->id : 0;
++    prev_program = ctx_data->glsl_program;
+     set_glsl_shader_program(context_gl, state, priv, ctx_data);
+     glsl_program = ctx_data->glsl_program;
+ 
+@@ -11434,11 +12799,45 @@
+ 
+     TRACE("Using GLSL program %u.\n", program_id);
+ 
+-    if (prev_id != program_id)
+-    {
+-        GL_EXTCALL(glUseProgram(program_id));
++    /* Compare the entries themselves.  Comparing entry->id cannot express the
++     * separable case: a pipeline name is not a program name, so the two would
++     * be drawn from unrelated namespaces and could collide. */
++    if (glsl_program != prev_program)
++    {
++        probe_bind = mgs2_probe_now();
++        if (glsl_program && glsl_program->separable)
++        {
++            /* GLES 3.2, 7.4: a program made current with glUseProgram() takes
++             * precedence over the bound pipeline.  Both objects have to be set
++             * on the transition, or the pair silently keeps executing the
++             * previous monolithic program -- and the glActiveShaderProgram()
++             * uniform loads would be written into that program as well. */
++            MGS2_LOCAL(mgs2_glBindProgramPipeline)(glsl_program->pipeline_id);
++            GL_EXTCALL(glUseProgram(0));
++        }
++        else
++        {
++            /* Symmetrically, a leftover pipeline must be cleared before
++             * returning to Wine's monolithic path. */
++            if (mgs2_glBindProgramPipeline)
++                MGS2_LOCAL(mgs2_glBindProgramPipeline)(0);
++            GL_EXTCALL(glUseProgram(program_id));
++        }
+         checkGLcall("glUseProgram");
+ 
++        /* Only the outliers: a driver that defers the real link to first use
++         * would show it here, and at ~150 program switches per frame nothing
++         * short of a threshold can be recorded in a 512-slot ring. */
++        if (mgs2_probe_enabled && mgs2_probe_frequency)
++        {
++            probe_us = (mgs2_probe_now() - probe_bind) * 1000000 / mgs2_probe_frequency;
++            if (probe_us > 1000)
++                mgs2_probe_record(MGS2_PROBE_OP_SLOW_BIND, probe_bind,
++                        glsl_program && glsl_program->separable, 0, 0, 0,
++                        glsl_program ? (glsl_program->separable
++                        ? glsl_program->pipeline_id : glsl_program->id) : 0);
++        }
++
+         if (glsl_program)
+             context_gl->c.constant_update_mask |= glsl_program->constant_update_mask;
+     }
+@@ -11446,32 +12845,6 @@
+     context_gl->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_COMPUTE);
+ }
+ 
+-/* Unbuffered tracer. Wine's ERR goes through box86 into a redirected file and
+- * loses its tail when the process dies, which makes "last line in the log"
+- * unreliable for locating a crash. This reopens and closes per call. */
+-/* See the note on mgs_trace2() in context_gl.c: this is on the per-draw path,
+- * so it must stay off unless MGS2_TRACE=1 is set. */
+-static void mgs_trace(const char *fmt, ...)
+-{
+-    static int enabled = -1;
+-    static FILE *f;
+-    va_list args;
+-
+-    if (enabled < 0)
+-    {
+-        const char *e = getenv("MGS2_TRACE");
+-        enabled = e && *e != '0';
+-    }
+-    if (!enabled)
+-        return;
+-    if (!f && !(f = fopen("/tmp/mgstrace.log", "a")))
+-        return;
+-    va_start(args, fmt);
+-    vfprintf(f, fmt, args);
+-    va_end(args);
+-    fflush(f);
+-}
+-
+ static void shader_glsl_update_legacy_states(struct wined3d_context_gl *context_gl, const struct wined3d_state *state);
+ 
+ static void shader_glsl_apply_draw_state(void *shader_priv, struct wined3d_context *context,
+@@ -11480,30 +12853,22 @@
+     struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+     struct shader_glsl_priv *priv = shader_priv;
+ 
+-    mgs_trace("MGSSH legacy_states enter\n");
+     shader_glsl_update_legacy_states(context_gl, state);
+-    mgs_trace("MGSSH legacy_states ok\n");
+ 
+     if (context_gl->gl_info->supported[ARB_FRAMEBUFFER_SRGB]
+             && (context_gl->c.shader_update_mask & (1u << WINED3D_SHADER_TYPE_PIXEL)))
+     {
+-        mgs_trace("MGSSH srgbwrite enter\n");
+         state_srgbwrite(&context_gl->c, state, STATE_RENDER(WINED3D_RS_SRGBWRITEENABLE));
+-        mgs_trace("MGSSH srgbwrite ok\n");
+     }
+ 
+     if (context->shader_update_mask & ~(1u << WINED3D_SHADER_TYPE_COMPUTE))
+     {
+-        mgs_trace("MGSSH update_graphics_program enter\n");
+         shader_glsl_update_graphics_program(priv, context_gl, state);
+-        mgs_trace("MGSSH update_graphics_program ok\n");
+     }
+ 
+     if (context->constant_update_mask)
+     {
+-        mgs_trace("MGSSH load_constants enter\n");
+         shader_glsl_load_constants(priv, context, state);
+-        mgs_trace("MGSSH load_constants ok\n");
+     }
+ }
+ 
+@@ -11548,6 +12913,10 @@
+ {
+     struct glsl_context_data *ctx_data = context->shader_backend_data;
+ 
++    /* No GL call here: "context" is not necessarily the currently active one,
++     * so unbinding a pipeline would have hit whichever context is.  Clearing
++     * the entry is enough -- the next draw on this context sees a changed
++     * entry and rebinds both the pipeline and the current program. */
+     ctx_data->glsl_program = NULL;
+     context->shader_update_mask = (1u << WINED3D_SHADER_TYPE_PIXEL)
+             | (1u << WINED3D_SHADER_TYPE_VERTEX)
+@@ -11566,11 +12935,15 @@
+     struct shader_glsl_priv *priv = shader_priv;
+ 
+     shader_glsl_invalidate_current_program(context);
++    if (mgs2_glBindProgramPipeline)
++        MGS2_LOCAL(mgs2_glBindProgramPipeline)(0);
+     GL_EXTCALL(glUseProgram(0));
+     checkGLcall("glUseProgram");
+ 
+-    priv->vertex_pipe->vp_disable(context);
+-    priv->fragment_pipe->fp_disable(context);
++    MGS2_P50_CALL(MGS2_P50_VERTEX_PIPE,
++            priv->vertex_pipe->vp_disable)(context);
++    MGS2_P50_CALL(MGS2_P50_FRAGMENT_PIPE,
++            priv->fragment_pipe->fp_disable)(context);
+ 
+     if (needs_legacy_glsl_syntax(gl_info) && gl_info->supported[ARB_COLOR_BUFFER_FLOAT])
+     {
+@@ -11826,6 +13199,9 @@
+     SIZE_T stack_size = wined3d_log2i(max(WINED3D_MAX_VS_CONSTS_F, WINED3D_MAX_PS_CONSTS_F)) + 1;
+     void *vertex_priv, *fragment_priv;
+     struct shader_glsl_priv *priv;
++    const char *separable_env;
++    const char *source_dedup_env;
++    const char *probe_env;
+ 
+     if (!(priv = calloc(1, sizeof(*priv))))
+         return E_OUTOFMEMORY;
+@@ -11837,6 +13213,8 @@
+     }
+ 
+     string_buffer_list_init(&priv->string_buffers);
++    list_init(&priv->mgs2_ffp_vs_sources);
++    list_init(&priv->mgs2_ffp_ps_sources);
+ 
+     if (!(vertex_priv = vertex_pipe->vp_alloc(&glsl_shader_backend, priv)))
+     {
+@@ -11878,6 +13256,53 @@
+     }
+ 
+     wine_rb_init(&priv->program_lookup, glsl_program_key_compare);
++    if ((probe_env = getenv("MGS2_GPU_PROBE")) && strcmp(probe_env, "0"))
++    {
++        LARGE_INTEGER frequency;
++
++        if (QueryPerformanceFrequency(&frequency))
++        {
++            mgs2_probe_frequency = frequency.QuadPart;
++            mgs2_probe_enabled = TRUE;
++        }
++    }
++
++    /* Production policy: on by default, like the rest of the FINALPLAY renderer
++     * work.  MGS2_GL_SEPARABLE=0 is kept as a one-run escape hatch back to the
++     * monolithic path without a redeploy; it is the A/B that attributed the
++     * remaining hitch, so it is worth keeping. */
++    separable_env = getenv("MGS2_GL_SEPARABLE");
++    priv->mgs2_separable_enabled = !(separable_env && !strcmp(separable_env, "0"));
++    /* The complete D3D FFP settings keys over-distinguish shaders for MGS2:
++     * the measured save-load route created 39 stages from only 19 byte-distinct
++     * GLSL sources. Exact source equality is safe to share and avoids both the
++     * duplicate compile and the much larger duplicate stage link. Keep a one-run
++     * escape hatch for the device A/B and for visual regression checks. */
++    source_dedup_env = getenv("MGS2_GL_SOURCE_DEDUP");
++    priv->mgs2_ffp_source_dedup_enabled = !(source_dedup_env && !strcmp(source_dedup_env, "0"));
++    /* "2" keeps a pipeline whose glValidateProgramPipeline() failed.  That
++     * query also reports on current GL state, so a failure is not by itself
++     * evidence of an incompatible stage interface. */
++    priv->mgs2_separable_validate = !(separable_env && !strcmp(separable_env, "2"));
++    /* Patch 30 extends the path to pairs whose vertex shader is programmable
++     * instead of fixed function. Measured 2026-08-13 in real gameplay, save
++     * loaded and the player walking between rooms: 27 program links costing
++     * 5765 ms, every one monolithic, because the gate requires an FFP vertex
++     * shader while MGS2 draws the world and its characters with a programmable
++     * one. That is about half of all stall time in the run.
++     *
++     * OFF by default, deliberately: this touches the six places patch 27 had to
++     * get right -- attribute bindings, vs_c[] locations, the constant update
++     * mask, sampler resources, the stage cache and the pipeline builder -- and
++     * every one of them broke the picture at least once while patch 27 was being
++     * written. Enable for a single run with MGS2_GL_SEPARABLE_VS=1 and check the
++     * picture with harness/autoload_save.sh before trusting it. */
++    {
++        const char *vs_env = getenv("MGS2_GL_SEPARABLE_VS");
++
++        priv->mgs2_separable_vs_enabled = vs_env && strcmp(vs_env, "0");
++    }
++
+     priv->next_constant_version = 1;
+     priv->vertex_pipe = vertex_pipe;
+     priv->fragment_pipe = fragment_pipe;
+@@ -11900,19 +13325,52 @@
+     return E_OUTOFMEMORY;
+ }
+ 
++static void mgs2_free_ffp_source_caches(struct shader_glsl_priv *priv,
++        const struct wined3d_gl_info *gl_info)
++{
++    struct mgs2_ffp_vs_source *vs, *vs2;
++    struct mgs2_ffp_ps_source *ps, *ps2;
++
++    LIST_FOR_EACH_ENTRY_SAFE(vs, vs2, &priv->mgs2_ffp_vs_sources, struct mgs2_ffp_vs_source, entry)
++    {
++        if (vs->stage_program)
++            GL_EXTCALL(glDeleteProgram(vs->stage_program));
++        GL_EXTCALL(glDeleteShader(vs->shader_id));
++        list_remove(&vs->entry);
++        free(vs->text);
++        free(vs);
++    }
++    LIST_FOR_EACH_ENTRY_SAFE(ps, ps2, &priv->mgs2_ffp_ps_sources, struct mgs2_ffp_ps_source, entry)
++    {
++        if (ps->stage_program)
++            GL_EXTCALL(glDeleteProgram(ps->stage_program));
++        GL_EXTCALL(glDeleteShader(ps->shader_id));
++        list_remove(&ps->entry);
++        free(ps->text);
++        free(ps);
++    }
++}
++
+ /* Context activation is done by the caller. */
+ static void shader_glsl_free(struct wined3d_device *device, struct wined3d_context *context)
+ {
+     struct shader_glsl_priv *priv = device->shader_priv;
++    const struct wined3d_gl_info *gl_info = wined3d_context_gl(context)->gl_info;
+ 
+     wine_rb_destroy(&priv->program_lookup, NULL, NULL);
+     constant_free(&priv->pconst_heap);
+     constant_free(&priv->vconst_heap);
++    /* Patch 30's programmable-VS stage table. Only the table itself is freed: the
++     * stage programs it names are owned by the GL context that is going away with
++     * this private data, exactly like the FFP stage programs in the shader caches. */
++    free(priv->mgs2_vs_stages);
++    priv->mgs2_vs_stages = NULL;
+     free(priv->stack);
+     string_buffer_list_cleanup(&priv->string_buffers);
+     string_buffer_free(&priv->shader_buffer);
+     priv->fragment_pipe->free_private(device, context);
+     priv->vertex_pipe->vp_free(device, context);
++    mgs2_free_ffp_source_caches(priv, gl_info);
+ 
+     free(device->shader_priv);
+     device->shader_priv = NULL;
+@@ -11939,7 +13397,7 @@
+     struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+ 
+-    gl_info->gl_ops.gl.p_glEnable(GL_PROGRAM_POINT_SIZE);
++    MGS2_CORE(glEnable, gl_info)->gl_ops.gl.p_glEnable(GL_PROGRAM_POINT_SIZE);
+     checkGLcall("GL_PROGRAM_POINT_SIZE");
+ }
+ 
+@@ -12380,7 +13838,7 @@
+     {
+         delete_glsl_program_entry(ctx->priv, gl_info, program);
+     }
+-    GL_EXTCALL(glDeleteShader(shader->id));
++    /* The exact-source cache owns the shared shader and stage program. */
+     free(shader);
+ }
+ 
+@@ -12608,7 +14066,7 @@
+     {
+         delete_glsl_program_entry(ctx->priv, gl_info, program);
+     }
+-    GL_EXTCALL(glDeleteShader(shader->id));
++    /* The exact-source cache owns the shared shader and stage program. */
+     free(shader);
+ }
+ 
+@@ -12672,18 +14130,6 @@
+      * on would move the ladder's own baseline. Skipping it also means alpha test
+      * must come from the generated GLSL, which is unproven here. A/B it on its own:
+      *   MGS2_GLES_ALPHA_SKIP=1 */
+-    if (gl_info->is_gles)
+-    {
+-        static int skip = -1;
+-
+-        if (skip < 0)
+-        {
+-            const char *e = getenv("MGS2_GLES_ALPHA_SKIP");
+-            skip = e && *e != '0';
+-        }
+-        if (skip)
+-            return;
+-    }
+     const struct wined3d_ffp_ps_constants *constants;
+     struct wined3d_buffer *buffer;
+     GLfloat ref;
+@@ -12695,7 +14141,7 @@
+             ref = (constants = wined3d_buffer_load_sysmem(buffer, &context_gl->c))->alpha_test_ref;
+         else
+             ref = 0.0f;
+-        gl_info->gl_ops.gl.p_glAlphaFunc(func, ref);
++        MGS2_CORE(glAlphaFunc, gl_info)->gl_ops.gl.p_glAlphaFunc(func, ref);
+         checkGLcall("glAlphaFunc");
+     }
+ }
+@@ -12880,12 +14326,13 @@
+     struct wined3d_blitter *next;
+ 
+     if ((next = blitter->next))
+-        next->ops->blitter_destroy(next, context);
++        MGS2_P50_CALL(MGS2_P50_BLITTER_DESTROY,
++                next->ops->blitter_destroy)(next, context);
+ 
+     glsl_blitter = CONTAINING_RECORD(blitter, struct wined3d_glsl_blitter, blitter);
+ 
+     if (glsl_blitter->palette_texture)
+-        gl_info->gl_ops.gl.p_glDeleteTextures(1, &glsl_blitter->palette_texture);
++        MGS2_CORE(glDeleteTextures, gl_info)->gl_ops.gl.p_glDeleteTextures(1, &glsl_blitter->palette_texture);
+ 
+     wine_rb_destroy(&glsl_blitter->programs, glsl_free_blitter_program, context_gl);
+     string_buffer_list_cleanup(&glsl_blitter->string_buffers);
+@@ -13362,11 +14809,11 @@
+ 
+     GL_EXTCALL(glUseProgram(program));
+     loc = GL_EXTCALL(glGetUniformLocation(program, "sampler"));
+-    GL_EXTCALL(glUniform1i(loc, 0));
++    MGS2_UNIFORM_CALL(glUniform1i(loc, 0));
+     if (complex_fixup == COMPLEX_FIXUP_P8)
+     {
+         loc = GL_EXTCALL(glGetUniformLocation(program, "sampler_palette"));
+-        GL_EXTCALL(glUniform1i(loc, 1));
++        MGS2_UNIFORM_CALL(glUniform1i(loc, 1));
+     }
+ 
+     return program;
+@@ -13382,20 +14829,20 @@
+     palette = texture_gl->t.swapchain ? texture_gl->t.swapchain->palette : NULL;
+ 
+     if (!blitter->palette_texture)
+-        gl_info->gl_ops.gl.p_glGenTextures(1, &blitter->palette_texture);
++        MGS2_CORE(glGenTextures, gl_info)->gl_ops.gl.p_glGenTextures(1, &blitter->palette_texture);
+ 
+     wined3d_context_gl_active_texture(context_gl, gl_info, 1);
+-    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D, blitter->palette_texture);
+-    gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+-    gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+-    gl_info->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++    MGS2_CORE(glBindTexture, gl_info)->gl_ops.gl.p_glBindTexture(GL_TEXTURE_1D, blitter->palette_texture);
++    MGS2_CORE(glTexParameteri, gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++    MGS2_CORE(glTexParameteri, gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++    MGS2_CORE(glTexParameteri, gl_info)->gl_ops.gl.p_glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+ 
+     GL_EXTCALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
+     checkGLcall("glBindBuffer");
+ 
+     if (palette)
+     {
+-        gl_info->gl_ops.gl.p_glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 256, 0, GL_BGRA,
++        MGS2_CORE(glTexImage1D, gl_info)->gl_ops.gl.p_glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 256, 0, GL_BGRA,
+                 GL_UNSIGNED_INT_8_8_8_8_REV, palette->colors);
+     }
+     else
+@@ -13403,7 +14850,7 @@
+         static const DWORD black;
+ 
+         FIXME("P8 texture loaded without a palette.\n");
+-        gl_info->gl_ops.gl.p_glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 1, 0, GL_BGRA,
++        MGS2_CORE(glTexImage1D, gl_info)->gl_ops.gl.p_glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 1, 0, GL_BGRA,
+                 GL_UNSIGNED_INT_8_8_8_8_REV, &black);
+     }
+ 
+@@ -13566,7 +15013,8 @@
+         }
+ 
+         TRACE("Forwarding to blitter %p.\n", next);
+-        return next->ops->blitter_blit(next, op, context, src_texture, src_sub_resource_idx, src_location,
++        return MGS2_P50_CALL(MGS2_P50_BLITTER_BLIT,
++                next->ops->blitter_blit)(next, op, context, src_texture, src_sub_resource_idx, src_location,
+                 src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter,
+                 resolve_format);
+     }
+@@ -13661,7 +15109,7 @@
+         case COMPLEX_FIXUP_YUV:
+             src_level = src_sub_resource_idx % src_texture->level_count;
+             location = GL_EXTCALL(glGetUniformLocation(program->id, "size"));
+-            GL_EXTCALL(glUniform2f(location, wined3d_texture_get_level_width(src_texture, src_level),
++            MGS2_UNIFORM_CALL(glUniform2f(location, wined3d_texture_get_level_width(src_texture, src_level),
+                     wined3d_texture_get_level_height(src_texture, src_level)));
+             break;
+ 
+@@ -13674,15 +15122,15 @@
+ 
+         wined3d_format_get_float_color_key(src_texture->resource.format, colour_key, float_key);
+         location = GL_EXTCALL(glGetUniformLocation(program->id, "colour_key.low"));
+-        GL_EXTCALL(glUniform4fv(location, 1, &float_key[0].r));
++        MGS2_UNIFORM_CALL(glUniform4fv(location, 1, &float_key[0].r));
+         location = GL_EXTCALL(glGetUniformLocation(program->id, "colour_key.high"));
+-        GL_EXTCALL(glUniform4fv(location, 1, &float_key[1].r));
++        MGS2_UNIFORM_CALL(glUniform4fv(location, 1, &float_key[1].r));
+     }
+     wined3d_context_gl_draw_shaded_quad(context_gl, src_texture_gl, src_sub_resource_idx, src_rect, dst_rect, filter);
+     GL_EXTCALL(glUseProgram(0));
+ 
+     if (dst_texture->swapchain && (dst_texture->swapchain->front_buffer == dst_texture))
+-        gl_info->gl_ops.gl.p_glFlush();
++        MGS2_CORE(glFlush, gl_info)->gl_ops.gl.p_glFlush();
+ 
+     if (staging_texture)
+         wined3d_texture_decref(staging_texture);

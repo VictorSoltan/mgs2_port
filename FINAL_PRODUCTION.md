@@ -1,20 +1,162 @@
-# MGS2 Substance on the Anbernic RG353VS — FINALPLAY9
+# MGS2 Substance on the Anbernic RG353VS — FINALPLAY11
 
-Promoted 22 August 2026, replacing FINALPLAY6's `island41` / `p56` pair. The
-owner authorised promotion after playing the exact binaries below for 144
+Promoted 23 August 2026, replacing FINALPLAY9. FINALPLAY9's own record follows
+below the FINALPLAY10 section and is unchanged: the presenter and the separable
+stage selector are carried forward as they were, and this release adds the
+native dither converter on top of them.
+
+FINALPLAY9 was promoted 22 August 2026, replacing FINALPLAY6's `island41` /
+`p56` pair. The owner authorised promotion after playing the exact binaries for 144
 minutes, and the launcher was then exercised through the ordinary entry point
 (`MGS2-Substance.sh`, no environment overrides) to prove the defaults, not a
 hand-built command line.
 
 ```text
-box86      box86-island58-p75a-steady
-           2d7547b2671e16810ed31a7306aaea6b01a7dbe129f206468cf7d841a19dee4b
-wined3d    wined3d_p75a_steady.dll
-           382649257b754d88adb27af02a2b447a43a38adfea5b359ec55bbb874bfa9a0d
-presenter  winewayland_dmabuf_prod.so   (MGS2_GL_DMABUF=1, SYNC=3)
-           51879e2d706d434e...
+box86      box86-fp11                   (MGS2_BOX86_NATIVE_DITHER=1)
+           ea3e367d71703039bd4a10b32e34b6c6f331b104f4316bc7180dfbf22052d120
+wined3d    wined3d_fp11.dll
+           b35529b0ba4570bac910763f4c0180bac61d3648ab3a4033e718de5e31d02706
+presenter  winewayland_dmabuf_prod.so   (MGS2_GL_DMABUF=1, SYNC=3) -- unchanged
+           51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169
 island     0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41
 ```
+
+`launch-play.sh` now hashes the three MOUNTED files against those values before
+it starts the game and refuses to run if any differs, saying which. Overrides
+downgrade it to a notice, because that is how experiments are run. The class-B
+registry made this worth automating: it maps guest WineD3D RVAs, so a mismatched
+pair does not fail cleanly, and "almost FINALPLAY10" is the worst thing to
+profile.
+
+## What FINALPLAY11 adds
+
+### The FFP light-colour cache, now on
+
+Three colour uniforms per light -- diffuse, specular, ambient -- cached per field
+in `mgs2_ffp_vs_source`, the object that owns `stage_program`. That owner is the
+point: sharing it across separable entries is exactly what corrupted the picture
+in P74A, and the key here is `(vs_program_id, light, field)`, which is what GL
+attributes the state to.
+
+It was held back in FINALPLAY10 for want of an ms/frame verdict. It has one now,
+and getting it required fixing the instrument first:
+
+* **The frame denominator.** `FRM1` counts presented frames inside
+  `wined3d_swapchain_present()` and reports each A/B arm separately. The old
+  denominator was scraped from the game log, which emits one line per N frames,
+  so any window reported a multiple of N no matter how long it really was.
+* **The statistic.** The first UCT reading said the cache arm was SLOWER while
+  doing almost no work, and the second said the opposite. Both were means over a
+  few hundred 20 us intervals, where one preemption moves the mean by
+  microseconds. The record now carries a histogram and the reader takes a median.
+
+```text
+arm A (cache off)  median 19.5 us per three-field group, 3.000 uploads
+arm B (cache on)   median 14.5 us per three-field group, 0.029 uploads
+                => 1.68 us saved per glUniform4fv removed
+```
+
+That is ~0.04 ms/frame in a quiet scene, which is nothing, and ~0.7 ms/frame in
+combat, where the same path attempts 552 uploads per frame at 87% redundancy. A
+miss costs three 16-byte memcmps. The 1.68 us is also a reusable constant: it
+converts "calls removed per frame" into ms/frame for every later candidate.
+
+### The Mali shader freeze: measured, attacked, and CLOSED with proof
+
+The 0.5-1.1 s freezes are real and the diagnosis held up -- but the census
+changed what to build. In one run the probe recorded **12 separable-stage LINKS
+costing 2.0 s against 16-88 ms for all the compiling**. The expensive thing is
+linking, not compiling, and every source in a run is distinct, so a cache living
+inside one run has nothing to hit. The only shape that could pay was persisting
+linked binaries between runs.
+
+That was built: `glGetProgramBinary`/`glProgramBinary` keyed on the GLSL text,
+the stage, the bound attribute indices and a hash of GL_VENDOR/RENDERER/VERSION,
+stored under `shadercache/`. It does not work here, and the reason is not a bug
+in the cache:
+
+```text
+roundtrip_tried  1        in-memory: store the blob, hand it straight back
+roundtrip_ok     0        to glProgramBinary on a fresh program, same context
+roundtrip_err    0        no file, no key, no persistence involved
+```
+
+The driver reports a binary length, returns 12280 bytes in its own format
+0x8f61, raises **no GL error** on reload, and leaves LINK_STATUS false. Twelve
+file-backed loads behaved identically. **This Mali driver does not reload its own
+program binaries.**
+
+So the cache ships OFF (`MGS2_GL_PROGRAM_CACHE=1` to try it) with its accounting
+record `PBC1` intact. Retesting after a driver update is one run: set the switch
+and read `roundtrip_ok`. Nothing else about that branch is worth building until
+that flips.
+
+## What FINALPLAY10 added: the load freeze is 23% shorter
+
+Everything here is about the multi-second freeze after a save loads, which four
+unattended captures showed is not one problem but three. Full diagnosis in
+`docs/briefs/` and in the project memory; the short version:
+
+* **Long, 4-7 s** -- the game's own code on the main thread. `wined3d_cs` sleeps
+  on a futex throughout and does no GL at all.
+* **Short, 0.5-1.1 s** -- Mali shader compilation. Untouched by this release.
+* **Rare hangs** -- a different thing again, and still open.
+
+Measured NOT to be the cause, each of which looked plausible first: the
+compositor (wait 0.01 ms/frame), the SD card (0.3 s of `mmc_blk_rw_wait` in
+200 s), swap and zram (6 major faults per run), memory pressure (identical minor
+fault rate in and out of freezes), and Box86's JIT compilation (2.76% of freeze
+cycles). During a freeze only ~1.4 of 4 cores are busy: serialisation, not
+saturation.
+
+**The change.** 44.7% of the main thread's CPU during those freezes is a single
+guest function, `mgs2_sse_rg353vs_port.exe+0x50dae1` -- float RGBA to packed
+RGBA8 with a 4x4 ordered dither, one pixel at a time in scalar x87, which Box86
+emulates instruction by instruction. It is now a native ARM routine, reached
+through the bridge mechanism of box86-patches 05/06.
+
+**What it is worth.** Two ABBA cycles, eight autoload runs, one binary and one
+environment variable apart:
+
+```text
+converter off   18539  18035  21871  19083   mean 19382 ms of long stalls
+converter on    16427  15839  11461  16143   mean 14968 ms
+```
+
+Every ON run is faster than every OFF run -- complete separation, exact p ~= 0.03
+-- for **-4.4 s per load, about 23%**. That matches the 4.2 s the profile
+predicted before the patch existed, which is the check that matters.
+
+**Two things this release does not claim.** The remaining ~70% of the long
+freeze is other guest work, untouched. And the short Mali-compile freezes are
+untouched; they want a program-binary cache, which is a separate patch.
+
+### Correctness, and the bug the oracle caught
+
+The rewrite has to be bit-identical, not close. The guest sets x87 RC=11 before
+the loop, and the first version read that as "FISTP truncates" -- but RC is in
+the control word and governs *every* x87 rounding, including the FADDS and the
+FSTPS that narrows to single precision. Rounding those to nearest puts
+127.99999991 exactly on 128.0f and returns one more than the guest.
+
+Two on-device differential attempts failed structurally: calling the original
+from inside the bridge makes the dynarec own a block for that address, after
+which indirect calls stop consulting the hook, so the run compares one call
+instead of 16384. The answer was to leave the device: `harness/dither/x87_oracle.c`
+runs the guest's exact instruction sequence on real x87 on the build host and
+compares it against the rewrite. It found 24 mismatches in 8 million inputs, and
+zero after the fix, at both 53-bit and 64-bit precision control.
+
+The on-device self-test carries one probe -- 254.5/255 with dither 0.5 -- that
+returns 254 under truncation and 255 under round-to-nearest, so it fails loudly
+if the rounding mode ever stops being applied on ARM. It passes.
+
+### Shipped dark
+
+`mgs2_ffp_vs_source`'s three-field light-colour cache is built, holds identity
+and uses the right key, but never got an ms/frame verdict -- the A/B that would
+have given one was overtaken by the freeze work. It ships with `enabled = 0`.
+Flip that and `mgs2_asp_ab_enabled` to finish the measurement.
 
 The two halves must not be rebuilt independently: the class-B registry inside
 box86 maps guest WineD3D RVAs, so it is valid only for this exact DLL. Rebuilding

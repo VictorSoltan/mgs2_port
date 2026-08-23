@@ -269,7 +269,12 @@ export MGS2_BOX86_ISLAND_FULL="${MGS2_BOX86_ISLAND_FULL:-1}"
 # the 144-minute session that validated the p75a selector ran with exactly
 # this list; promoting a different one would ship something unplayed.
 export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41}"
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-island58-p75a-steady}" /usr/bin/box86 || exit 1
+# The x87 float-RGBA -> RGBA8 dither converter at mgs2_sse_rg353vs_port.exe
+# +0x50dae1, replaced by a native ARM one. It is 44.7% of the main thread's CPU
+# during the multi-second freeze after a save loads. Still a switch, so the A/B
+# can be rerun without rebuilding: MGS2_BOX86_NATIVE_DITHER=0 restores the guest.
+export MGS2_BOX86_NATIVE_DITHER="${MGS2_BOX86_NATIVE_DITHER:-1}"
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp11}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 # Diagnostics may select a separate presenter build, but normal play keeps the
 # measured production driver.  This is used by p67 only for a bounded,
@@ -343,7 +348,7 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # allow-list is the immediate rollback; p55 + island29 remains the older exact
 # pre-FINALPLAY6 rollback.
 export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
-mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_p75a_steady.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_fp11.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the
@@ -355,6 +360,36 @@ mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || 
 # of code, and cannot change a culling decision. The culler itself stays: measured
 # 44.3 fps with it against 37.7 without, over two 400 s windows.
 mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
+
+# FINALPLAY11 identity check, on the MOUNTED files rather than on what was asked
+# for. box86 and wined3d are a matched pair -- the class-B registry inside box86
+# maps this exact DLL's RVAs -- and the presenter carries the dmabuf path, so a
+# run that silently mixes halves produces numbers for a build nobody has.
+# Overrides are how experiments are run, so they only downgrade this to a notice.
+mgs2_verify_identity() {
+    expect_box86=ea3e367d71703039bd4a10b32e34b6c6f331b104f4316bc7180dfbf22052d120
+    expect_wined3d=b35529b0ba4570bac910763f4c0180bac61d3648ab3a4033e718de5e31d02706
+    expect_wayland=51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169
+    if [ -n "${MGS2_BOX86_BIN:-}${MGS2_WINED3D_DLL:-}${MGS2_WAYLAND_SO:-}" ]; then
+        echo "MGS2: identity check skipped, binaries overridden by environment" >&2
+        return 0
+    fi
+    bad=0
+    for pair in \
+        "/usr/bin/box86:$expect_box86" \
+        "/usr/lib/wine/i386-windows/wined3d.dll:$expect_wined3d" \
+        "/usr/lib/wine/i386-unix/winewayland.so:$expect_wayland"; do
+        f=${pair%%:*}; want=${pair#*:}
+        got=$(sha256sum "$f" 2>/dev/null | cut -d" " -f1)
+        if [ "$got" != "$want" ]; then
+            echo "MGS2: $f is $got, FINALPLAY11 expects $want" >&2
+            bad=1
+        fi
+    done
+    [ "$bad" = 0 ] || { echo "MGS2: refusing to launch a build that is not FINALPLAY11" >&2; return 1; }
+    echo "MGS2: FINALPLAY11 identity verified (box86 + wined3d + presenter)" >&2
+}
+mgs2_verify_identity || exit 1
 # Patch 31 is OFF. It replaces the culler's per-draw AABB scan -- 349 vertex walks
 # a frame in emulated x86 -- with one conservative box per buffer write. Measured
 # +74% on an autoloaded corridor route (48.68/48.39 against 27.92) with identical

@@ -1,0 +1,1387 @@
+Patch 16 -- native ARM replacement for the game's x87 dither converter.
+
+SCOPE WARNING: this is a working-tree diff of four files that patches 04-15 also
+touch, so it carries their hunks too. The part that is patch 16 is everything
+naming mgs2_native_dither / mgs2_dither_* / mgs2_indirect_alternate.
+
+WHAT IT REPLACES
+
+mgs2_sse_rg353vs_port.exe+0x50dae1: float RGBA -> packed RGBA8 with a 4x4
+ordered dither, one pixel at a time in scalar x87. Four unattended captures put
+44.7% of the main thread's CPU during the 4-7 s post-load freeze in this one
+function, ~4.2 s of the 14.2 s of long stalls in a 200 s capture.
+
+Measured: two ABBA cycles, eight autoload runs, one environment variable apart.
+Off 18539/18035/21871/19083, on 16427/15839/11461/16143 -- every on-run faster
+than every off-run, exact p ~= 0.03, -4.4 s per load (23%).
+
+TWO THINGS THAT ARE NOT OBVIOUS
+
+1. getAlternate() is consulted only for DIRECT rel32 branches. This function is
+   a C++ virtual method -- its constructor writes vtable 0x98fc28 -- so it is
+   reached through LinkNext(), which looks only in the alternates hash. The
+   first build armed the bridge and intercepted nothing for an entire run.
+   Hence mgs2_indirect_alternate(), called from LinkNext and deliberately
+   narrower than the whole matcher chain, which has no business in that path.
+
+2. The guest sets x87 RC=11 before the loop. That is not "FISTP truncates": RC
+   is in the control word and governs every x87 rounding, including the FADDS
+   and the FSTPS that narrows to single precision. Rounding those to nearest
+   puts 127.99999991 exactly on 128.0f and returns one more than the guest.
+   harness/dither/x87_oracle.c runs the real instruction sequence on the build
+   host's real x87 and found 24 such cases in 8 million inputs; zero after
+   fesetround(FE_TOWARDZERO) around the loop, at both PC=53 and PC=64.
+
+   On-device differential testing does not work here and the reason is
+   structural: calling the original from inside the bridge makes the dynarec own
+   a block for that address, after which indirect calls stop consulting the hook
+   and the run compares one call instead of 16384. Verify mode is retained
+   (MGS2_BOX86_NATIVE_DITHER=2) but it is not the oracle.
+
+The self-test carries one probe -- 254.5/255 with dither 0.5 -- that gives 254
+under truncation and 255 under round-to-nearest, so it fails loudly if the
+rounding mode stops being applied on ARM.
+
+Gated by MGS2_BOX86_NATIVE_DITHER, self-tested before the bridge is published,
+matched on an exact 48-byte prologue that is unique in the image's .text.
+
+SHIPPED in FINALPLAY10 as box86-island63-fp10.
+
+diff --git a/src/box86context.c b/src/box86context.c
+index bdaaf91c..fc69d23e 100755
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -3,6 +3,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <dlfcn.h>
++#include <math.h>
+ #include <signal.h>
+ 
+ #include "box86context.h"
+@@ -20,6 +21,7 @@
+ #include "x86trace.h"
+ #include "signals.h"
+ #include <sys/mman.h>
++#include <fenv.h>
+ #include "custommem.h"
+ #include "dictionnary.h"
+ #include "rcfile.h"
+@@ -60,6 +62,676 @@ void finiAllHelpers(box86context_t* context)
+ 
+ void x86Syscall(x86emu_t *emu);
+ 
++#ifdef MGS2_GLIBC24_COMPAT
++/* The diagnostic cross sysroot labels these long-standing libm entry points
++ * GLIBC_2.43.  The device has their ABI-compatible GLIBC_2.4 definitions.
++ * This build-only compatibility block is inactive in normal Box86 builds. */
++extern float mgs2_glibc24_log10f(float);
++extern float mgs2_glibc24_atan2f(float, float);
++extern float mgs2_glibc24_asinf(float);
++extern float mgs2_glibc24_acosf(float);
++extern float mgs2_glibc24_sinhf(float);
++extern float mgs2_glibc24_acoshf(float);
++extern float mgs2_glibc24_coshf(float);
++extern float mgs2_glibc24_sqrtf(float);
++__asm__(".symver mgs2_glibc24_log10f,log10f@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_atan2f,atan2f@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_asinf,asinf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_acosf,acosf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_sinhf,sinhf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_acoshf,acoshf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_coshf,coshf@GLIBC_2.4");
++__asm__(".symver mgs2_glibc24_sqrtf,sqrtf@GLIBC_2.4");
++float __wrap_log10f(float x) { return mgs2_glibc24_log10f(x); }
++float __wrap_atan2f(float y, float x) { return mgs2_glibc24_atan2f(y, x); }
++float __wrap_asinf(float x) { return mgs2_glibc24_asinf(x); }
++float __wrap_acosf(float x) { return mgs2_glibc24_acosf(x); }
++float __wrap_sinhf(float x) { return mgs2_glibc24_sinhf(x); }
++float __wrap_acoshf(float x) { return mgs2_glibc24_acoshf(x); }
++float __wrap_coshf(float x) { return mgs2_glibc24_coshf(x); }
++float __wrap_sqrtf(float x) { return mgs2_glibc24_sqrtf(x); }
++#endif
++
++/*
++ * Bounded, memory-only census for the MGS2 Wine memmove bridge.  This is a
++ * diagnostic, not production telemetry: there is no I/O on the hot path and
++ * the mapping is allocated only when MGS2_BOX86_MEMMOVE_STATS is enabled.
++ * An external reader snapshots the exported mapping after a fixed-scene run.
++ */
++#define MGS2_MEMMOVE_STATS_CAPACITY 16384u
++
++typedef struct mgs2_memmove_stat_s
++{
++    uint32_t state;                 /* 0 empty, 1 claimed, 2 published */
++    uint32_t caller;
++    uint32_t size;
++    uint32_t count;
++} mgs2_memmove_stat_t;
++
++__attribute__((visibility("default")))
++volatile uint32_t mgs2_memmove_stats_overflow;
++__attribute__((visibility("default")))
++const uint32_t mgs2_memmove_stats_capacity = MGS2_MEMMOVE_STATS_CAPACITY;
++__attribute__((visibility("default")))
++mgs2_memmove_stat_t *mgs2_memmove_stats;
++
++static int mgs2_memmove_stats_enabled;
++
++static void mgs2_memmove_stats_init(void)
++{
++    const char *value = getenv("MGS2_BOX86_MEMMOVE_STATS");
++
++    if (!value || !value[0] || value[0] == '0')
++        return;
++
++    mgs2_memmove_stats = mmap(NULL,
++            sizeof(*mgs2_memmove_stats) * MGS2_MEMMOVE_STATS_CAPACITY,
++            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    if (mgs2_memmove_stats == MAP_FAILED)
++    {
++        mgs2_memmove_stats = NULL;
++        return;
++    }
++    mgs2_memmove_stats_enabled = 1;
++}
++
++static void mgs2_memmove_stats_record(uint32_t caller, uint32_t size)
++{
++    uint32_t index = (caller * 2654435761u ^ size * 2246822519u)
++            & (MGS2_MEMMOVE_STATS_CAPACITY - 1);
++    uint32_t n;
++
++    if (!mgs2_memmove_stats_enabled)
++        return;
++
++    for (n = 0; n < MGS2_MEMMOVE_STATS_CAPACITY; ++n)
++    {
++        mgs2_memmove_stat_t *entry = &mgs2_memmove_stats[index];
++        uint32_t state = __atomic_load_n(&entry->state, __ATOMIC_ACQUIRE);
++
++        if (state == 2 && entry->caller == caller && entry->size == size)
++        {
++            __atomic_fetch_add(&entry->count, 1, __ATOMIC_RELAXED);
++            return;
++        }
++        if (!state)
++        {
++            uint32_t expected = 0;
++
++            if (__atomic_compare_exchange_n(&entry->state, &expected, 1, 0,
++                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
++            {
++                entry->caller = caller;
++                entry->size = size;
++                entry->count = 1;
++                __atomic_store_n(&entry->state, 2, __ATOMIC_RELEASE);
++                return;
++            }
++        }
++        index = (index + 1) & (MGS2_MEMMOVE_STATS_CAPACITY - 1);
++    }
++
++    __atomic_store_n(&mgs2_memmove_stats_overflow, 1, __ATOMIC_RELAXED);
++}
++
++static void mgs2_native_memmove_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++    void *dst = *(void **)(esp + 4);
++    const void *src = *(const void **)(esp + 8);
++    uint32_t size = *(uint32_t *)(esp + 12);
++
++    if (!size)
++    {
++        SetEAX(emu, (uintptr_t)dst);
++        return;
++    }
++    SetEAX(emu, (uintptr_t)((void *(*)(void *, const void *, size_t))fnc)
++            (dst, src, size));
++}
++
++static void mgs2_native_memmove_stats_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++
++    /* Wine's memmove tail-jumps to _sse2_memmove after restoring its frame, so
++     * the guest return address is the renderer call site we need to resolve. */
++    mgs2_memmove_stats_record(*(uint32_t *)esp, *(uint32_t *)(esp + 12));
++    mgs2_native_memmove_wrapper(emu, fnc);
++}
++
++/* Exact native equivalent of Wine d3d8_mgs2_scan_aabb().  The candidate DLL
++ * keeps this one function out of line with regparm=3: buffer/left/count arrive
++ * in eax/edx/ecx and the remaining arguments stay on the guest stack. */
++__attribute__((noinline, visibility("default")))
++uint32_t mgs2_native_aabb_impl(uint32_t buffer_addr, uint32_t left,
++        uint32_t vertex_count, uint32_t stride, uint32_t position_offset,
++        float *min_value, float *max_value)
++{
++    const unsigned char *snapshot;
++    uint32_t snapshot_addr;
++    uint32_t offset = left + position_offset;
++    uint32_t i;
++
++    memcpy(&snapshot_addr, (const void *)(uintptr_t)(buffer_addr + 0x1c),
++            sizeof(snapshot_addr));
++    snapshot = (const unsigned char *)(uintptr_t)snapshot_addr;
++
++    for (i = 0; i < vertex_count; ++i, offset += stride)
++    {
++        float position[3];
++        unsigned int axis;
++
++        memcpy(position, snapshot + offset, sizeof(position));
++        if (!isfinite(position[0]) || !isfinite(position[1]) || !isfinite(position[2]))
++            return 0;
++        for (axis = 0; axis < 3; ++axis)
++        {
++            if (!i || position[axis] < min_value[axis]) min_value[axis] = position[axis];
++            if (!i || position[axis] > max_value[axis]) max_value[axis] = position[axis];
++        }
++    }
++    return 1;
++}
++
++static int mgs2_native_aabb_selftest(void)
++{
++    unsigned char buffer[0x20] = {0};
++    float vertices[12] = {
++        1.0f, 2.0f, 3.0f, 0.0f,
++        -4.0f, 5.0f, 0.5f, 0.0f,
++        2.0f, -3.0f, 9.0f, 0.0f,
++    };
++    uint32_t snapshot = (uintptr_t)vertices;
++    float min_value[3], max_value[3];
++
++    memcpy(buffer + 0x1c, &snapshot, sizeof(snapshot));
++    if (!mgs2_native_aabb_impl((uintptr_t)buffer, 0, 3, 16, 0,
++            min_value, max_value))
++        return 0;
++    return min_value[0] == -4.0f && min_value[1] == -3.0f
++            && min_value[2] == 0.5f && max_value[0] == 2.0f
++            && max_value[1] == 5.0f && max_value[2] == 9.0f;
++}
++
++/* cdecl: three pointer arguments on the guest stack, no return value. The
++ * pointers are guest addresses, which under Box86 are directly usable by native
++ * code -- that is the whole premise the layout probes established. */
++/* Slice 1's standalone copy is superseded by the full island, which provides
++ * wined3d_ffp_get_fs_settings itself as island entry 17. */
++void mgs2_island_gl_probe_impl(unsigned int *out);
++
++static void mgs2_native_island_gl_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++
++    ((void (*)(unsigned int *))fnc)(*(unsigned int **)(esp + 4));
++}
++
++static void mgs2_native_island_ffp_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++
++    ((void (*)(const void *, const void *, void *))fnc)(
++            *(const void **)(esp + 4),
++            *(const void **)(esp + 8),
++            *(void **)(esp + 12));
++}
++
++static void mgs2_native_aabb_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint64_t edxeax = GetEDXEAX(emu);
++    uint32_t esp = GetESP(emu);
++    uint32_t result;
++
++    result = ((uint32_t (*)(uint32_t, uint32_t, uint32_t, uint32_t,
++            uint32_t, float *, float *))fnc)(
++            (uint32_t)edxeax, (uint32_t)(edxeax >> 32), GetECX(emu),
++            *(uint32_t *)(esp + 4), *(uint32_t *)(esp + 8),
++            *(float **)(esp + 12), *(float **)(esp + 16));
++    SetEAX(emu, result);
++}
++
++/* 32-bit layout shared with the companion Wine dsound candidate.  Every field
++ * is exactly one guest DWORD, including pointers and the float bit pattern, so
++ * the layout is independent of AArch64 alignment rules. */
++typedef struct mgs2_dsound_fir_job32_s
++{
++    uint32_t output;
++    uint32_t intermediate;
++    uint32_t fir_copy;
++    uint32_t fir_table;
++    uint32_t count;
++    uint32_t required_input;
++    uint32_t channels;
++    uint32_t output_channels;
++    uint32_t firstep;
++    uint32_t firgain_bits;
++    uint32_t fir_length;
++    uint32_t freq_start_low, freq_start_high;
++    uint32_t freq_num_low, freq_num_high;
++    uint32_t freq_den_low, freq_den_high;
++} mgs2_dsound_fir_job32_t;
++
++static void mgs2_native_dsound_fir_kernel(float *output,
++        const float *intermediate, float *fir_copy, const float *fir_table,
++        uint32_t count, uint32_t required_input, uint32_t channels,
++        uint32_t output_channels, uint32_t firstep, float firgain,
++        uint32_t fir_length, uint64_t freq_start, uint64_t freq_num,
++        uint64_t freq_den)
++{
++    uint32_t i;
++
++    for (i = 0; i < count; ++i)
++    {
++        uint64_t phase = freq_start + (uint64_t)i * freq_num;
++        uint32_t int_fir_steps = phase * firstep / freq_den;
++        float total_fir_steps = phase * firstep / (float)freq_den;
++        uint32_t ipos = int_fir_steps / firstep;
++        uint32_t idx = (ipos + 1) * firstep - int_fir_steps - 1;
++        float rem = int_fir_steps + 1.0 - total_fir_steps;
++        uint32_t fir_used = 0, channel;
++
++        while (idx < fir_length - 1)
++        {
++            fir_copy[fir_used++] = fir_table[idx] * (1.0 - rem)
++                    + fir_table[idx + 1] * rem;
++            idx += firstep;
++        }
++
++        for (channel = 0; channel < channels; ++channel)
++        {
++            const float *cache = intermediate + channel * required_input + ipos;
++            float sum = 0.0f;
++            uint32_t j;
++
++            for (j = 0; j < fir_used; ++j)
++                sum += fir_copy[j] * cache[j];
++            output[i * output_channels + channel] = sum * firgain;
++        }
++    }
++}
++
++__attribute__((noinline, visibility("default")))
++void mgs2_native_dsound_fir_impl(uint32_t job_address)
++{
++    mgs2_dsound_fir_job32_t job;
++    float firgain;
++
++    memcpy(&job, (const void *)(uintptr_t)job_address, sizeof(job));
++    memcpy(&firgain, &job.firgain_bits, sizeof(firgain));
++    mgs2_native_dsound_fir_kernel(
++            (float *)(uintptr_t)job.output,
++            (const float *)(uintptr_t)job.intermediate,
++            (float *)(uintptr_t)job.fir_copy,
++            (const float *)(uintptr_t)job.fir_table,
++            job.count, job.required_input, job.channels, job.output_channels,
++            job.firstep, firgain, job.fir_length,
++            ((uint64_t)job.freq_start_high << 32) | job.freq_start_low,
++            ((uint64_t)job.freq_num_high << 32) | job.freq_num_low,
++            ((uint64_t)job.freq_den_high << 32) | job.freq_den_low);
++}
++
++static int mgs2_native_dsound_fir_selftest(void)
++{
++    static const float table[] = {0.25f, 0.5f, 0.25f, 0.0f};
++    static const float input[] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
++    float coefficients[4] = {0};
++    float output[2] = {0};
++
++    mgs2_native_dsound_fir_kernel(output, input, coefficients, table,
++            2, 5, 1, 1, 1, 1.0f, 4, 0, 1, 1);
++    return output[0] == 1.0f && output[1] == 1.75f;
++}
++
++static void mgs2_native_dsound_fir_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    ((void (*)(uint32_t))fnc)(GetEAX(emu));
++}
++
++
++/* ---------------------------------------------------------------------------
++ * MGS2 native RGBA dither pack -- the long load freeze.
++ *
++ * Four unattended captures agree: while the game freezes for 4-7 s after a save
++ * loads, wined3d_cs sleeps on a futex and does no GL at all, and 44.7% of the
++ * main thread's CPU sits in ONE translated block, mgs2_sse_rg353vs_port.exe
++ * +0x50dae1 -- about 4.2 s of the 14.2 s of long stalls in a 200 s capture.
++ *
++ * The block is a float RGBA -> packed 8-bit converter with a 4x4 ordered
++ * dither, written per pixel in scalar x87. Box86 emulates every x87 op, which
++ * is why it costs what it does; the arithmetic itself is trivial.
++ *
++ * Reproducing it exactly, not approximately:
++ *
++ *  - Rounding. The guest calls a helper at +0x50d5b3 that does fnstcw, ORs
++ *    0xc00 into the control word and reloads it. Bits 10-11 are RC, and 11 is
++ *    round-toward-zero, so every FISTP here TRUNCATES. Precision control is
++ *    left alone at the Windows default of 53 bits.
++ *  - Intermediate width. The loop stores each channel with FSTPS and reloads it
++ *    before FISTP, so the value is forced through float32 whatever PC says.
++ *    That makes the whole expression (float)((double)s * 255.0 + (double)d).
++ *  - The multiplier at 0x964aa8 is exactly 255.0f (read out of the image).
++ *  - Packing ORs FULL 32-bit channel values, not bytes. An out-of-range channel
++ *    bleeds into its neighbours, and that behaviour is preserved rather than
++ *    masked, because matching the original is the whole point.
++ *  - Out-of-range or NaN input makes FISTP produce the integer indefinite
++ *    0x80000000. Reproduced explicitly; C's float->int conversion is undefined
++ *    there, so it cannot be left to the compiler.
++ *
++ * The dither index is (x & 3) * 8 + (y & 3) + (i & 3) into the table at
++ * this+0x2c, which the guest computes once before the loop.
++ * ------------------------------------------------------------------------- */
++
++#define MGS2_DITHER_RVA        0x50dae1u   /* the converter itself */
++#define MGS2_DITHER_XFORM_RVA  0x50ce22u   /* the pre-transform it may call */
++
++static inline int32_t mgs2_x87_fistp_trunc(float t)
++{
++    /* FISTP with RC=11. The open interval is what truncation actually accepts:
++     * 2147483647.5 truncates to a representable value, 2147483648.0 does not. */
++    if (!(t > -2147483649.0f && t < 2147483648.0f))
++        return (int32_t)0x80000000;
++    return (int32_t)t;
++}
++
++__attribute__((noinline, visibility("default")))
++void mgs2_native_dither_kernel(uint32_t *dst, const float *src,
++        const float *dither_row, uint32_t count)
++{
++    int saved_round = fegetround();
++    uint32_t i;
++
++    /* RC=11 in the guest's control word is not "truncate on FISTP". It is the
++     * x87 rounding mode, so the FADDS and the narrowing FSTPS truncate toward
++     * zero as well. Rounding those to nearest -- the C default -- lands
++     * 127.99999991 exactly on 128.0f and returns one more than the guest.
++     * A host oracle running the real x87 sequence found 24 such cases in eight
++     * million inputs; with the mode set, zero. harness/dither/x87_oracle.c. */
++    fesetround(FE_TOWARDZERO);
++
++    for (i = 0; i < count; ++i)
++    {
++        const float d = dither_row[i & 3];
++        const float *p = src + (size_t)i * 4;
++        uint32_t v[4];
++        int k;
++
++        for (k = 0; k < 4; ++k)
++            v[k] = (uint32_t)mgs2_x87_fistp_trunc(
++                    (float)((double)p[k] * 255.0 + (double)d));
++
++        dst[i] = ((((v[3] << 8) | v[0]) << 8) | v[1]) << 8 | v[2];
++    }
++
++    fesetround(saved_round);
++}
++
++/* Set from bridge.c when the prologue matches, so the pre-transform's address
++ * can be derived from the same module base instead of being assumed. */
++uintptr_t mgs2_dither_guest_addr(void);
++
++/* Verify mode (MGS2_BOX86_NATIVE_DITHER=2).
++ *
++ * The obvious correctness test -- compare screenshots between the two arms --
++ * was tried and has no power: two runs of the SAME arm differ on exactly the
++ * same seven screenshots, because the attract loop and the scripted walk are
++ * not frame-identical. Only the five static menu screens reproduce.
++ *
++ * So the comparison has to be against the guest's own output on the guest's own
++ * data: run the original, keep what it wrote, run the native version over the
++ * same pixels, and compare the finished 32-bit words. Nothing here compares
++ * floats, and the inputs are whatever the game actually loads rather than a
++ * table of guesses. */
++static int mgs2_dither_verify;
++static unsigned int mgs2_dither_checked, mgs2_dither_bad, mgs2_dither_skipped;
++
++/* The buffer grows to whatever the game asks for. A fixed cap silently turned
++ * every call into a "skip", and a verify run that compares nothing reports zero
++ * mismatches exactly like a verify run that compares everything. */
++
++static void mgs2_native_dither_run(uint32_t self, uint32_t x, uint32_t y, uint32_t src);
++
++/* Byte offsets of the two rel32 CALLs inside the converter: the guarded
++ * pre-transform, and the helper that switches the x87 control word to truncate.
++ * Verified against the image; the copy asserts the opcode before touching it. */
++#define MGS2_DITHER_LEN        0x140u
++#define MGS2_DITHER_CALL1      0x15u
++#define MGS2_DITHER_CALL2      0x4eu
++
++static uintptr_t mgs2_dither_reference(uintptr_t guest)
++{
++    static uintptr_t copy;
++    unsigned char *c;
++    unsigned int k;
++    static const unsigned int at[2] = { MGS2_DITHER_CALL1, MGS2_DITHER_CALL2 };
++
++    if (copy)
++        return copy;
++    c = (unsigned char *)mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
++            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    if (c == MAP_FAILED)
++        return 0;
++    memcpy(c, (const void *)guest, MGS2_DITHER_LEN);
++    for (k = 0; k < 2; ++k)
++    {
++        int32_t disp;
++        uintptr_t target;
++
++        if (c[at[k]] != 0xe8)
++        {
++            printf_log(LOG_NONE, "MGS2 native dither: reference copy expected a "
++                    "call at +0x%x, found 0x%02x -- verify disabled\n",
++                    at[k], c[at[k]]);
++            munmap(c, 4096);
++            return 0;
++        }
++        memcpy(&disp, c + at[k] + 1, 4);
++        target = guest + at[k] + 5 + (uintptr_t)(intptr_t)disp;
++        disp = (int32_t)(intptr_t)(target - ((uintptr_t)c + at[k] + 5));
++        memcpy(c + at[k] + 1, &disp, 4);
++    }
++    copy = (uintptr_t)c;
++    printf_log(LOG_NONE, "MGS2 native dither: reference copy of %p at %p\n",
++            (void *)guest, (void *)copy);
++    return copy;
++}
++
++static void mgs2_native_dither_verify(uint32_t self, uint32_t x, uint32_t y,
++        uint32_t src)
++{
++    static uint32_t *reference;
++    static size_t reference_cap;
++    const uint32_t *f = (const uint32_t *)(uintptr_t)self;
++    uint32_t count = f[0x1058 / 4];
++    uintptr_t guest = mgs2_dither_guest_addr();
++    x86emu_t *emu = thread_get_emu();
++    uint32_t *dst;
++    unsigned int i, bad = 0;
++
++    if (mgs2_dither_checked + mgs2_dither_skipped < 4)
++        printf_log(LOG_NONE, "MGS2 native dither verify: call %u, count=%u pixels\n",
++                mgs2_dither_checked + mgs2_dither_skipped, count);
++    if (count > reference_cap)
++    {
++        uint32_t *grown = (uint32_t *)realloc(reference, (size_t)count * 4);
++
++        if (grown) { reference = grown; reference_cap = count; }
++    }
++    if (!guest || !emu || !count || count > reference_cap)
++    {
++        ++mgs2_dither_skipped;
++        mgs2_native_dither_run(self, x, y, src);
++        return;
++    }
++
++    /* Against a RELOCATED COPY of the original, not the original itself.
++     *
++     * Calling it in place defeats the test: the dynarec then owns a block for
++     * that guest address, and every later indirect call finds the block instead
++     * of asking LinkNext, so the bridge stops being consulted. The first verify
++     * run compared exactly one call for that reason and looked like a pass.
++     *
++     * The copy needs only its two rel32 calls fixed up. Everything else it
++     * touches -- the 255.0f constant, the saved control word -- is absolute and
++     * still valid, because guest and host share this address space. */
++    guest = mgs2_dither_reference(guest);
++    if (!guest)
++    {
++        ++mgs2_dither_skipped;
++        mgs2_native_dither_run(self, x, y, src);
++        return;
++    }
++    mgs2_dither_bypass = 1;
++    SetECX(emu, self);
++    /* First vararg lands nearest the return address, so this is the guest's
++     * [ebp+8], [ebp+0xc], [ebp+0x10] -- x, y, src, in that order. */
++    RunFunctionWithEmu(emu, 0, guest, 3, x, y, src);
++    SetESP(emu, GetESP(emu) - 12);   /* the guest is `ret $0xc` and popped these */
++    mgs2_dither_bypass = 0;
++
++    dst = (uint32_t *)(uintptr_t)(f[0x18 / 4] + f[0x1050 / 4] * x
++            + f[0x1054 / 4] * y);
++    memcpy(reference, dst, (size_t)count * 4);
++
++    mgs2_native_dither_run(self, x, y, src);
++
++    for (i = 0; i < count; ++i)
++        if (reference[i] != dst[i])
++        {
++            if (!bad && mgs2_dither_bad < 8)
++                printf_log(LOG_NONE, "MGS2 native dither: MISMATCH at pixel %u "
++                        "guest %08x native %08x (count %u)\n",
++                        i, reference[i], dst[i], count);
++            ++bad;
++        }
++    ++mgs2_dither_checked;
++    if (bad) ++mgs2_dither_bad;
++    if ((mgs2_dither_checked & 0x07) == 0)
++        printf_log(LOG_NONE, "MGS2 native dither verify: %u calls compared, "
++                "%u differed, %u skipped (too large or no emu)\n",
++                mgs2_dither_checked, mgs2_dither_bad, mgs2_dither_skipped);
++}
++
++__attribute__((noinline, visibility("default")))
++void mgs2_native_dither_impl(uint32_t self, uint32_t x, uint32_t y, uint32_t src)
++{
++    /* Verify a bounded prefix, then get out of the way.
++     *
++     * Each verified call runs the original as a nested guest call, and that
++     * perturbs the caller enough to end its tile loop: with verification on
++     * every call the run produced one call instead of the 16384 the same load
++     * makes normally. Bounding it keeps a real differential sample -- different
++     * textures, different content -- without turning the whole run into an
++     * artefact. */
++    if (mgs2_dither_verify && mgs2_dither_checked < 64)
++    {
++        mgs2_native_dither_verify(self, x, y, src);
++        return;
++    }
++    mgs2_native_dither_run(self, x, y, src);
++}
++
++static unsigned int mgs2_dither_calls, mgs2_dither_pixels;
++
++static void mgs2_native_dither_run(uint32_t self, uint32_t x, uint32_t y, uint32_t src)
++{
++    const uint32_t *f = (const uint32_t *)(uintptr_t)self;
++    uint32_t count = f[0x1058 / 4];
++    uint32_t dst;
++    const float *dither;
++
++    if (f[0x1048 / 4])
++    {
++        /* The rare path reorders channels through a scratch buffer, in a
++         * several-hundred-byte dispatcher with a dozen cases. It runs once per
++         * call, not once per pixel, so it is left to the guest: reimplementing
++         * it would be all of the correctness risk for none of the time. */
++        uintptr_t guest = mgs2_dither_guest_addr();
++        x86emu_t *emu = thread_get_emu();
++
++        if (!guest || !emu)
++            return;
++        SetECX(emu, self);
++        RunFunctionWithEmu(emu, 0, guest - MGS2_DITHER_RVA + MGS2_DITHER_XFORM_RVA,
++                1, src);
++        /* That callee is `ret $0x4` -- it popped its own argument, and
++         * RunFunctionWithEmu popped it a second time on the way out. */
++        SetESP(emu, GetESP(emu) - 4);
++        src = GetEAX(emu);
++    }
++
++    dst = f[0x18 / 4] + f[0x1050 / 4] * x + f[0x1054 / 4] * y;
++    dither = (const float *)(uintptr_t)(f[0x2c / 4] + (((y & 3) + (x & 3) * 8) * 4));
++
++    mgs2_native_dither_kernel((uint32_t *)(uintptr_t)dst,
++            (const float *)(uintptr_t)src, dither, count);
++
++    /* How often the bridge actually runs. Without this the A/B improvement and
++     * the verify run's silence cannot both be explained, and one of them has to
++     * be wrong. Powers of two so a long run does not flood the log. */
++    mgs2_dither_pixels += count;
++    if (!(++mgs2_dither_calls & (mgs2_dither_calls - 1)))
++        printf_log(LOG_NONE, "MGS2 native dither: %u calls, %u pixels\n",
++                mgs2_dither_calls, mgs2_dither_pixels);
++}
++
++static int mgs2_native_dither_selftest(void)
++{
++    /* Expected values computed on a host running the REAL x87 sequence, not by
++     * the same arithmetic this is testing. See harness/dither/x87_oracle.c.
++     *
++     * Probe 8 with dither 0.5 is the one that matters most: 254.5/255 * 255 is
++     * 254.49999 rather than 254.5, so truncation gives 254 while round-to-
++     * nearest gives 255. If fesetround() ever stops taking effect on this
++     * target, or the compiler hoists the arithmetic out from under it, this
++     * entry catches it -- the other ten agree under both modes. */
++    static const float probe[] = {
++        0.0f, 1.0f, -0.0f, 1.0f / 255.0f,
++        0.5f / 255.0f, 0.4999f / 255.0f, 0.5001f / 255.0f,
++        127.5f / 255.0f, 254.5f / 255.0f, -0.001f, 1.001f, 0.5f,
++    };
++    static const uint32_t expect[2][12] = {
++        /* dither 0.0 */
++        { 0, 255, 0, 1, 0, 0, 0, 127, 254, 0, 255, 127 },
++        /* dither 0.5 */
++        { 0, 255, 0, 1, 1, 0, 1, 128, 254, 0, 255, 128 },
++    };
++    static const float dither[4] = { 0.0f, 0.5f, 0.0f, 0.5f };
++    unsigned int n = (unsigned int)(sizeof(probe) / sizeof(probe[0]));
++    unsigned int i, k, bad = 0;
++
++    for (k = 0; k < 2; ++k)
++        for (i = 0; i < n; ++i)
++        {
++            float src[4];
++            uint32_t out = 0, want = expect[k][i];
++            unsigned int c;
++
++            for (c = 0; c < 4; ++c) src[c] = probe[i];
++            mgs2_native_dither_kernel(&out, src, dither + k, 1);
++            if (out != (((((want << 8) | want) << 8) | want) << 8 | want))
++            {
++                printf_log(LOG_NONE, "MGS2 native dither: self-test probe %u "
++                        "dither %u gave %08x, expected channel value %u\n",
++                        i, k, out, want);
++                ++bad;
++            }
++        }
++    return bad == 0;
++}
++
++static void mgs2_native_dither_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++
++    ((void (*)(uint32_t, uint32_t, uint32_t, uint32_t))fnc)(
++            GetECX(emu),
++            *(uint32_t *)(esp + 4),
++            *(uint32_t *)(esp + 8),
++            *(uint32_t *)(esp + 12));
++}
++
+ /// maxval not inclusive
+ int getrand(int maxval)
+ {
+@@ -239,10 +911,129 @@ box86context_t *NewBox86Context(int argc)
+     context->local_maplib = NewLibrarian(context, 1);
+     context->versym = NewDictionnary();
+     context->system = NewBridge();
++    mgs2_memmove_stats_init();
+     // Cannot use Bridge name as the map is not initialized yet
+     // create vsyscall
+     context->vsyscall = AddBridge(context->system, iFEv, x86Syscall, 0, NULL);
+     addAlternate((void*)0xffffe400, (void*)context->vsyscall);
++    /*
++     * MGS2 on 32-bit Wine spends a large part of its main thread in Wine's
++     * guest _sse2_memmove.  Allow a measured guest entry point to use the
++     * already wrapped native libc memmove instead.  bridge.c gates the redirect
++     * on Wine's exact function prologue, independent of the PE load address.
++     */
++    const char *mgs2_native_memmove_env = getenv("MGS2_BOX86_NATIVE_MEMMOVE");
++    if (mgs2_native_memmove_env && atoi(mgs2_native_memmove_env))
++    {
++        uintptr_t bridge = AddBridge(context->system,
++                mgs2_memmove_stats ? mgs2_native_memmove_stats_wrapper
++                        : mgs2_native_memmove_wrapper,
++                memmove, 0,
++                "MGS2 native memmove");
++        SetMGS2NativeMemmove(bridge);
++    }
++    const char *mgs2_native_aabb_env = getenv("MGS2_BOX86_NATIVE_AABB");
++    if (mgs2_native_aabb_env && atoi(mgs2_native_aabb_env))
++    {
++        if (!mgs2_native_aabb_selftest())
++            printf_log(LOG_INFO, "MGS2 native AABB: self-test FAILED, bridge disabled\n");
++        else
++        {
++            uintptr_t bridge = AddBridge(context->system, mgs2_native_aabb_wrapper,
++                    mgs2_native_aabb_impl, 0, "MGS2 native d3d8 AABB scan");
++            SetMGS2NativeAabb(bridge);
++        }
++    }
++    const char *mgs2_island_gl_env = getenv("MGS2_BOX86_ISLAND_GL");
++    if (mgs2_island_gl_env && atoi(mgs2_island_gl_env))
++    {
++        uintptr_t bridge = AddBridge(context->system, mgs2_native_island_gl_wrapper,
++                mgs2_island_gl_probe_impl, 0, "MGS2 native island: GL context probe");
++        SetMGS2NativeIslandGl(bridge);
++    }
++    /* MGS2_ISLAND_AB=<entry id> switches that entry between the native ARM
++     * route and the guest body on displayed-frame boundaries, ABBA, inside one
++     * process. It exists because eight separate playthroughs could not resolve
++     * the effect: the spread within one configuration was larger than the
++     * effect being looked for. Off unless set. */
++    void mgs2_island_ab_init(const char *spec);
++    mgs2_island_ab_init(getenv("MGS2_ISLAND_AB"));
++
++    const char *mgs2_island_full_env = getenv("MGS2_BOX86_ISLAND_FULL");
++    if (mgs2_island_full_env && atoi(mgs2_island_full_env))
++    {
++        /* MGS2_BOX86_ISLAND_ONLY is a comma separated list of entry ids.  With
++         * it set, only those entries are armed and every other marked function
++         * keeps running as emulated x86.  This is the bisection instrument: the
++         * island is otherwise all-or-nothing, so one bad entry takes the whole
++         * run down and names nothing.  Unset arms all entries, as before. */
++        const char *only = getenv("MGS2_BOX86_ISLAND_ONLY");
++        unsigned int i, armed = 0;
++
++        for (i = 0; i < mgs2_island_entry_count; ++i)
++        {
++            uintptr_t bridge;
++
++            if (only && only[0])
++            {
++                const char *p = only;
++                int wanted = 0;
++
++                while (*p)
++                {
++                    unsigned int v = 0;
++                    int digits = 0;
++
++                    while (*p >= '0' && *p <= '9') { v = v * 10 + (unsigned int)(*p++ - '0'); ++digits; }
++                    if (digits && v == mgs2_island_entries[i].id) { wanted = 1; break; }
++                    while (*p && (*p < '0' || *p > '9')) ++p;
++                }
++                if (!wanted)
++                    continue;
++            }
++            bridge = AddBridge(context->system, mgs2_island_entries[i].wrapper,
++                    mgs2_island_entries[i].impl, 0, "MGS2 island entry");
++            SetMGS2IslandBridge(mgs2_island_entries[i].id, bridge);
++            printf_log(LOG_NONE, "MGS2 island: armed entry %u -> bridge %p\n",
++                    mgs2_island_entries[i].id, (void *)bridge);
++            ++armed;
++        }
++        printf_log(LOG_NONE, "MGS2 island: %u of %u entries armed (only=\"%s\")\n",
++                armed, mgs2_island_entry_count, only ? only : "");
++    }
++    const char *mgs2_native_dither_env = getenv("MGS2_BOX86_NATIVE_DITHER");
++    if (mgs2_native_dither_env && atoi(mgs2_native_dither_env))
++    {
++        if (!mgs2_native_dither_selftest())
++            printf_log(LOG_NONE, "MGS2 native dither: self-test FAILED, bridge disabled\n");
++        else
++        {
++            /* N = 12: the guest is `ret $0xc`, so the bridge must pop the three
++             * stack arguments exactly as the function it stands in for does. */
++            uintptr_t bridge = AddBridge(context->system,
++                    mgs2_native_dither_wrapper,
++                    mgs2_native_dither_impl, 12,
++                    "MGS2 native RGBA dither pack");
++            SetMGS2NativeDither(bridge);
++            mgs2_dither_verify = (atoi(mgs2_native_dither_env) >= 2);
++            printf_log(LOG_NONE, "MGS2 native dither: self-test passed, bridge %p armed%s\n",
++                    (void *)bridge, mgs2_dither_verify ? " (VERIFY mode)" : "");
++        }
++    }
++    const char *mgs2_native_dsound_fir_env = getenv("MGS2_BOX86_NATIVE_DSOUND_FIR");
++    if (mgs2_native_dsound_fir_env && atoi(mgs2_native_dsound_fir_env))
++    {
++        if (!mgs2_native_dsound_fir_selftest())
++            printf_log(LOG_INFO, "MGS2 native dsound FIR: self-test FAILED, bridge disabled\n");
++        else
++        {
++            uintptr_t bridge = AddBridge(context->system,
++                    mgs2_native_dsound_fir_wrapper,
++                    mgs2_native_dsound_fir_impl, 0,
++                    "MGS2 native dsound FIR resampler");
++            SetMGS2NativeDsoundFir(bridge);
++        }
++    }
+     // create exit bridge
+     context->exit_bridge = AddBridge(context->system, NULL, NULL, 0, NULL);
+ #ifdef BUILD_LIB
+diff --git a/src/dynarec/dynarec.c b/src/dynarec/dynarec.c
+index f058a407..f32eae6d 100755
+--- a/src/dynarec/dynarec.c
++++ b/src/dynarec/dynarec.c
+@@ -48,6 +48,16 @@ void* LinkNext(x86emu_t* emu, uintptr_t addr, void* x2)
+     #endif
+     void * jblock;
+     dynablock_t* block = NULL;
++    /* Indirect branches -- vtable calls above all -- reach the dynarec here and
++     * never pass through getAlternate(). See mgs2_indirect_alternate(). */
++    {
++        uintptr_t mgs2_alt = (uintptr_t)mgs2_indirect_alternate((void*)addr);
++
++        if (mgs2_alt != addr) {
++            addr = mgs2_alt;
++            R_EIP = addr;
++        }
++    }
+     if(hasAlternate((void*)addr)) {
+         printf_log(LOG_INFO, "Jmp address has alternate: %p", (void*)addr);
+         addr = (uintptr_t)getAlternate((void*)addr);
+diff --git a/src/include/bridge.h b/src/include/bridge.h
+index ba9fc5cb..cb5be2f9 100755
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -17,6 +17,22 @@ uintptr_t AddCheckBridge(bridge_t* bridge, wrapper_t w, void* fnc, int N, const
+ uintptr_t AddAutomaticBridge(x86emu_t* emu, bridge_t* bridge, wrapper_t w, void* fnc, int N, const char* name);
+ void* GetNativeFnc(uintptr_t fnc);
+ void* GetNativeFncOrFnc(uintptr_t fnc);
++void SetMGS2NativeMemmove(uintptr_t alt);
++void SetMGS2NativeAabb(uintptr_t alt);
++void SetMGS2NativeIslandFfp(uintptr_t alt);
++void SetMGS2NativeIslandGl(uintptr_t alt);
++
++/* One native ARM WineD3D entry point: the id carried in the guest prologue
++ * marker, the box86 wrapper for its signature, and the native implementation. */
++struct mgs2_island_entry { unsigned int id; void *wrapper; void *impl; };
++extern const struct mgs2_island_entry mgs2_island_entries[];
++extern const unsigned int mgs2_island_entry_count;
++void SetMGS2IslandBridge(unsigned int id, uintptr_t bridge);
++void SetMGS2NativeDsoundFir(uintptr_t alt);
++void SetMGS2NativeDither(uintptr_t alt);
++uintptr_t mgs2_dither_guest_addr(void);
++void* mgs2_indirect_alternate(void* addr);
++extern __thread int mgs2_dither_bypass;
+ 
+ int hasAlternate(void* addr);
+ void* getAlternate(void* addr);
+@@ -30,4 +46,4 @@ const char* getBridgeName(void* addr);
+ void init_bridge_helper();
+ void fini_bridge_helper();
+ 
+-#endif //__BRIDGE_H_
+\ No newline at end of file
++#endif //__BRIDGE_H_
+diff --git a/src/tools/bridge.c b/src/tools/bridge.c
+index 86d88e46..ee9d3957 100755
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -15,8 +15,17 @@
+ #include "x86emu.h"
+ #include "box86context.h"
+ #include "elfloader.h"
++#ifndef MGS2_ISLAND_DIAGNOSTICS
++#define MGS2_ISLAND_DIAGNOSTICS 0
++#endif
++#if MGS2_ISLAND_DIAGNOSTICS
++#define MGS2_DIAG_INC(x) (++(x))
++#else
++#define MGS2_DIAG_INC(x) ((void)0)
++#endif
+ #ifdef DYNAREC
+ #include "dynablock.h"
++#include "mgs2_island_entry_identity.h"
+ #endif
+ 
+ KHASH_MAP_INIT_INT(bridgemap, uintptr_t)
+@@ -244,6 +253,128 @@ const char* getBridgeName(void* addr)
+ // Alternate address handling
+ KHASH_MAP_INIT_INT(alternate, void*)
+ static kh_alternate_t *my_alternates = NULL;
++static uintptr_t mgs2_native_memmove;
++static uintptr_t mgs2_memmove_guest;
++static uintptr_t mgs2_native_aabb;
++static uintptr_t mgs2_aabb_guest;
++static uintptr_t mgs2_native_dsound_fir;
++static uintptr_t mgs2_dsound_fir_guest;
++static uintptr_t mgs2_native_dither;
++static uintptr_t mgs2_dither_guest;
++static uintptr_t mgs2_native_island_ffp;
++static uintptr_t mgs2_island_ffp_guest;
++static uintptr_t mgs2_native_island_gl;
++#define MGS2_ISLAND_MAX 64
++static uintptr_t mgs2_island_bridges[MGS2_ISLAND_MAX];
++static uintptr_t mgs2_island_guest[MGS2_ISLAND_MAX];
++static uintptr_t mgs2_island_gl_guest;
++
++void SetMGS2NativeMemmove(uintptr_t alt)
++{
++    mgs2_native_memmove = alt;
++}
++
++void SetMGS2NativeAabb(uintptr_t alt)
++{
++    mgs2_native_aabb = alt;
++}
++
++void SetMGS2NativeIslandFfp(uintptr_t alt) {
++    mgs2_native_island_ffp = alt;
++}
++
++/* The guest address an island entry matched at. The class-B resolver needs it
++ * to establish the guest module base without reading /proc or the loader. */
++uintptr_t mgs2_island_entry_guest(unsigned int id)
++{
++    return (id < MGS2_ISLAND_MAX)
++        ? __atomic_load_n(&mgs2_island_guest[id], __ATOMIC_ACQUIRE) : 0;
++}
++
++/* Set once any island entry is registered. getAlternate() runs on every branch
++ * target the dynarec translates, in every thread, so the marker scan below must
++ * not run at all when the island is off -- see the comment there. */
++static int mgs2_island_armed;
++
++void SetMGS2IslandBridge(unsigned int id, uintptr_t bridge) {
++    if (id < MGS2_ISLAND_MAX) {
++        __atomic_store_n(&mgs2_island_bridges[id], bridge, __ATOMIC_RELEASE);
++        if (bridge)
++            mgs2_island_armed = 1;
++    }
++}
++
++void SetMGS2NativeIslandGl(uintptr_t alt) {
++    mgs2_native_island_gl = alt;
++}
++
++void SetMGS2NativeDsoundFir(uintptr_t alt)
++{
++    mgs2_native_dsound_fir = alt;
++}
++
++void SetMGS2NativeDither(uintptr_t alt)
++{
++    mgs2_native_dither = alt;
++}
++
++/* The converter's own guest address, published so the native implementation can
++ * derive the module base and reach the pre-transform it sometimes calls. The
++ * exe loads at its preferred base today, but deriving beats assuming. */
++uintptr_t mgs2_dither_guest_addr(void)
++{
++    return __atomic_load_n(&mgs2_dither_guest, __ATOMIC_ACQUIRE);
++}
++
++
++/* The island targets are found by an eight-byte multi-byte NOP whose
++ * displacement spells a marker. Matching the marker anywhere in a window at the
++ * top of the function, rather than requiring an exact prefix, keeps the bridge
++ * working when the compiler changes the frame setup -- which it does as soon as
++ * the function body changes. The encoding cannot occur by accident.
++ *
++ * The window was sixteen bytes and that was too small, silently. Nine of the 37
++ * entries put their marker further in -- up to +60 for
++ * wined3d_device_context_emit_blt_sub_resource -- so those entries could never
++ * match, and a run that armed them reported them as "armed but not called" when
++ * they were in fact unreachable. Three of the four unmatched entries in the
++ * 2026-08-15 island run were this, not absence of traffic.
++ * harness/island/full/island_marker_check.py checks every marker against this
++ * window; keep the two in step. */
++#define MGS2_ISLAND_WINDOW 64
++uintptr_t mgs2_island_module_base(void);   /* mgs2_island_resolve.c */
++
++static int mgs2_signature_readable(uintptr_t addr, size_t size)
++{
++    uintptr_t end, probe, last;
++
++    if (addr < 0x10000 || !size || addr > UINTPTR_MAX - (size - 1))
++        return 0;
++    end = addr + size - 1;
++    probe = addr & ~(box86_pagesize - 1);
++    last = end & ~(box86_pagesize - 1);
++    for (;;)
++    {
++        if (!(getProtection(probe) & PROT_READ))
++            return 0;
++        if (probe == last)
++            break;
++        probe += box86_pagesize;
++    }
++    return 1;
++}
++
++static int mgs2_island_marker_at(uintptr_t addr, const unsigned char marker[8])
++{
++    unsigned int i;
++
++    if (!mgs2_signature_readable(addr, MGS2_ISLAND_WINDOW + 8))
++        return 0;
++    for (i = 0; i <= MGS2_ISLAND_WINDOW; ++i)
++        if (!memcmp((const void *)(addr + i), marker, 8))
++            return 1;
++    return 0;
++}
+ 
+ int hasAlternate(void* addr) {
+     if(!my_alternates)
+@@ -254,12 +385,303 @@ int hasAlternate(void* addr) {
+     return 1;
+ }
+ 
++/* First 48 bytes of mgs2_sse_rg353vs_port.exe+0x50dae1: frame setup, the
++ * this-pointer spill, the +0x1048 test that guards the pre-transform, that
++ * call, and the first stride loads. The first 24 bytes are already unique in
++ * the image's .text; 48 is taken for margin, and the call is rel32, so the
++ * signature does not depend on where the image lands. */
++static const unsigned char mgs2_dither_signature[] = {
++    0x55, 0x8b, 0xec, 0x83, 0xec, 0x24, 0x89, 0x4d,
++    0xfc, 0x83, 0xb9, 0x48, 0x10, 0x00, 0x00, 0x00,
++    0x74, 0x0e, 0xff, 0x75, 0x10, 0xe8, 0x27, 0xf3,
++    0xff, 0xff, 0x8b, 0x4d, 0xfc, 0x89, 0x45, 0x10,
++    0x8b, 0x91, 0x50, 0x10, 0x00, 0x00, 0x8b, 0x45,
++    0x08, 0x56, 0x0f, 0xaf, 0xd0, 0x8b, 0x75, 0x0c,
++};
++
++/* getAlternate() is consulted only for DIRECT rel32 branches. Anything reached
++ * through a C++ vtable arrives at LinkNext() instead, which looks the target up
++ * in the alternates hash and nowhere else -- so a signature matcher for a
++ * virtual method is armed and never fires. That is exactly what happened here:
++ * the converter's constructor writes vtable 0x98fc28, the bridge reported
++ * "armed" for a whole run, and not one call was ever intercepted.
++ *
++ * This is deliberately not the whole getAlternate() chain. LinkNext runs for
++ * every branch target the dynarec has not linked yet, and the other matchers
++ * target direct calls in Wine DLLs that reach getAlternate() perfectly well.
++ * Once matched, the check is a single compare against a cached address. */
++/* Set while the native implementation is deliberately calling the guest
++ * original, so verify mode does not redirect that call straight back into
++ * itself. Thread-local: other threads must keep being intercepted. */
++__thread int mgs2_dither_bypass;
++
++void* mgs2_indirect_alternate(void* addr)
++{
++    uintptr_t guest;
++
++    if (!mgs2_native_dither || mgs2_dither_bypass)
++        return addr;
++    guest = __atomic_load_n(&mgs2_dither_guest, __ATOMIC_ACQUIRE);
++    if (guest)
++        return ((uintptr_t)addr == guest) ? (void *)mgs2_native_dither : addr;
++    if (mgs2_signature_readable((uintptr_t)addr, sizeof(mgs2_dither_signature))
++            && !memcmp(addr, mgs2_dither_signature, sizeof(mgs2_dither_signature)))
++    {
++        __atomic_store_n(&mgs2_dither_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
++        printf_log(LOG_NONE, "MGS2 native dither: matched guest %p -> bridge %p\n",
++                addr, (void *)mgs2_native_dither);
++        return (void *)mgs2_native_dither;
++    }
++    return addr;
++}
++
+ void* getAlternate(void* addr) {
+     if(!my_alternates)
+-        return addr;
++        goto mgs2_memmove;
+     khint_t k = kh_get(alternate, my_alternates, (uintptr_t)addr);
+     if(k!=kh_end(my_alternates))
+         return kh_value(my_alternates, k);
++
++mgs2_memmove:
++    if (mgs2_native_memmove)
++    {
++        /* Wine 11 i386 sse2_memmove through the direction comparison.  Match
++         * code, not its PE load address, so the lossless host bridge remains
++         * valid if Wine changes the module allocation order. */
++        static const unsigned char signature[] = {
++            0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c, 0x8b, 0x74, 0x24, 0x10,
++            0x8b, 0x4c, 0x24, 0x14, 0x89, 0xfa, 0x29, 0xf2, 0x39, 0xca,
++            0x0f, 0x82, 0xc3, 0x00, 0x00, 0x00, 0x83, 0xf9, 0x04, 0x0f,
++            0x82, 0xa8, 0x00, 0x00, 0x00, 0x89, 0xfa, 0xd1, 0xea, 0x73,
++            0x03, 0xa4, 0x49, 0x42, 0xd1, 0xea, 0x73, 0x06,
++        };
++        uintptr_t guest = __atomic_load_n(&mgs2_memmove_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_memmove;
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, sizeof(signature))
++                && !memcmp(addr, signature, sizeof(signature)))
++        {
++            static int reported;
++            uintptr_t expected = 0;
++
++            if (!__atomic_compare_exchange_n(&mgs2_memmove_guest, &expected,
++                    (uintptr_t)addr, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
++                    && expected != (uintptr_t)addr)
++                return addr;
++            if (!__atomic_exchange_n(&reported, 1, __ATOMIC_RELAXED))
++                printf_log(LOG_INFO, "MGS2 native memmove: matched guest %p -> bridge %p\n",
++                        addr, (void *)mgs2_native_memmove);
++            return (void *)mgs2_native_memmove;
++        }
++    }
++
++    if (mgs2_native_aabb)
++    {
++        /* Exact first 32 bytes of the noinline Wine candidate, including its
++         * frame size, regparm saves and count branch. */
++        static const unsigned char signature[] = {
++            0x55, 0x89, 0xe5, 0x57, 0x56, 0x53, 0x83, 0xec,
++            0x1c, 0x8b, 0x5d, 0x10, 0x8b, 0x75, 0x14, 0x89,
++            0x45, 0xe0, 0x85, 0xc9, 0x0f, 0x84, 0x89, 0x00,
++            0x00, 0x00, 0x03, 0x55, 0x0c, 0x89, 0x4d, 0xdc,
++        };
++        uintptr_t guest = __atomic_load_n(&mgs2_aabb_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_aabb;
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, sizeof(signature))
++                && !memcmp(addr, signature, sizeof(signature)))
++        {
++            uintptr_t expected = 0;
++
++            if (!__atomic_compare_exchange_n(&mgs2_aabb_guest, &expected,
++                    (uintptr_t)addr, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
++                    && expected != (uintptr_t)addr)
++                return addr;
++            printf_log(LOG_INFO, "MGS2 native AABB: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_aabb);
++            return (void *)mgs2_native_aabb;
++        }
++    }
++
++    if (mgs2_native_dsound_fir)
++    {
++        /* Exact first 48 bytes of Wine's noinline/noclone FIR target.  The
++         * signature includes its full prologue and the first job-field loads;
++         * a stock Wine function cannot match this MGS2-only helper. */
++        static const unsigned char signature[] = {
++            0x55, 0x89, 0xe5, 0x57, 0x89, 0xc7, 0x56, 0x53,
++            0x83, 0xe4, 0xf8, 0x83, 0xec, 0x48, 0x8b, 0x40,
++            0x2c, 0x8b, 0x57, 0x30, 0x8b, 0x4f, 0x10, 0x89,
++            0x44, 0x24, 0x28, 0x8b, 0x47, 0x34, 0x89, 0x54,
++            0x24, 0x2c, 0x8b, 0x57, 0x38, 0x89, 0x44, 0x24,
++            0x18, 0x8b, 0x47, 0x3c, 0x89, 0x54, 0x24, 0x1c,
++        };
++        uintptr_t guest = __atomic_load_n(&mgs2_dsound_fir_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_dsound_fir;
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, sizeof(signature))
++                && !memcmp(addr, signature, sizeof(signature)))
++        {
++            __atomic_store_n(&mgs2_dsound_fir_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
++            printf_log(LOG_INFO, "MGS2 native dsound FIR: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_dsound_fir);
++            return (void *)mgs2_native_dsound_fir;
++        }
++    }
++    if (mgs2_native_dither)
++    {
++        void *alt = mgs2_indirect_alternate(addr);
++
++        if (alt != addr)
++            return alt;
++    }
++    if (mgs2_native_island_ffp)
++    {
++        /* Exact prologue of mgs2_island_ffp_target() in the companion WineD3D
++         * build: frame setup followed by an eight-byte multi-byte NOP whose
++         * displacement spells "MGS2". The marker keeps this independent of link
++         * addresses and cannot occur in a stock Wine function. */
++        static const unsigned char marker[8] = { 0x0f, 0x1f, 0x84, 0x00, 0x4d, 0x47, 0x53, 0x32 };
++        uintptr_t guest = __atomic_load_n(&mgs2_island_ffp_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_island_ffp;
++        if (!guest && mgs2_island_marker_at((uintptr_t)addr, marker))
++        {
++            __atomic_store_n(&mgs2_island_ffp_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
++            printf_log(LOG_INFO, "MGS2 island FFP: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_island_ffp);
++            return (void *)mgs2_native_island_ffp;
++        }
++    }
++    if (mgs2_native_island_gl)
++    {
++        /* Prologue of mgs2_island_gl_probe_target(): frame setup then an
++         * eight-byte NOP whose displacement spells "MGS3", distinct from the
++         * FFP target's marker. */
++        static const unsigned char marker[8] = { 0x0f, 0x1f, 0x84, 0x00, 0x4d, 0x47, 0x53, 0x33 };
++        uintptr_t guest = __atomic_load_n(&mgs2_island_gl_guest, __ATOMIC_ACQUIRE);
++
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_island_gl;
++        if (!guest && mgs2_island_marker_at((uintptr_t)addr, marker))
++        {
++            __atomic_store_n(&mgs2_island_gl_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
++            printf_log(LOG_INFO, "MGS2 island GL: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_island_gl);
++            return (void *)mgs2_native_island_gl;
++        }
++    }
++    {
++        /* Island entry points carry "MGS" plus a one-byte id inside an
++         * eight-byte NOP at the top of the function. One marker family covers
++         * all of them, so this is a single check rather than 37.
++         *
++         * GATED, and it was not. getAlternate() is called for every branch and
++         * call target the dynarec translates, on every thread. This block used
++         * to run unconditionally -- unlike the two above it, which test their
++         * own pointer first -- so a readability probe plus up to 65 memcmp
++         * calls executed on every translation even with the island switched
++         * off entirely. It showed up at 4.8% of a thread that had degenerated
++         * into constant block lookup, which is exactly the situation where the
++         * cost per translation matters most.
++         *
++         * The first-byte test does the rest: a marker always begins 0x0f, so
++         * the memcmp is reached for roughly one window position in 256 instead
++         * of all 65. Cheap, and it cannot change which addresses match. */
++        static const unsigned char prefix[7] = { 0x0f, 0x1f, 0x84, 0x00, 0x4d, 0x47, 0x53 };
++        unsigned int i;
++
++        if (mgs2_island_armed
++                && mgs2_signature_readable((uintptr_t)addr, MGS2_ISLAND_WINDOW + 8))
++        {
++            for (i = 0; i <= MGS2_ISLAND_WINDOW; ++i)
++            {
++                const unsigned char *p = (const unsigned char *)addr + i;
++                unsigned int id;
++
++                if (p[0] != prefix[0] || memcmp(p, prefix, sizeof(prefix)))
++                    continue;
++                id = p[7];
++                uintptr_t bridge = id < MGS2_ISLAND_MAX
++                        ? __atomic_load_n(&mgs2_island_bridges[id], __ATOMIC_ACQUIRE) : 0;
++                if (id >= MGS2_ISLAND_MAX || !bridge)
++                    break;
++                /* IDENTITY IS NOT THE MARKER. Finding the marker within 64 bytes
++                 * only says "this address is near an island root"; it does not say
++                 * the address IS one. Production entry 22 was bound to
++                 * 0x7b919f23, which is 0xe3 bytes inside the PRECEDING function --
++                 * the window reached 54 bytes forward into the next function's
++                 * marker, the first match published, and the real entry point
++                 * could never route afterwards. See section 14 of
++                 * docs/briefs/MGS2_ISLAND_ENTRY34_FAULT_2026-08-19.md.
++                 *
++                 * So the marker is a witness and the canonical offset is the
++                 * identity: the generated table says where the marker sits inside
++                 * its own function, and any other offset means this address is not
++                 * that function's entry point. An id with no canonical identity is
++                 * not armed at all, rather than armed on a guess. */
++                {
++                    const struct mgs2_entry_identity *ident = NULL;
++                    unsigned int k;
++
++                    for (k = 0; k < MGS2_ENTRY_IDENTITY_COUNT; ++k)
++                        if (mgs2_entry_identity[k].id == id)
++                        {
++                            ident = &mgs2_entry_identity[k];
++                            break;
++                        }
++                    if (!ident || ident->marker_off != i)
++                        break;
++                    /* Second witness, when it exists: the class-B resolver
++                     * establishes the guest module base from two independent
++                     * agreeing RVAs. Until it has, this check is skipped rather
++                     * than failed -- entries are matched at translation time,
++                     * which can precede the first class-B dispatch. */
++                    {
++                        uintptr_t base = mgs2_island_module_base();
++
++                        if (base && (uintptr_t)addr != base + ident->func_rva)
++                        {
++                            printf_log(LOG_NONE, "MGS2 island: entry %u marker at the"
++                                    " canonical offset but %p != base+%#x -- NOT armed\n",
++                                    id, addr, ident->func_rva);
++                            break;
++                        }
++                    }
++                }
++                {
++                    uintptr_t expected = 0;
++                    uintptr_t matched = __atomic_load_n(&mgs2_island_guest[id],
++                            __ATOMIC_ACQUIRE);
++                    int newly_published = 0;
++
++                    if (!matched && __atomic_compare_exchange_n(&mgs2_island_guest[id],
++                            &expected, (uintptr_t)addr, 0, __ATOMIC_RELEASE,
++                            __ATOMIC_ACQUIRE))
++                    {
++                        matched = (uintptr_t)addr;
++                        newly_published = 1;
++                    }
++                    else if (!matched)
++                        matched = expected;
++                    if (matched != (uintptr_t)addr)
++                        break;
++#if MGS2_ISLAND_DIAGNOSTICS
++                    if (newly_published)
++                    {
++                        printf_log(LOG_NONE, "MGS2 island: entry %u matched %p -> %p\n",
++                                id, addr, (void *)bridge);
++                    }
++#endif
++                    return (void *)bridge;
++                }
++            }
++        }
++    }
+     return addr;
+ }
+ void addAlternate(void* addr, void* alt) {

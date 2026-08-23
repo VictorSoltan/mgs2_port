@@ -37,6 +37,7 @@ CALL_SITE = CALL_NAME + 4
 LGT_MAGIC = 0x3154474C      # 'LGT1' -- FFP light uniform redundancy simulator
 LCA_MAGIC = 0x3141434C      # 'LCA1' -- the real FFP light-colour cache
 UCT_MAGIC = 0x31544355      # 'UCT1' -- measured cost of one GL call on this stack
+FRM_MAGIC = 0x314D5246      # 'FRM1' -- presented frames, counted in the presenter
 EXT_NAME = 40               # sizeof(mgs2_ext_site.name)
 EXT_SITE = EXT_NAME + 4
 SHADOW_MAGIC = 0x314C4753   # 'SGL1' -- the shadow simulator
@@ -199,9 +200,9 @@ def read_asp_stats(pid):
     return out
 
 
-def read_uct_stats(pid):
-    """UCT1: (period, qpc_khz, samples[2], ticks_lo[2], ticks_hi[2], exec[2])."""
-    pat = struct.pack("<IIII", UCT_MAGIC, 1, 14, (~UCT_MAGIC) & 0xFFFFFFFF)
+def read_frm_stats(pid):
+    """FRM1: (presented_frames, arm, arm_frames[0], arm_frames[1], blocks)."""
+    pat = struct.pack("<IIII", FRM_MAGIC, 1, 9, (~FRM_MAGIC) & 0xFFFFFFFF)
     out = []
     with open("/proc/%d/mem" % pid, "rb", 0) as mem:
         for lo, hi, nm in readable_regions(pid):
@@ -212,9 +213,49 @@ def read_uct_stats(pid):
                 continue
             i = blob.find(pat)
             while i >= 0:
-                out.append(struct.unpack("<14I", blob[i:i + 56])[4:])
+                out.append(struct.unpack("<9I", blob[i:i + 36])[4:])
                 i = blob.find(pat, i + 4)
     return out
+
+
+def read_uct_stats(pid):
+    """UCT1 v2: header, period, qpc_khz, samples[2], ticks[2] lo/hi, exec[2],
+    then a 2 x 40 histogram of group durations in microseconds."""
+    pat = struct.pack("<IIII", UCT_MAGIC, 2, 94, (~UCT_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, nm in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                out.append(struct.unpack("<94I", blob[i:i + 376])[4:])
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def uct_bin_us(k):
+    """Bin k covers [k, k+1) us below 32, then 32-us steps, then a tail."""
+    if k < 32:
+        return k + 0.5
+    if k < 39:
+        return 32 + (k - 32) * 32 + 16.0
+    return 256.0
+
+
+def uct_quantile(hist, q):
+    total = sum(hist)
+    if not total:
+        return None
+    want, seen = total * q, 0
+    for k, n in enumerate(hist):
+        seen += n
+        if seen >= want:
+            return uct_bin_us(k)
+    return uct_bin_us(len(hist) - 1)
 
 
 def read_lca_stats(pid):
@@ -417,6 +458,7 @@ def main():
           % (len(eaddrs), len(saddrs)))
 
     f0 = frames(a.log) if a.log else None
+    r0 = read_frm_stats(a.pid)
     before = sample(a.pid, addrs)
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
     cbefore = sample_calls(a.pid, caddrs) if caddrs else {}
@@ -439,8 +481,26 @@ def main():
     u1 = read_uct_stats(a.pid)
     s1 = read_asp_stats(a.pid)
     f1 = frames(a.log) if a.log else None
+    r1 = read_frm_stats(a.pid)
 
-    nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
+    # FRM1 first. The log-derived count is a step function -- the presenter emits
+    # one line per N frames -- so a window that spans k lines always reports k*N
+    # frames regardless of its real length. It stays only as a fallback, and says
+    # so out loud when it is used.
+    armf = None
+    if r0 and r1:
+        nframes = sum(x[0] for x in r1) - sum(x[0] for x in r0)
+        armf = [sum(x[2 + i] for x in r1) - sum(x[2 + i] for x in r0) for i in (0, 1)]
+        if nframes <= 0:
+            nframes = None
+        print("frame denominator: FRM1, %s frames presented (arm A %s / arm B %s)"
+              % (nframes, armf[0] if armf else "-", armf[1] if armf else "-"))
+    else:
+        nframes = (f1 - f0) if (f0 is not None and f1 is not None and f1 > f0) else None
+        if nframes:
+            print("frame denominator: GAME LOG, %d frames -- APPROXIMATE, the log "
+                  "counts in steps of the stats interval; rebuild with FRM1"
+                  % nframes)
     print("\nwindow %.1f s, displayed frames %s"
           % (a.seconds, nframes if nframes else "UNKNOWN (no --log, or no stats lines)"))
 
@@ -504,24 +564,49 @@ def main():
         e_a = sum(r[8] for r in u1); e_b = sum(r[9] for r in u1)
         print("\nMEASURED GL CALL COST (%d records, 1 group in %d timed)"
               % (len(u1), per))
+        # Histograms are cumulative like everything else here; the windowed
+        # difference is what belongs in a verdict.
+        h_a = [sum(r[10 + k] for r in u1) - (sum(r[10 + k] for r in u0) if u0 else 0)
+               for k in range(40)]
+        h_b = [sum(r[50 + k] for r in u1) - (sum(r[50 + k] for r in u0) if u0 else 0)
+               for k in range(40)]
         if s_a and s_b:
             us = lambda t, n: 1000.0 * t / khz / n     # ticks -> us per sample
             ca, cb = us(t_a, s_a), us(t_b, s_b)
             ea, eb = e_a / float(s_a), e_b / float(s_b)
-            print("  arm A (cache off): %6d groups, %7.3f us/group, %.3f uploads/group"
-                  % (s_a, ca, ea))
-            print("  arm B (cache on):  %6d groups, %7.3f us/group, %.3f uploads/group"
-                  % (s_b, cb, eb))
+            ma, mb = uct_quantile(h_a, 0.5), uct_quantile(h_b, 0.5)
+            print("  arm A (cache off): %6d groups, mean %7.3f us, median %s us, "
+                  "%.3f uploads/group"
+                  % (s_a, ca, "%.1f" % ma if ma is not None else "-", ea))
+            print("  arm B (cache on):  %6d groups, mean %7.3f us, median %s us, "
+                  "%.3f uploads/group"
+                  % (s_b, cb, "%.1f" % mb if mb is not None else "-", eb))
+            if ma is not None and mb is not None and ea - eb > 0.01:
+                print("  MEDIAN-based saving per skipped upload: %+.3f us "
+                      "(the mean is not usable here: one preemption inside a "
+                      "20 us group moves it by microseconds)"
+                      % ((ma - mb) / (ea - eb)))
             if ea - eb > 0.01:
                 cost = (ca - cb) / (ea - eb)
-                print("  => one glUniform4fv costs %.3f us on this stack" % cost)
-                if nframes and k0 and k1:
+                # Not "the cost of a glUniform4fv": the difference also carries
+                # whatever cache, branch and control-flow effect surrounds the
+                # call. It is the saving per skipped upload in THIS loop, which
+                # is the quantity the patch is actually judged on.
+                print("  => marginal saving per skipped light glUniform4fv "
+                      "in this workload: %.3f us" % cost)
+                if armf and armf[1] and k0 and k1:
                     skipped = sum(r[2] for r in k1) - sum(r[2] for r in k0)
-                    # k-window skips are split across arms; the steady build
-                    # skips in every frame, so scale by the arm-B frame share.
-                    sfr = skipped / nframes * (s_a + s_b) / float(s_b)
-                    print("  => %.0f calls/frame removed steady = %.2f ms/frame"
-                          % (sfr, sfr * cost / 1000.0))
+                    # Only the enabled arm ever skips, so the steady-state rate is
+                    # skips divided by the frames that arm actually ran -- from
+                    # FRM1. Scaling by a ratio of TIMER SAMPLES was wrong: those
+                    # count timed groups, not frames, and a fixed sampling period
+                    # against a fixed A/B block length can sit at any phase.
+                    sfr = skipped / float(armf[1])
+                    print("  => %.0f calls/frame removed steady (%d skips over "
+                          "%d arm-B frames) = %.2f ms/frame"
+                          % (sfr, skipped, armf[1], sfr * cost / 1000.0))
+                elif k0 and k1:
+                    print("  (no FRM1 arm frame counts: cannot state a steady rate)")
             else:
                 print("  arms uploaded the same amount: nothing to divide by")
 
