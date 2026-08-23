@@ -103,12 +103,28 @@ def read_stable(mem, address, size):
 
 
 def addr2line(path, rvas):
+    """Function names for win32u RVAs, or an empty map.
+
+    The device has readelf and NOT addr2line, and this used to die on that with a
+    FileNotFoundError -- at the one moment it matters, with a frozen game holding
+    the evidence and a pid that will not survive a reinstall. Nothing here needs
+    symbols: the RECURSIVE verdict comes from owner_acquire_seq, and a bare
+    win32u+0x... resolves on the build host afterwards. So this degrades.
+    """
     if not rvas:
         return {}
     ordered = sorted(rvas)
-    output = subprocess.check_output(
-        ["addr2line", "-e", path, "-f", "-C", *[hex(value) for value in ordered]], text=True
-    ).splitlines()
+    try:
+        output = subprocess.check_output(
+            ["addr2line", "-e", path, "-f", "-C", *[hex(value) for value in ordered]],
+            text=True).splitlines()
+    except (FileNotFoundError, subprocess.CalledProcessError) as error:
+        print(f"note: no symbols ({error.__class__.__name__}); addresses print as "
+              f"win32u+0x... and resolve on the build host with")
+        print(f"      addr2line -e <win32u.so> -f -C " +
+              " ".join(hex(v) for v in ordered[:6]) +
+              (" ..." if len(ordered) > 6 else ""))
+        return {}
     result = {}
     for index, rva in enumerate(ordered):
         function = output[2 * index] if 2 * index < len(output) else "??"
@@ -195,12 +211,16 @@ def main():
     symbols = addr2line(args.win32u, win32u_addresses)
 
     def chain_lines(record, indent):
+        """Only the words that land inside win32u -- the rest of the window is
+        saved registers and locals, and printing 64 of those buries the four that
+        matter. Symbols are added when there are any."""
         items = []
         for offset, value in enumerate(record.stack):
+            if not in_win32u(value):
+                continue
             rva = value - win32u_base
-            if rva in symbols:
-                items.append(f"{indent}  esp+{offset * 4:<4d} {value:#x} = win32u+{rva:#x} "
-                             f"{symbols[rva]}")
+            name = f" {symbols[rva]}" if rva in symbols else ""
+            items.append(f"{indent}  esp+{offset * 4:<4d} {value:#x} = win32u+{rva:#x}{name}")
         return items
 
     self_waits = 0
