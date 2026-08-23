@@ -38,7 +38,8 @@ LGT_MAGIC = 0x3154474C      # 'LGT1' -- FFP light uniform redundancy simulator
 LCA_MAGIC = 0x3141434C      # 'LCA1' -- the real FFP light-colour cache
 UCT_MAGIC = 0x31544355      # 'UCT1' -- measured cost of one GL call on this stack
 FRM_MAGIC = 0x314D5246      # 'FRM1' -- presented frames, counted in the presenter
-PSW_MAGIC = 0x31575350      # 'PSW1' -- the present-wait recovery counters
+PSW_MAGIC = 0x31575350      # 'PSW1' -- FINALPLAY13's present-wait recovery counters
+PSW2_MAGIC = 0x32575350     # 'PSW2' -- FINALPLAY14's frame-latency semaphore
 TXT_MAGIC = 0x31545854      # 'TXT1' -- texture-matrix group cost, by arm and slot count
 TXT_SLOTS = 9
 TXT_BINS = 40
@@ -237,6 +238,35 @@ def read_aps_stats(pid):
                 d = dict(zip(keys, w[4:]))
                 d["where"] = (name or "(anon)").split("/")[-1]
                 out.append(d)
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_psw2_stats(pid):
+    """PSW2: acquires, releases, blocking_waits, longest_wait_ms.
+
+    FINALPLAY14 replaced the present event with a per-swapchain semaphore, and
+    this is what the two halves look like from outside. acquires - releases is how
+    many presents the producer is ahead and cannot exceed max_frame_latency;
+    parked there with releases frozen is the CS thread wedged inside a handler,
+    which is the freeze captured on 2026-08-23. There is no lost-wake counter
+    because a counting semaphore has no wake to lose.
+    """
+    pat = struct.pack("<IIII", PSW2_MAGIC, 2, 8, (~PSW2_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                w = struct.unpack("<8I", blob[i:i + 32])[4:]
+                out.append({"where": (name or "(anon)").split("/")[-1],
+                            "acquires": w[0], "releases": w[1],
+                            "blocking_waits": w[2], "longest_wait_ms": w[3]})
                 i = blob.find(pat, i + 4)
     return out
 
@@ -590,6 +620,7 @@ def main():
     r1 = read_frm_stats(a.pid)
     x1 = read_txt_stats(a.pid)
     w1 = read_psw_stats(a.pid)
+    v0 = read_psw2_stats(a.pid)
 
     # FRM1 first. The log-derived count is a step function -- the presenter emits
     # one line per N frames -- so a window that spans k lines always reports k*N
@@ -853,6 +884,23 @@ def main():
                      (avs + aps) / nframes))
         print("  mirror self-check MISSED (both must be 0): VS %d, PS %d -- %s"
               % (mvs, mps, "PASS" if not (mvs or mps) else "FAIL, run is void"))
+
+    if v0:
+        print("\nPRESENT FRAME-LATENCY SEMAPHORE (PSW2, %d record%s)"
+              % (len(v0), "" if len(v0) == 1 else "s"))
+        for r in v0:
+            inflight = r["acquires"] - r["releases"]
+            print("  %-28s acquires %8d  releases %8d  in flight %d"
+                  % (r["where"], r["acquires"], r["releases"], inflight))
+            print("  %-28s producer had to block %d time%s, longest %d ms"
+                  % ("", r["blocking_waits"],
+                     "" if r["blocking_waits"] == 1 else "s", r["longest_wait_ms"]))
+            if inflight < 0:
+                print("  %-28s IMPOSSIBLE: more releases than acquires -- a token was"
+                      " invented" % "")
+            elif inflight > 3:
+                print("  %-28s in flight above any plausible max_frame_latency;"
+                      " read it again before believing it" % "")
 
     if q1:
         # Match records by where they live, so the PE DLL and the island's native
