@@ -1,4 +1,14 @@
 #!/bin/sh
+# SUPERSEDED by verify_rebuild.sh -- kept only because its narrower question is
+# still worth asking cheaply during development.
+#
+# What this script checks is that the two MOST RECENT patches match the two live
+# trees. That is much weaker than it sounds, and it passed while the trees were
+# not reproducible at all: the numbered wine series lands 53 of 67 patches on a
+# pristine tree, the fourteen failures include the dmabuf presenter, the lazy
+# stage selector and the light cache, and twenty-five files still differed. Run
+# verify_rebuild.sh before cutting anything.
+#
 # Do the patch files in this repo still reconstruct the sources they claim to?
 #
 # This matters more here than in a normal project, because the code that ends up
