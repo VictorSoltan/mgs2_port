@@ -52,3 +52,12 @@ venv/
 *~
 .vscode/
 .idea/
+
+# release/ — вывод harness/make_release.sh: 28 МБ box86 и 26 МБ WineD3D на
+# выпуск. В историю git они не идут по той же причине, по которой сюда не идут
+# остальные бинарники: пересобираются точно, байт в байт, из закреплённых баз и
+# полных патчей (device/FINALPLAY.lock, harness/verify_rebuild.sh --build).
+# Манифест из каждого выпуска дублируется в device/FINALPLAY.manifest, и он
+# как раз версионируется.
+release/*/box86-*
+release/*/*.so

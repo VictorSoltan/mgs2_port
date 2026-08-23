@@ -1,4 +1,4 @@
-FINALPLAY12 -- the COMPLETE WineD3D-side delta, as one verifiable patch.
+FINALPLAY13 -- the COMPLETE WineD3D-side delta, as one verifiable patch.
 
 WHY THIS EXISTS ALONGSIDE THE NUMBERED PATCHES
 
@@ -11,7 +11,7 @@ After the 53 that do apply, 25 files still differ from the production tree,
 among them glsl_shader.c, winewayland.drv/opengl.c, swapchain.c, context_gl.c,
 cs.c and device.c.
 
-So until this file existed, FINALPLAY12's WineD3D could not be rebuilt from any
+So until this file existed, FINALPLAY13's WineD3D could not be rebuilt from any
 recorded source. Keep reading the numbered patches for WHY each change was made;
 use this one to reproduce WHAT was built.
 
@@ -26,7 +26,7 @@ BASE
 REPRODUCE
 
   tar xf wine-11.0.tar.xz
-  cd wine-11.0 && patch -p1 < FINALPLAY12-wine-complete.patch
+  cd wine-11.0 && patch -p1 < FINALPLAY13-wine-complete.patch
 
 --- a/dlls/d3d8/buffer.c
 +++ b/dlls/d3d8/buffer.c
@@ -10939,7 +10939,7 @@ REPRODUCE
          WINED3D_TO_STR(WINED3D_CS_OP_FLUSH);
          WINED3D_TO_STR(WINED3D_CS_OP_SET_PREDICATION);
          WINED3D_TO_STR(WINED3D_CS_OP_SET_VIEWPORTS);
-@@ -650,6 +665,1782 @@
+@@ -650,10 +665,1869 @@
      return packet;
  }
  
@@ -12722,7 +12722,94 @@ REPRODUCE
  static void wined3d_cs_exec_nop(struct wined3d_cs *cs, const void *data)
  {
  }
-@@ -669,6 +2460,21 @@
+ 
++
++/* P81A -- the present-latency wait must not be able to outlive its condition.
++ *
++ * Observed on 2026-08-23, and this is the sequence rather than a theory. The CS
++ * thread wedged inside one handler: `executes` and the DEFAULT queue `tail`
++ * stood still for minutes while `head` kept growing. Then it came back and ran
++ * tens of thousands of commands, PRESENT among them. The game never did: the
++ * main thread stayed in ntsync_schedule -- ioctl 0xc0284e82, NTSYNC_IOC_WAIT_ANY
++ * -- so simulation and input were dead while wined3d_cs happily redrew the last
++ * frame. From outside the game looked alive; the item-pickup overlay had been
++ * frozen on screen for an hour.
++ *
++ * The producer waits here for `pending_presents < max_frame_latency`. The event
++ * is only the wakeup mechanism, not the condition, so INFINITE buys nothing: if
++ * a wake is ever lost, the wait is permanent even after the condition became
++ * true. Rechecking on a timeout costs four wakeups a second while genuinely
++ * blocked and nothing at all in normal play, where SetEvent returns the wait
++ * immediately.
++ *
++ * What this deliberately does NOT do on timeout: signal the event, decrement
++ * pending_presents, move queue->tail, or otherwise invent progress. It wakes,
++ * re-reads the real condition, and goes back to sleep if it still holds. A
++ * wedged GL context must not be "continued" -- its state is unknown.
++ */
++#define MGS2_PRESENT_RECHECK_DEFAULT_MS 250
++
++/* Runtime-settable so the fix and the bug it removes can be compared with ONE
++ * binary: MGS2_PRESENT_RECHECK_MS=0 restores the old INFINITE wait, which is
++ * the arm that must hang under injection. Two binaries would have differed in
++ * more than the thing under test. */
++static DWORD mgs2_present_recheck_ms(void)
++{
++    static LONG cached = -1;
++
++    if (cached < 0)
++    {
++        const char *v = getenv("MGS2_PRESENT_RECHECK_MS");
++        int ms = (v && *v) ? atoi(v) : MGS2_PRESENT_RECHECK_DEFAULT_MS;
++
++        if (ms < 0) ms = MGS2_PRESENT_RECHECK_DEFAULT_MS;
++        InterlockedExchange(&cached, ms);
++    }
++    return cached ? (DWORD)cached : INFINITE;
++}
++
++#define MGS2_PRESENT_WATCH_MAGIC 0x31575350u /* PSW1 */
++struct mgs2_present_watch_public
++{
++    unsigned int magic, version, size_words, signature;
++    unsigned int timeouts;        /* the 250 ms recheck fired */
++    unsigned int recovered;       /* ...and the condition had become true */
++    unsigned int injected_drops;  /* MGS2_PRESENT_DROP_WAKE, for proving this */
++    unsigned int longest_wait_ms;
++};
++struct mgs2_present_watch_public mgs2_present_watch =
++{
++    MGS2_PRESENT_WATCH_MAGIC, 1,
++    sizeof(struct mgs2_present_watch_public) / sizeof(unsigned int),
++    ~MGS2_PRESENT_WATCH_MAGIC,
++};
++
++/* Fault injection, so the fix can be proved on demand instead of waiting for a
++ * rare hang to happen again. With MGS2_PRESENT_DROP_WAKE=N the worker skips
++ * SetEvent() for the Nth present that finds a waiter -- exactly the lost wakeup
++ * the recovery path exists for. FINALPLAY12 hangs there; this must not. */
++static int mgs2_drop_wake_once(void)
++{
++    static LONG remaining = -1;
++
++    if (remaining < 0)
++    {
++        const char *v = getenv("MGS2_PRESENT_DROP_WAKE");
++
++        InterlockedExchange(&remaining, (v && *v) ? atoi(v) : 0);
++    }
++    if (remaining > 0 && InterlockedDecrement(&remaining) >= 0)
++    {
++        InterlockedIncrement((LONG *)&mgs2_present_watch.injected_drops);
++        return 1;
++    }
++    return 0;
++}
++
+ static void wined3d_cs_exec_present(struct wined3d_cs *cs, const void *data)
+ {
+     static LARGE_INTEGER freq;
+@@ -669,6 +2543,21 @@
      if (!freq.QuadPart)
          QueryPerformanceFrequency(&freq);
  
@@ -12744,24 +12831,47 @@ REPRODUCE
      swapchain = op->swapchain;
      desc = &swapchain->state.desc;
      back_buffer = swapchain->back_buffers[0];
-@@ -751,6 +2557,8 @@
+@@ -750,7 +2639,12 @@
+ 
      InterlockedDecrement(&cs->pending_presents);
      if (InterlockedCompareExchange(&cs->waiting_for_present, FALSE, TRUE))
-         SetEvent(cs->present_event);
+-        SetEvent(cs->present_event);
++    {
++        if (!mgs2_drop_wake_once())
++            SetEvent(cs->present_event);
++    }
 +
 +    mgs2_p39_present(&mgs2_p39_present_start);
  }
  
  void wined3d_cs_emit_present(struct wined3d_cs *cs, struct wined3d_swapchain *swapchain,
-@@ -791,6 +2599,7 @@
+@@ -791,10 +2685,24 @@
          pending = InterlockedCompareExchange(&cs->pending_presents, 0, 0);
          if (pending >= swapchain->max_frame_latency || !InterlockedCompareExchange(&cs->waiting_for_present, FALSE, TRUE))
          {
 +
++            DWORD waited;
++
              TRACE_(d3d_perf)("Reached latency limit (%u frames), blocking to wait.\n", swapchain->max_frame_latency);
              wined3d_mutex_unlock();
-             WaitForSingleObject(cs->present_event, INFINITE);
-@@ -1073,30 +2882,31 @@
+-            WaitForSingleObject(cs->present_event, INFINITE);
++            waited = WaitForSingleObject(cs->present_event, mgs2_present_recheck_ms());
+             wined3d_mutex_lock();
++            if (waited == WAIT_TIMEOUT)
++            {
++                LONG now = InterlockedCompareExchange(&cs->pending_presents, 0, 0);
++
++                InterlockedIncrement((LONG *)&mgs2_present_watch.timeouts);
++                /* The interesting case: the wait was still asleep while the
++                 * condition it waits for had already become true. That is the
++                 * lost wakeup, and counting it is how the fix reports working. */
++                if (now < swapchain->max_frame_latency)
++                    InterlockedIncrement((LONG *)&mgs2_present_watch.recovered);
++            }
+             TRACE_(d3d_perf)("Woken up from the wait.\n");
+         }
+     }
+@@ -1073,30 +2981,31 @@
      wined3d_device_context_unlock(context);
  }
  
@@ -12801,7 +12911,7 @@ REPRODUCE
      else
          load_base_vertex_idx = 0;
  
-@@ -1113,27 +2923,68 @@
+@@ -1113,27 +3022,68 @@
          device_invalidate_state(cs->c.device, STATE_BASEVERTEXINDEX);
      }
  
@@ -12829,8 +12939,7 @@ REPRODUCE
      }
 -    state->patch_vertex_count = op->patch_vertex_count;
 +    state->patch_vertex_count = patch_vertex_count;
- 
--    cs->c.device->adapter->adapter_ops->adapter_draw_primitive(cs->c.device, state, &op->parameters);
++
 +    mgs2_submit_census_source_draw(state, primitive_type, parameters);
 +    if (mgs2_submit_census_on())
 +        mgs2_p38_source_draw(cs, primitive_type, parameters);
@@ -12857,7 +12966,8 @@ REPRODUCE
 +    mgs2_submit_census_packet(FALSE);
 +    mgs2_cs_exec_draw_one_island(cs, op->primitive_type, op->patch_vertex_count, &op->parameters);
 +}
-+
+ 
+-    cs->c.device->adapter->adapter_ops->adapter_draw_primitive(cs->c.device, state, &op->parameters);
 +static void wined3d_cs_exec_draw_batch(struct wined3d_cs *cs, const void *data)
 +{
 +    const struct wined3d_cs_draw_batch *op = data;
@@ -12876,7 +12986,7 @@ REPRODUCE
  }
  
  static void reference_graphics_pipeline_resources(struct wined3d_device_context *context,
-@@ -1171,6 +3022,7 @@
+@@ -1171,6 +3121,7 @@
              state->unordered_access_view[WINED3D_PIPELINE_GRAPHICS]);
  }
  
@@ -12884,7 +12994,7 @@ REPRODUCE
  void wined3d_device_context_emit_draw(struct wined3d_device_context *context,
          enum wined3d_primitive_type primitive_type, unsigned int patch_vertex_count, int base_vertex_idx,
          unsigned int start_idx, unsigned int index_count, unsigned int start_instance, unsigned int instance_count,
-@@ -1191,11 +3043,55 @@
+@@ -1191,11 +3142,55 @@
      op->parameters.u.direct.instance_count = instance_count;
      op->parameters.indexed = indexed;
  
@@ -12940,7 +13050,7 @@ REPRODUCE
  void CDECL wined3d_device_context_draw_indirect(struct wined3d_device_context *context,
          struct wined3d_buffer *buffer, unsigned int offset, bool indexed)
  {
-@@ -2712,6 +4608,9 @@
+@@ -2712,6 +4707,9 @@
          struct wined3d_resource *src_resource, unsigned int src_sub_resource_idx, const struct wined3d_box *src_box,
          unsigned int flags, const struct wined3d_blt_fx *fx, enum wined3d_texture_filter_type filter)
  {
@@ -12950,7 +13060,7 @@ REPRODUCE
      struct wined3d_cs_blt_sub_resource *op;
  
      /* If we are replacing the whole resource, the CS thread might discard and
-@@ -2784,7 +4683,7 @@
+@@ -2784,7 +4782,7 @@
      if (resource->type == WINED3D_RTYPE_BUFFER && box->right - box->left == resource->size)
          invalidate_client_address(resource);
  
@@ -12959,7 +13069,7 @@ REPRODUCE
      {
          const struct wined3d_format *format = resource->format;
  
-@@ -2809,7 +4708,7 @@
+@@ -2809,7 +4807,7 @@
              wined3d_format_copy_data(format, data, row_pitch, slice_pitch, map_desc.data, map_desc.row_pitch,
                      map_desc.slice_pitch, box->right - box->left, box->bottom - box->top, box->back - box->front);
          }
@@ -12968,7 +13078,7 @@ REPRODUCE
          wined3d_device_context_upload_bo(context, resource, sub_resource_idx,
                  box, &bo, map_desc.row_pitch, map_desc.slice_pitch);
          return;
-@@ -3009,6 +4908,7 @@
+@@ -3009,6 +5007,7 @@
      /* WINED3D_CS_OP_CLEAR                       */ wined3d_cs_exec_clear,
      /* WINED3D_CS_OP_DISPATCH                    */ wined3d_cs_exec_dispatch,
      /* WINED3D_CS_OP_DRAW                        */ wined3d_cs_exec_draw,
@@ -12976,7 +13086,7 @@ REPRODUCE
      /* WINED3D_CS_OP_FLUSH                       */ wined3d_cs_exec_flush,
      /* WINED3D_CS_OP_SET_PREDICATION             */ wined3d_cs_exec_set_predication,
      /* WINED3D_CS_OP_SET_VIEWPORTS               */ wined3d_cs_exec_set_viewports,
-@@ -3104,6 +5004,23 @@
+@@ -3104,6 +5103,23 @@
      return (BYTE *)cs->data + cs->start;
  }
  
@@ -13000,7 +13110,7 @@ REPRODUCE
  static void wined3d_cs_st_submit(struct wined3d_device_context *context, enum wined3d_cs_queue_id queue_id)
  {
      struct wined3d_cs *cs = wined3d_cs_from_context(context);
-@@ -3119,7 +5036,7 @@
+@@ -3119,7 +5135,7 @@
      if (opcode >= WINED3D_CS_OP_STOP)
          ERR("Invalid opcode %#x.\n", opcode);
      else
@@ -13009,7 +13119,7 @@ REPRODUCE
  
      if (cs->data == data)
          cs->start = cs->end = start;
-@@ -3177,7 +5094,7 @@
+@@ -3177,7 +5193,7 @@
  
          if (flags & WINED3D_MAP_DISCARD)
          {
@@ -13018,7 +13128,7 @@ REPRODUCE
                  return false;
  
              /* Limit NOOVERWRITE maps to buffers for now; there are too many
-@@ -3313,9 +5230,11 @@
+@@ -3313,9 +5329,11 @@
      TRACE("Queuing op %s at %p.\n", debug_cs_op(*(const enum wined3d_cs_op *)packet->data), packet);
      packet_size = FIELD_OFFSET(struct wined3d_cs_packet, data[packet->size]);
      InterlockedExchange((LONG *)&queue->head, queue->head + packet_size);
@@ -13030,7 +13140,7 @@ REPRODUCE
          if (pNtAlertThreadByThreadId)
              pNtAlertThreadByThreadId((HANDLE)(ULONG_PTR)cs->thread_id);
          else
-@@ -3389,6 +5308,7 @@
+@@ -3389,6 +5407,7 @@
                  head, tail, packet_size);
      }
  
@@ -13038,7 +13148,7 @@ REPRODUCE
      packet = (struct wined3d_cs_packet *)&queue->data[head];
      packet->size = size;
      return packet->data;
-@@ -3456,6 +5376,7 @@
+@@ -3456,6 +5475,7 @@
          timeout = &query_timeout;
  
      InterlockedExchange(&cs->waiting_for_event, TRUE);
@@ -13046,7 +13156,7 @@ REPRODUCE
  
      /* The main thread might have enqueued a command and blocked on it after
       * the CS thread decided to enter wined3d_cs_wait_event(), but before
-@@ -3467,12 +5388,17 @@
+@@ -3467,12 +5487,17 @@
      if (!(wined3d_cs_queue_is_empty(cs, &cs->queue[WINED3D_CS_QUEUE_DEFAULT])
              && wined3d_cs_queue_is_empty(cs, &cs->queue[WINED3D_CS_QUEUE_MAP]))
              && InterlockedCompareExchange(&cs->waiting_for_event, FALSE, TRUE))
@@ -13064,7 +13174,7 @@ REPRODUCE
  }
  
  static void wined3d_cs_command_lock(const struct wined3d_cs *cs)
-@@ -3509,7 +5435,7 @@
+@@ -3509,7 +5534,7 @@
          }
  
          wined3d_cs_command_lock(cs);
@@ -13073,7 +13183,7 @@ REPRODUCE
          wined3d_cs_command_unlock(cs);
          TRACE("%s at %p executed.\n", debug_cs_op(opcode), packet);
      }
-@@ -3542,7 +5468,7 @@
+@@ -3542,7 +5567,7 @@
          if (opcode >= WINED3D_CS_OP_STOP)
              ERR("Invalid opcode %#x.\n", opcode);
          else
@@ -13082,7 +13192,7 @@ REPRODUCE
          TRACE("%s executed.\n", debug_cs_op(opcode));
      }
  }
-@@ -3581,19 +5507,28 @@
+@@ -3581,19 +5606,28 @@
              queue = &cs->queue[WINED3D_CS_QUEUE_DEFAULT];
              if (wined3d_cs_queue_is_empty(cs, queue))
              {
@@ -13112,7 +13222,7 @@ REPRODUCE
          run = wined3d_cs_execute_next(cs, queue);
      }
  
-@@ -3663,8 +5598,13 @@
+@@ -3663,8 +5697,13 @@
      {
          if (!d3d_info->fences)
          {
@@ -13128,7 +13238,7 @@ REPRODUCE
          }
      }
  
-@@ -4372,7 +6312,7 @@
+@@ -4372,7 +6411,7 @@
      upload = &deferred->uploads[deferred->upload_count++];
  
      if ((flags & WINED3D_MAP_DISCARD)

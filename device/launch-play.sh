@@ -274,7 +274,7 @@ export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,1
 # during the multi-second freeze after a save loads. Still a switch, so the A/B
 # can be rerun without rebuilding: MGS2_BOX86_NATIVE_DITHER=0 restores the guest.
 export MGS2_BOX86_NATIVE_DITHER="${MGS2_BOX86_NATIVE_DITHER:-1}"
-mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp12}" /usr/bin/box86 || exit 1
+mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp13}" /usr/bin/box86 || exit 1
 mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 # Diagnostics may select a separate presenter build, but normal play keeps the
 # measured production driver.  This is used by p67 only for a bounded,
@@ -348,7 +348,7 @@ mount_bind "$GAMEDIR/opengl32_finalplay_sso.so" /usr/lib/wine/i386-unix/opengl32
 # allow-list is the immediate rollback; p55 + island29 remains the older exact
 # pre-FINALPLAY6 rollback.
 export MGS2_CS_DEADLOCK_CENSUS="${MGS2_CS_DEADLOCK_CENSUS:-1}"
-mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_fp12.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
+mount_bind "$GAMEDIR/${MGS2_WINED3D_DLL:-wined3d_fp13.dll}" /usr/lib/wine/i386-windows/wined3d.dll || exit 1
 mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || exit 1
 # FINALPLAY2 keeps DISCARD writes in the cached producer shadow. This removes
 # two 512 KiB readbacks per frame from WineD3D's mapped upload memory while the
@@ -361,7 +361,7 @@ mount_bind "$GAMEDIR/user32_peek1.dll" /usr/lib/wine/i386-windows/user32.dll || 
 # 44.3 fps with it against 37.7 without, over two 400 s windows.
 mount_bind "$GAMEDIR/${MGS2_D3D8_DLL:-d3d8_finalplay3_nocullcache.dll}" /usr/lib/wine/i386-windows/d3d8.dll || exit 1
 
-# FINALPLAY12 identity check, on the MOUNTED files rather than on what was asked
+# FINALPLAY13 identity check, on the MOUNTED files rather than on what was asked
 # for. box86 and wined3d are a matched pair -- the class-B registry inside box86
 # maps this exact DLL's RVAs -- and the presenter carries the dmabuf path, so a
 # run that silently mixes halves produces numbers for a build nobody has.

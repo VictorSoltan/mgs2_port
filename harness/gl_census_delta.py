@@ -38,6 +38,7 @@ LGT_MAGIC = 0x3154474C      # 'LGT1' -- FFP light uniform redundancy simulator
 LCA_MAGIC = 0x3141434C      # 'LCA1' -- the real FFP light-colour cache
 UCT_MAGIC = 0x31544355      # 'UCT1' -- measured cost of one GL call on this stack
 FRM_MAGIC = 0x314D5246      # 'FRM1' -- presented frames, counted in the presenter
+PSW_MAGIC = 0x31575350      # 'PSW1' -- the present-wait recovery counters
 TXT_MAGIC = 0x31545854      # 'TXT1' -- texture-matrix group cost, by arm and slot count
 TXT_SLOTS = 9
 TXT_BINS = 40
@@ -204,6 +205,24 @@ def read_asp_stats(pid):
                 d = dict(zip(keys, w[4:]))
                 d["where"] = (name or "(anon)").split("/")[-1]
                 out.append(d)
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_psw_stats(pid):
+    """PSW1: timeouts, recovered, injected_drops, longest_wait_ms."""
+    pat = struct.pack("<IIII", PSW_MAGIC, 1, 8, (~PSW_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, _ in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                out.append(struct.unpack("<8I", blob[i:i + 32])[4:])
                 i = blob.find(pat, i + 4)
     return out
 
@@ -511,6 +530,7 @@ def main():
     f0 = frames(a.log) if a.log else None
     r0 = read_frm_stats(a.pid)
     x0 = read_txt_stats(a.pid)
+    w0 = read_psw_stats(a.pid)
     before = sample(a.pid, addrs)
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
     cbefore = sample_calls(a.pid, caddrs) if caddrs else {}
@@ -535,6 +555,7 @@ def main():
     f1 = frames(a.log) if a.log else None
     r1 = read_frm_stats(a.pid)
     x1 = read_txt_stats(a.pid)
+    w1 = read_psw_stats(a.pid)
 
     # FRM1 first. The log-derived count is a step function -- the presenter emits
     # one line per N frames -- so a window that spans k lines always reports k*N
@@ -604,6 +625,20 @@ def main():
                   % (att / nframes, skp / nframes))
         print("  identity attempted == skipped + executed: %s"
               % ("PASS" if att == skp + exe else "FAIL"))
+
+    if w1:
+        t = sum(r[0] for r in w1); rc = sum(r[1] for r in w1)
+        inj = sum(r[2] for r in w1)
+        print("\nPRESENT-WAIT RECOVERY (P81A)")
+        print("  recheck timeouts %d, of which the condition had already become "
+              "true: %d" % (t, rc))
+        print("  injected lost wakeups: %d" % inj)
+        if inj and rc:
+            print("  -> a wakeup was dropped on purpose and the wait recovered "
+                  "anyway. That is the whole patch, demonstrated.")
+        elif inj and not rc:
+            print("  -> a wakeup was dropped and NOTHING recovered: either the "
+                  "wait is still INFINITE, or the fix does not work.")
 
     if x1:
         khz = max(txt_split(r)[0] for r in x1) or 1
