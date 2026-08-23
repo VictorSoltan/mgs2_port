@@ -70,11 +70,17 @@ def find_rings(pid):
 
 PBC_FIELDS = ("state hits misses stores open_fail short_file gl_error link_false "
               "store_no_len store_no_data store_write_fail last_format last_size "
-              "last_src_len roundtrip_tried roundtrip_ok roundtrip_err").split()
+              "last_src_len roundtrip_tried roundtrip_ok roundtrip_err hint_err "
+              "oes_present oes_tried oes_ok oes_err "
+              "mono_tried mono_ok mono_err mono_size "
+              "sep_tried sep_ok sep_err file_rt_tried file_rt_ok store_crc load_crc "
+              "infolog_len").split()
+PBC_TAIL_WORDS = 16          # infolog[16], printed as text
 
 
 def read_pbc(pid):
-    pat = struct.pack("<IIII", PBC_MAGIC, 1, 4 + len(PBC_FIELDS),
+    pat = struct.pack("<IIII", PBC_MAGIC, 1,
+                      4 + len(PBC_FIELDS) + PBC_TAIL_WORDS,
                       (~PBC_MAGIC) & 0xFFFFFFFF)
     out = []
     with open("/proc/%d/mem" % pid, "rb", 0) as mem:
@@ -86,8 +92,11 @@ def read_pbc(pid):
                 continue
             i = blob.find(pat)
             while i >= 0:
-                n = 4 + len(PBC_FIELDS)
-                out.append(struct.unpack("<%dI" % n, blob[i:i + n * 4])[4:])
+                n = 4 + len(PBC_FIELDS) + PBC_TAIL_WORDS
+                vals = struct.unpack("<%dI" % n, blob[i:i + n * 4])[4:]
+                log = blob[i + (4 + len(PBC_FIELDS)) * 4:i + n * 4]
+                out.append((vals[:len(PBC_FIELDS)],
+                            log.split(b"\0")[0].decode("ascii", "replace")))
                 i = blob.find(pat, i + 4)
     return out
 
@@ -97,13 +106,47 @@ def main():
     ap.add_argument("pid", type=int)
     a = ap.parse_args()
 
-    for rec in read_pbc(a.pid):
+    for rec, log in read_pbc(a.pid):
+        d = dict(zip(PBC_FIELDS, rec))
+        if not d["state"]:
+            continue
         print("program-binary cache accounting")
-        for name, v in zip(PBC_FIELDS, rec):
-            if name in ("last_format",):
-                print("  %-18s 0x%x" % (name, v))
-            else:
-                print("  %-18s %d" % (name, v))
+        for name in PBC_FIELDS:
+            v = d[name]
+            print("  %-18s %s" % (name, "0x%x" % v if "format" in name else v))
+        if log:
+            print("  info log           %r" % log)
+        print()
+        print("  the three probes, and what each one closes")
+        print("  1 retrievable hint : %s"
+              % ("accepted" if not d["hint_err"] else "REJECTED 0x%x" % d["hint_err"]))
+        print("  2 OES entry points : %s"
+              % ("absent" if not d["oes_present"] else
+                 "present, roundtrip %s" % ("OK" if d["oes_ok"] else "failed")))
+        print("  4 target separable : %s"
+              % ("not tried" if not d["sep_tried"] else
+                 "roundtrip %s" % ("OK" if d["sep_ok"] else "failed")))
+        print("  3 monolithic prog  : %s"
+              % ("not reached" if not d["mono_tried"] else
+                 "roundtrip %s (%d bytes)"
+                 % ("OK" if d["mono_ok"] else "failed", d["mono_size"])))
+        print("  5 same-run via file: %s%s"
+              % ("not tried" if not d["file_rt_tried"] else
+                 "roundtrip %s" % ("OK" if d["file_rt_ok"] else "failed"),
+                 "" if d["store_crc"] == d["load_crc"]
+                 else "  BYTES DIFFER on the way through the file"))
+        if d["file_rt_tried"] and d["file_rt_ok"] and not d["hits"]:
+            print("\n  The file round trip works INSIDE one run and never across")
+            print("  runs: these binaries are valid only in the process that made")
+            print("  them. Persistence is impossible; in-run caching is pointless")
+            print("  because no source repeats.")
+        core_ok = d["roundtrip_ok"]
+        if not (core_ok or d["oes_ok"] or d["mono_ok"] or d["sep_ok"]) and d["roundtrip_tried"]:
+            print("\n  core, OES and monolithic all refuse their own binaries.")
+            print("  The branch is closed on this driver, not on a coding mistake.")
+        elif d["oes_ok"] or d["mono_ok"] or d["sep_ok"]:
+            print("\n  SOMETHING reloads. The branch is NOT closed -- rebuild the")
+            print("  cache on whichever path came back OK.")
         print()
 
     rings = find_rings(a.pid)

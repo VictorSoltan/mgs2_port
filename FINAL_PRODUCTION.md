@@ -75,35 +75,53 @@ can cost the driver something entirely different. Any later candidate gets its
 own UCT-style group timer or its own frame ABBA; carrying this number across
 would be exactly the kind of borrowed constant this project has been burned by.
 
-### The Mali shader freeze: measured, attacked, and CLOSED with proof
+### The Mali shader freeze: closed, after the first closure turned out to be wrong
 
-The 0.5-1.1 s freezes are real and the diagnosis held up -- but the census
-changed what to build. In one run the probe recorded **12 separable-stage LINKS
-costing 2.0 s against 16-88 ms for all the compiling**. The expensive thing is
-linking, not compiling, and every source in a run is distinct, so a cache living
-inside one run has nothing to hit. The only shape that could pay was persisting
-linked binaries between runs.
+The 0.5-1.1 s freezes are real and the census changed what to build for them. In
+one run the probe recorded **12 separable-stage LINKS costing 2.0 s against
+16-88 ms for all the compiling**, and every GLSL source in a run is distinct. So
+the target is linking, and only binaries carried BETWEEN runs could pay.
 
-That was built: `glGetProgramBinary`/`glProgramBinary` keyed on the GLSL text,
-the stage, the bound attribute indices and a hash of GL_VENDOR/RENDERER/VERSION,
-stored under `shadercache/`. It does not work here, and the reason is not a bug
-in the cache:
+That was built on glGetProgramBinary/glProgramBinary, keyed on the GLSL text,
+the stage, the bound attribute indices and a hash of GL_VENDOR/RENDERER/VERSION.
+It hit zero times, and the first conclusion drawn from that -- "this driver does
+not reload its own binaries" -- **was wrong, and wrong in the expensive
+direction: a real bug of mine reported as a driver limitation.** Five probes
+took it apart:
 
 ```text
-roundtrip_tried  1        in-memory: store the blob, hand it straight back
-roundtrip_ok     0        to glProgramBinary on a fresh program, same context
-roundtrip_err    0        no file, no key, no persistence involved
+1 retrievable hint   accepted, hint_err 0            -> not the hint
+2 OES entry points   absent from the facade          -> untestable, and moot
+3 monolithic program roundtrip OK, 6948 bytes        -> the driver CAN reload
+4 target separable   roundtrip OK                    -> THE BUG WAS MINE
+5 same run via file  roundtrip OK, store_crc==load_crc -> the file is faithful
 ```
 
-The driver reports a binary length, returns 12280 bytes in its own format
-0x8f61, raises **no GL error** on reload, and leaves LINK_STATUS false. Twelve
-file-backed loads behaved identically. **This Mali driver does not reload its own
-program binaries.**
+Probe 4 is the one that mattered. A binary taken from a separable program is
+only accepted by a target that is itself marked `GL_PROGRAM_SEPARABLE`, and the
+loader was pouring it into a bare program. Fixing that makes the in-memory round
+trip succeed, and probe 5 shows it succeeds through the file too -- **inside one
+run**.
 
-So the cache ships OFF (`MGS2_GL_PROGRAM_CACHE=1` to try it) with its accounting
-record `PBC1` intact. Retesting after a driver update is one run: set the switch
-and read `roundtrip_ok`. Nothing else about that branch is worth building until
-that flips.
+Across runs it still never hits, and the last measurement says why it cannot:
+
+```text
+19 cache keys in run 1, 19 in run 2, all 19 keys identical  -> the key is stable
+14 of the 19 files byte-for-byte identical between runs     -> mostly deterministic
+0 hits                                                       -> refused anyway
+```
+
+A byte-identical blob, written by this driver, is refused by the same driver in
+a later process with `Bad program binary` and no GL error. Validity is scoped to
+the process that produced it, not to the content. Persistence is therefore
+impossible here, and in-run caching is pointless because no source repeats.
+
+**Closed** -- but on the driver's process scope, with the loader bug fixed
+first, which is a different and much better-supported claim than the first one.
+The machinery stays behind `MGS2_GL_PROGRAM_CACHE=1` with its `PBC1` record and
+all five probes; a driver whose binaries survive a process boundary reopens the
+branch in one run. Note that FINALPLAY11's binary carries the pre-fix loader
+ordering -- it is disabled, and the fix ships with the next release.
 
 ## What FINALPLAY10 added: the load freeze is 23% shorter
 

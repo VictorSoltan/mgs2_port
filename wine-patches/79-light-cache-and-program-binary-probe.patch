@@ -35,13 +35,25 @@ the UCT histogram, both of which were needed to reach a verdict at all.
 
    Built on glGetProgramBinary/glProgramBinary, keyed on the GLSL text, the
    stage, the bound attribute indices and a hash of GL_VENDOR/RENDERER/VERSION.
-   It does not work on this driver, and the proof has no file in it:
+   Five probes, and the first conclusion was WRONG in the expensive direction --
+   it blamed the driver for a bug of mine:
 
-     roundtrip_tried 1 / roundtrip_ok 0 / roundtrip_err 0
+     1 retrievable hint   accepted
+     2 OES entry points   absent from the facade
+     3 monolithic program roundtrip OK  -> the driver CAN reload
+     4 target separable   roundtrip OK  -> THE BUG WAS MINE
+     5 same run via file  roundtrip OK, store_crc == load_crc
 
-   The blob is handed straight back to glProgramBinary on a fresh program in the
-   same context. No GL error is raised and LINK_STATUS stays false. Twelve
-   file-backed loads behaved the same way.
+   Probe 4 is the one: a binary from a separable program is only accepted by a
+   target itself marked GL_PROGRAM_SEPARABLE, and the loader poured it into a
+   bare program. Fixed. It now reloads through the file inside one run.
+
+   Across runs it still never hits, and the reason is not the content: 19 stable
+   keys, 14 of 19 files byte-identical between runs, zero hits, "Bad program
+   binary" with no GL error. A byte-identical blob is refused by the same driver
+   in a later process, so validity is scoped to the producing process.
+   Persistence is impossible; in-run caching is pointless because no source
+   repeats.
 
    Kept behind MGS2_GL_PROGRAM_CACHE=1 with its PBC1 accounting record so that
    retesting after a driver update is a single run.
@@ -54,10 +66,11 @@ the UCT histogram, both of which were needed to reach a verdict at all.
        glAlphaFunc in one run), so any error check here must drain first or it
        reads somebody else's.
 
-SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
+SHIPPED disabled in FINALPLAY11 (which carries the pre-fix loader ordering);
+the probe-4 fix ships with the next release.
 
 --- glsl_shader.c.orig	2026-08-12 09:30:14.507361319 +0300
-+++ glsl_shader.c	2026-08-23 11:38:20.439559803 +0300
++++ glsl_shader.c	2026-08-23 12:23:54.231475145 +0300
 @@ -123,9 +123,21 @@
  };
  
@@ -80,7 +93,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      struct wined3d_string_buffer shader_buffer;
      struct wined3d_string_buffer_list string_buffers;
-@@ -247,12 +259,461 @@
+@@ -247,13 +259,462 @@
      struct glsl_ps_program ps;
      struct glsl_cs_program cs;
      GLuint id;
@@ -257,7 +270,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +    unsigned int magic, version, size_words, signature;
 +    volatile unsigned int enabled;
 +    unsigned int attempted, skipped, executed, cold, changed, no_owner;
- };
++};
 +struct mgs2_lca_stats_public mgs2_lca_stats =
 +{
 +    MGS2_LCA_MAGIC, 1,
@@ -272,8 +285,8 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +     * ~0.7 ms/frame in combat, where the same path attempts 552 uploads per
 +     * frame at 87% redundancy. A miss costs three 16-byte memcmps. */
 +    1,
-+};
-+
+ };
+ 
 +/* UCT1 -- what one GL call actually costs on this stack.
 + *
 + * The light-cache A/B could not be settled by frame time: 90% of the blocks in
@@ -539,9 +552,10 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +    nstamp = 0;
 +    mgs2_lca_stats.enabled = arm[block & 3];
 +}
- 
++
  struct glsl_program_key
  {
+     GLuint vs_id;
 @@ -276,6 +737,10 @@
  struct glsl_context_data
  {
@@ -632,7 +646,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  };
  
  struct glsl_ffp_destroy_ctx
-@@ -348,6 +873,467 @@
+@@ -348,6 +873,581 @@
      const struct wined3d_context_gl *context_gl;
  };
  
@@ -646,6 +660,11 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +        GLsizei);
 +static PFN_mgs2_glGetProgramBinary mgs2_glGetProgramBinary;
 +static PFN_mgs2_glProgramBinary mgs2_glProgramBinary;
++/* GL_ARM_mali_program_binary rides alongside GL_OES_get_program_binary, and an
++ * old proprietary blob can implement the OES entry points while the core ES3
++ * ones are stubs. Cheap to try, so it is tried before the branch is called shut. */
++static PFN_mgs2_glGetProgramBinary mgs2_glGetProgramBinaryOES;
++static PFN_mgs2_glProgramBinary mgs2_glProgramBinaryOES;
 +static PFN_glGenProgramPipelines mgs2_glGenProgramPipelines;
 +static PFN_glDeleteProgramPipelines mgs2_glDeleteProgramPipelines;
 +static PFN_glUseProgramStages mgs2_glUseProgramStages;
@@ -746,6 +765,13 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +    unsigned int store_no_len, store_no_data, store_write_fail;
 +    unsigned int last_format, last_size, last_src_len;
 +    unsigned int roundtrip_tried, roundtrip_ok, roundtrip_err;
++    unsigned int hint_err;                    /* probe 1: RETRIEVABLE_HINT accepted? */
++    unsigned int oes_present, oes_tried, oes_ok, oes_err;   /* probe 2: OES path */
++    unsigned int mono_tried, mono_ok, mono_err, mono_size;  /* probe 3: monolithic */
++    unsigned int sep_tried, sep_ok, sep_err;  /* probe 4: target marked separable first */
++    unsigned int file_rt_tried, file_rt_ok;   /* probe 5: same run, through the file */
++    unsigned int store_crc, load_crc;         /* do the bytes survive the round trip? */
++    unsigned int infolog_len, infolog[16];    /* first 64 bytes, even with no GL error */
 +};
 +struct mgs2_pbc_public mgs2_pbc =
 +{
@@ -802,6 +828,11 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +        mgs2_glGetProgramBinary = mgs2_get_gl_func("glGetProgramBinary");
 +    if (!mgs2_glProgramBinary)
 +        mgs2_glProgramBinary = mgs2_get_gl_func("glProgramBinary");
++    if (!mgs2_glGetProgramBinaryOES)
++        mgs2_glGetProgramBinaryOES = mgs2_get_gl_func("glGetProgramBinaryOES");
++    if (!mgs2_glProgramBinaryOES)
++        mgs2_glProgramBinaryOES = mgs2_get_gl_func("glProgramBinaryOES");
++    mgs2_pbc.oes_present = (mgs2_glGetProgramBinaryOES && mgs2_glProgramBinaryOES) ? 1 : 0;
 +    if (!mgs2_glGetProgramBinary || !mgs2_glProgramBinary || !mgs2_glProgramParameteri)
 +    {
 +        ERR("MGS2 program cache: entry points unavailable, cache off\n");
@@ -867,6 +898,56 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +            MGS2_PROGBIN_VERSION, h);
 +}
 +
++/* One round trip: hand a blob straight back to the driver in a fresh program,
++ * in this context, with no file and no key anywhere near it. Records the info
++ * log even when glGetError() is clean, because glProgramBinary is entitled to
++ * leave LINK_STATUS false without raising anything at all -- and it does. */
++static void mgs2_progbin_roundtrip(const struct wined3d_gl_info *gl_info,
++        PFN_mgs2_glProgramBinary put, GLenum format, const void *blob, GLsizei len,
++        unsigned int *ok, unsigned int *errout, BOOL separable)
++{
++    const struct wined3d_gl_info *gi = MGS2_GL_INFO(gl_info);
++    GLuint probe;
++    GLint linked = 0, loglen = 0;
++    GLenum err, first = GL_NO_ERROR;
++
++    if (!put || !(probe = GL_EXTCALL(glCreateProgram())))
++        return;
++    /* A binary taken from a separable program may only be accepted by a target
++     * that is itself marked separable: the flag is program state, and the
++     * driver has every reason to refuse a blob that does not match the object
++     * it is being poured into. The monolithic round trip succeeds while the
++     * separable one says "Bad program binary", which is exactly the shape that
++     * hypothesis predicts. */
++    if (separable && mgs2_glProgramParameteri)
++        mgs2_glProgramParameteri(probe, GL_PROGRAM_SEPARABLE, GL_TRUE);
++    while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++    put(probe, format, blob, len);
++    while ((err = gi->gl_ops.gl.p_glGetError()) != GL_NO_ERROR)
++        if (first == GL_NO_ERROR) first = err;
++    GL_EXTCALL(glGetProgramiv(probe, GL_LINK_STATUS, &linked));
++    *ok = linked ? 1 : 0;
++    *errout = first;
++    if (!linked && !mgs2_pbc.infolog_len)
++    {
++        GL_EXTCALL(glGetProgramiv(probe, GL_INFO_LOG_LENGTH, &loglen));
++        if (loglen > 0)
++        {
++            char text[64] = {0};
++            GLsizei got = 0;
++
++            GL_EXTCALL(glGetProgramInfoLog(probe, sizeof(text) - 1, &got, text));
++            mgs2_pbc.infolog_len = (unsigned int)loglen;
++            memcpy(mgs2_pbc.infolog, text, sizeof(mgs2_pbc.infolog));
++        }
++        else
++        {
++            mgs2_pbc.infolog_len = 0xffffffffu;   /* asked, and it was empty */
++        }
++    }
++    GL_EXTCALL(glDeleteProgram(probe));
++}
++
 +static BOOL mgs2_progbin_load(const struct wined3d_gl_info *gl_info, GLuint program,
 +        const char *path)
 +{
@@ -903,6 +984,10 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +    fclose(f);
 +
 +    memcpy(&format, blob, sizeof(format));
++    /* Mark the target separable before pouring in a separable binary; see the
++     * round-trip comment above. */
++    if (mgs2_glProgramParameteri)
++        mgs2_glProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
 +    /* The game leaves GL errors pending -- 20479 GL_INVALID_OPERATION from
 +     * glAlphaFunc in one measured run -- so without draining first, whatever we
 +     * read afterwards is somebody else's. */
@@ -952,29 +1037,39 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +    }
 +    memcpy(blob, &format, sizeof(format));
 +
-+    /* One in-memory round trip, once per process: hand the blob straight back
-+     * to the driver in a fresh program and see whether it links. This is the
-+     * only thing that separates "this driver will not reload its own binaries"
-+     * from "our file handling is wrong" -- with the file out of the picture,
-+     * a failure here closes the whole branch and a success blames persistence. */
++    /* Three one-shot probes, before this branch is declared shut. */
 +    if (!mgs2_pbc.roundtrip_tried)
 +    {
-+        GLuint probe = GL_EXTCALL(glCreateProgram());
-+
 +        ++mgs2_pbc.roundtrip_tried;
-+        if (probe)
-+        {
-+            GLint ok = 0;
-+            GLenum err, first = GL_NO_ERROR;
++        mgs2_progbin_roundtrip(gl_info, mgs2_glProgramBinary, format,
++                blob + sizeof(format), got,
++                &mgs2_pbc.roundtrip_ok, &mgs2_pbc.roundtrip_err, FALSE);
++    }
++    if (!mgs2_pbc.sep_tried)
++    {
++        ++mgs2_pbc.sep_tried;
++        mgs2_progbin_roundtrip(gl_info, mgs2_glProgramBinary, format,
++                blob + sizeof(format), got,
++                &mgs2_pbc.sep_ok, &mgs2_pbc.sep_err, TRUE);
++    }
++    if (!mgs2_pbc.oes_tried && mgs2_glGetProgramBinaryOES && mgs2_glProgramBinaryOES)
++    {
++        GLint osize = 0;
++        GLsizei ogot = 0;
++        GLenum oformat = 0;
++        char *oblob;
 +
++        ++mgs2_pbc.oes_tried;
++        GL_EXTCALL(glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &osize));
++        while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++        if (osize > 0 && (oblob = malloc(osize)))
++        {
++            mgs2_glGetProgramBinaryOES(program, osize, &ogot, &oformat, oblob);
 +            while (gi->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
-+            mgs2_glProgramBinary(probe, format, blob + sizeof(format), got);
-+            while ((err = gi->gl_ops.gl.p_glGetError()) != GL_NO_ERROR)
-+                if (first == GL_NO_ERROR) first = err;
-+            GL_EXTCALL(glGetProgramiv(probe, GL_LINK_STATUS, &ok));
-+            mgs2_pbc.roundtrip_ok = ok ? 1 : 0;
-+            mgs2_pbc.roundtrip_err = first;
-+            GL_EXTCALL(glDeleteProgram(probe));
++            if (ogot > 0)
++                mgs2_progbin_roundtrip(gl_info, mgs2_glProgramBinaryOES, oformat,
++                        oblob, ogot, &mgs2_pbc.oes_ok, &mgs2_pbc.oes_err, TRUE);
++            free(oblob);
 +        }
 +    }
 +
@@ -985,6 +1080,39 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +        else
 +            ++mgs2_pbc.store_write_fail;
 +        fclose(f);
++
++        /* Probe 5, once. The in-memory round trip succeeds once the target is
++         * marked separable, and yet not one file-backed load has ever hit. Two
++         * explanations remain and they need different answers: the bytes do not
++         * survive the file, or the binary is only valid inside the process that
++         * produced it. Reading back what was just written separates them. */
++        if (!mgs2_pbc.file_rt_tried)
++        {
++            FILE *back;
++
++            ++mgs2_pbc.file_rt_tried;
++            mgs2_pbc.store_crc = (unsigned int)mgs2_progbin_fnv(blob,
++                    got + sizeof(format), 14695981039346656037ull);
++            if ((back = fopen(path, "rb")))
++            {
++                char *rb = malloc(got + sizeof(format));
++
++                if (rb && fread(rb, 1, got + sizeof(format), back)
++                        == (size_t)(got + sizeof(format)))
++                {
++                    GLenum rformat;
++
++                    mgs2_pbc.load_crc = (unsigned int)mgs2_progbin_fnv(rb,
++                            got + sizeof(format), 14695981039346656037ull);
++                    memcpy(&rformat, rb, sizeof(rformat));
++                    mgs2_progbin_roundtrip(gl_info, mgs2_glProgramBinary, rformat,
++                            rb + sizeof(rformat), got,
++                            &mgs2_pbc.file_rt_ok, &mgs2_pbc.sep_err, TRUE);
++                }
++                free(rb);
++                fclose(back);
++            }
++        }
 +    }
 +    else ++mgs2_pbc.store_write_fail;
 +    free(blob);
@@ -1100,7 +1228,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  static void shader_glsl_generate_shader_epilogue(const struct wined3d_shader_context *ctx);
  
  static const char *debug_gl_shader_type(GLenum type)
-@@ -548,368 +1534,13 @@
+@@ -548,368 +1648,13 @@
  }
  
  /* Context activation is done by the caller. */
@@ -1472,7 +1600,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      TRACE("Compiling shader object %u.\n", shader);
  
-@@ -925,15 +1556,23 @@
+@@ -925,15 +1670,23 @@
  
      GL_EXTCALL(glShaderSource(shader, 1, &src, NULL));
      checkGLcall("glShaderSource");
@@ -1501,7 +1629,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
  }
  
-@@ -1241,7 +1880,7 @@
+@@ -1241,7 +1994,7 @@
  
          string_buffer_sprintf(name, "block_%s_cb%u", prefix, i);
          block_idx = GL_EXTCALL(glGetUniformBlockIndex(program_id, name->buffer));
@@ -1510,7 +1638,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
      checkGLcall("glUniformBlockBinding");
      string_buffer_release(&priv->string_buffers, name);
-@@ -1271,7 +1910,7 @@
+@@ -1271,7 +2024,7 @@
          }
  
          TRACE("Loading sampler %s on unit %u.\n", sampler_name->buffer, mapped_unit);
@@ -1519,7 +1647,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
      checkGLcall("Load sampler bindings");
      string_buffer_release(&priv->string_buffers, sampler_name);
-@@ -1336,7 +1975,7 @@
+@@ -1336,7 +2089,7 @@
  
          string_buffer_sprintf(icb_name, "%s_icb", prefix);
          icb_location = GL_EXTCALL(glGetUniformLocation(program_id, icb_name->buffer));
@@ -1528,7 +1656,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          checkGLcall("Load immediate constant buffer");
  
          string_buffer_release(&priv->string_buffers, icb_name);
-@@ -1367,7 +2006,7 @@
+@@ -1367,7 +2120,7 @@
              continue;
  
          TRACE("Loading image %s on unit %u.\n", name->buffer, i);
@@ -1537,7 +1665,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
      checkGLcall("Load image bindings");
      string_buffer_release(&priv->string_buffers, name);
-@@ -1671,7 +2310,7 @@
+@@ -1671,7 +2424,7 @@
          }
      }
      if (start <= end)
@@ -1546,7 +1674,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      checkGLcall("walk_constant_heap()");
  }
  
-@@ -1688,7 +2327,7 @@
+@@ -1688,7 +2441,7 @@
      clamped_constant[2] = data->z < -1.0f ? -1.0f : data->z > 1.0f ? 1.0f : data->z;
      clamped_constant[3] = data->w < -1.0f ? -1.0f : data->w > 1.0f ? 1.0f : data->w;
  
@@ -1555,7 +1683,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  }
  
  /* Context activation is done by the caller. */
-@@ -1779,7 +2418,7 @@
+@@ -1779,7 +2532,7 @@
      /* Immediate constants are clamped to [-1;1] at shader creation time if needed */
      LIST_FOR_EACH_ENTRY(lconst, &shader->constantsF, struct wined3d_shader_lconst, entry)
      {
@@ -1564,7 +1692,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
      checkGLcall("glUniform4fv()");
  }
-@@ -1800,7 +2439,7 @@
+@@ -1800,7 +2553,7 @@
          {
              /* We found this uniform name in the program - go ahead and send the data */
              i = wined3d_bit_scan(&constants_set);
@@ -1573,7 +1701,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          }
      }
  
-@@ -1813,7 +2452,7 @@
+@@ -1813,7 +2566,7 @@
          const GLint *values = (const GLint *)lconst->value;
  
          /* We found this uniform name in the program - go ahead and send the data */
@@ -1582,7 +1710,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          ptr = list_next(&shader->constantsI, ptr);
      }
      checkGLcall("glUniform4iv()");
-@@ -1834,7 +2473,7 @@
+@@ -1834,7 +2587,7 @@
          while (constants_set)
          {
              i = wined3d_bit_scan(&constants_set);
@@ -1591,7 +1719,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          }
      }
  
-@@ -1846,7 +2485,7 @@
+@@ -1846,7 +2599,7 @@
          unsigned int idx = lconst->idx;
          const GLint *values = (const GLint *)lconst->value;
  
@@ -1600,7 +1728,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          ptr = list_next(&shader->constantsB, ptr);
      }
      checkGLcall("glUniform1iv()");
-@@ -1950,7 +2589,7 @@
+@@ -1950,7 +2703,7 @@
      if (prog->vs.normal_matrix_location == -1)
          return;
  
@@ -1609,7 +1737,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
              1, FALSE, &constants->modelview.not_blended.normal_matrix._11));
      checkGLcall("glUniformMatrix4fv");
  }
-@@ -1960,14 +2599,42 @@
+@@ -1960,14 +2713,42 @@
  {
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
  
@@ -1654,7 +1782,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  }
  
  static void shader_glsl_ffp_vertex_material_uniform(struct wined3d_context_gl *context_gl,
-@@ -1979,11 +2646,11 @@
+@@ -1979,11 +2760,11 @@
      constants = wined3d_buffer_load_sysmem(
              context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], &context_gl->c);
  
@@ -1671,7 +1799,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      checkGLcall("setting FFP material uniforms");
  }
  
-@@ -1993,40 +2660,125 @@
+@@ -1993,40 +2774,125 @@
  {
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
  
@@ -1816,7 +1944,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
              break;
  
          default:
-@@ -2044,18 +2796,18 @@
+@@ -2044,18 +2910,18 @@
      constants = wined3d_buffer_load_sysmem(
              context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], &context_gl->c);
  
@@ -1841,7 +1969,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      checkGLcall("glUniform1f");
  }
  
-@@ -2066,10 +2818,10 @@
+@@ -2066,10 +2932,10 @@
              context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
  
@@ -1856,7 +1984,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      checkGLcall("fog emulation uniforms");
  }
  
-@@ -2080,25 +2832,26 @@
+@@ -2080,25 +2946,26 @@
      {
          GLdouble plane[4];
  
@@ -1888,7 +2016,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      const struct wined3d_shader *vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
      const struct wined3d_shader *pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
      const struct glsl_context_data *ctx_data = context->shader_backend_data;
-@@ -2115,9 +2868,47 @@
+@@ -2115,9 +2982,47 @@
      if (!prog)
          return;
  
@@ -1936,7 +2064,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      if (vshader && vshader->is_ffp_vs)
      {
          /* The shader's constant update mask is WINED3D_SHADER_CONST_VS_F.
-@@ -2160,7 +2951,7 @@
+@@ -2160,7 +3065,7 @@
          if (gl_info->supported[WINED3D_GLSL_130])
          {
              for (i = 0; i < gl_info->limits.user_clip_distances; ++i)
@@ -1945,7 +2073,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          }
          else
          {
-@@ -2177,17 +2968,17 @@
+@@ -2177,17 +3082,17 @@
                  max(state->viewport_count, 1) : 1;
          shader_get_position_fixup(context, state, fixup_count, position_fixup);
          if (state->shader[WINED3D_SHADER_TYPE_GEOMETRY])
@@ -1967,7 +2095,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          checkGLcall("base vertex id");
      }
  
-@@ -2197,7 +2988,7 @@
+@@ -2197,7 +3102,7 @@
  
          constants = wined3d_buffer_load_sysmem(context->device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], context);
  
@@ -1976,7 +2104,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                  FALSE, &constants->modelview.modelview_matrices[0]._11));
          checkGLcall("glUniformMatrix4fv");
  
-@@ -2215,7 +3006,7 @@
+@@ -2215,7 +3120,7 @@
              if (prog->vs.modelview_matrix_location[i] == -1)
                  break;
  
@@ -1985,7 +2113,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                      1, FALSE, &constants->modelview.modelview_matrices[i]._11));
              checkGLcall("glUniformMatrix4fv");
          }
-@@ -2229,7 +3020,7 @@
+@@ -2229,7 +3134,7 @@
          constants = wined3d_buffer_load_sysmem(context->device->push_constants[WINED3D_PUSH_CONSTANTS_VS_FFP], context);
  
          get_projection_matrix(context, constants, state, &projection);
@@ -1994,7 +2122,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          checkGLcall("glUniformMatrix4fv");
      }
  
-@@ -2281,7 +3072,7 @@
+@@ -2281,7 +3186,7 @@
              }
          }
  
@@ -2003,7 +2131,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          checkGLcall("glUniform3fv");
  
          for (i = 0; i < point_count; ++i)
-@@ -2298,6 +3089,37 @@
+@@ -2298,6 +3203,37 @@
                      WINED3D_LIGHT_PARALLELPOINT, &constants->light.lights[i], prog);
      }
  
@@ -2041,7 +2169,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      if (pshader && pshader->is_ffp_ps)
      {
          static const uint32_t ps_update_mask = WINED3D_SHADER_CONST_PS_F
-@@ -2334,14 +3156,14 @@
+@@ -2334,14 +3270,14 @@
              if (prog->ps.bumpenv_mat_location[i] == -1)
                  continue;
  
@@ -2059,7 +2187,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                          &constants->bumpenv.loffset[i]));
              }
          }
-@@ -2354,7 +3176,7 @@
+@@ -2354,7 +3290,7 @@
          const struct wined3d_ffp_ps_constants *constants = wined3d_buffer_load_sysmem(
                  context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
  
@@ -2068,7 +2196,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
  
      if (update_mask & WINED3D_SHADER_CONST_FFP_PS)
-@@ -2365,16 +3187,16 @@
+@@ -2365,16 +3301,16 @@
                  context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
  
          if (prog->ps.tex_factor_location != -1)
@@ -2088,7 +2216,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          }
  
          checkGLcall("fixed function uniforms");
-@@ -2388,7 +3210,7 @@
+@@ -2388,7 +3324,7 @@
          const struct wined3d_ffp_ps_constants *constants = wined3d_buffer_load_sysmem(
                  context_gl->c.device->push_constants[WINED3D_PUSH_CONSTANTS_PS_FFP], &context_gl->c);
  
@@ -2097,7 +2225,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          checkGLcall("alpha test emulation uniform");
      }
  
-@@ -2402,6 +3224,12 @@
+@@ -2402,6 +3338,12 @@
      {
          prog->constant_version = priv->next_constant_version++;
      }
@@ -2110,7 +2238,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  }
  
  static void update_heap_entry(struct constant_heap *heap, unsigned int idx, DWORD new_version)
-@@ -7416,7 +8244,10 @@
+@@ -7416,7 +8358,10 @@
  {
      wine_rb_remove(&priv->program_lookup, &entry->program_lookup_entry);
  
@@ -2122,7 +2250,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      if (entry->vs.id)
          list_remove(&entry->vs.shader_entry);
      if (entry->hs.id)
-@@ -9603,8 +10434,55 @@
+@@ -9603,8 +10548,55 @@
          shader_addline(buffer, "ffp_varying_specular = ffp_attrib_specular;\n");
  }
  
@@ -2179,7 +2307,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          const struct wined3d_ffp_vs_settings *settings, const struct wined3d_gl_info *gl_info)
  {
      static const struct attrib_info
-@@ -9627,7 +10505,6 @@
+@@ -9627,7 +10619,6 @@
      struct wined3d_string_buffer *buffer = &priv->shader_buffer;
      BOOL output_legacy_fogcoord = legacy_syntax;
      BOOL legacy_lighting = priv->legacy_lighting;
@@ -2187,7 +2315,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      unsigned int i;
  
      string_buffer_clear(buffer);
-@@ -9899,10 +10776,7 @@
+@@ -9899,10 +10890,7 @@
  
      shader_addline(buffer, "}\n");
  
@@ -2199,7 +2327,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  }
  
  static const char *shader_glsl_get_ffp_fragment_op_arg(struct wined3d_string_buffer *buffer,
-@@ -9998,50 +10872,6 @@
+@@ -9998,50 +10986,6 @@
      return ret;
  }
  
@@ -2250,7 +2378,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  static void shader_glsl_ffp_fragment_op(struct wined3d_string_buffer *buffer, unsigned int stage, BOOL color,
          BOOL alpha, BOOL tmp_dst, unsigned int op, DWORD dw_arg0, DWORD dw_arg1, DWORD dw_arg2)
  {
-@@ -10060,9 +10890,6 @@
+@@ -10060,9 +11004,6 @@
      arg1 = shader_glsl_get_ffp_fragment_op_arg(buffer, 1, stage, dw_arg1);
      arg2 = shader_glsl_get_ffp_fragment_op_arg(buffer, 2, stage, dw_arg2);
  
@@ -2260,7 +2388,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      switch (op)
      {
          case WINED3D_TOP_DISABLE:
-@@ -10190,12 +11017,43 @@
+@@ -10190,12 +11131,43 @@
              break;
      }
  
@@ -2307,7 +2435,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          const struct ffp_frag_settings *settings, const struct wined3d_context_gl *context_gl)
  {
      struct wined3d_string_buffer *tex_reg_name = string_buffer_get(&priv->string_buffers);
-@@ -10205,7 +11063,6 @@
+@@ -10205,7 +11177,6 @@
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
      const BOOL legacy_syntax = needs_legacy_glsl_syntax(gl_info);
      BOOL tempreg_used = FALSE, tfactor_used = FALSE;
@@ -2315,7 +2443,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      DWORD arg0, arg1, arg2;
      unsigned int stage;
  
-@@ -10289,8 +11146,6 @@
+@@ -10289,8 +11260,6 @@
  
      shader_addline(buffer, "vec4 tmp0, tmp1;\n");
      shader_addline(buffer, "vec4 ret;\n");
@@ -2324,7 +2452,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      if (tempreg_used || settings->sRGB_write)
          shader_addline(buffer, "vec4 temp_reg = vec4(0.0);\n");
      shader_addline(buffer, "vec4 arg0, arg1, arg2;\n");
-@@ -10494,48 +11349,6 @@
+@@ -10494,48 +11463,6 @@
  
      shader_addline(buffer, "ret = ffp_varying_diffuse;\n");
  
@@ -2373,7 +2501,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      /* Generate the main shader */
      for (stage = 0; stage < WINED3D_MAX_FFP_TEXTURES; ++stage)
      {
-@@ -10595,20 +11408,13 @@
+@@ -10595,20 +11522,13 @@
      shader_glsl_generate_fog_code(buffer, gl_info, settings->fog);
  
      shader_glsl_generate_alpha_test(buffer, gl_info, alpha_test_func);
@@ -2395,7 +2523,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  }
  
  static struct glsl_ffp_vertex_shader *shader_glsl_find_ffp_vertex_shader(struct shader_glsl_priv *priv,
-@@ -10620,11 +11426,17 @@
+@@ -10620,11 +11540,17 @@
      if ((entry = wine_rb_get(&priv->ffp_vertex_shaders, settings)))
          return WINE_RB_ENTRY_VALUE(entry, struct glsl_ffp_vertex_shader, desc.entry);
  
@@ -2415,7 +2543,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      list_init(&shader->linked_programs);
      if (wine_rb_put(&priv->ffp_vertex_shaders, &shader->desc.settings, &shader->desc.entry) == -1)
          ERR("Failed to insert ffp vertex shader.\n");
-@@ -10641,11 +11453,17 @@
+@@ -10641,11 +11567,17 @@
      if ((desc = find_ffp_frag_shader(&priv->ffp_fragment_shaders, args)))
          return CONTAINING_RECORD(desc, struct glsl_ffp_fragment_shader, entry);
  
@@ -2435,7 +2563,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      list_init(&glsl_desc->linked_programs);
      add_ffp_frag_shader(&priv->ffp_fragment_shaders, &glsl_desc->entry);
  
-@@ -10801,6 +11619,470 @@
+@@ -10801,6 +11733,480 @@
      string_buffer_release(&priv->string_buffers, name);
  }
  
@@ -2497,10 +2625,20 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 +    }
 +
 +    MGS2_LOCAL(mgs2_glProgramParameteri)(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
-+    /* Without the hint the driver may keep no retrievable binary at all. */
++    /* Without the hint, set BEFORE linking, the driver is allowed to keep no
++     * retrievable binary at all -- so probe whether the call is even accepted
++     * here rather than assuming a silent success. */
 +    if (cached)
++    {
++        const struct wined3d_gl_info *gi_ = MGS2_GL_INFO(gl_info);
++        GLenum e_;
++
++        while (gi_->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
 +        MGS2_LOCAL(mgs2_glProgramParameteri)(program,
 +                GL_PROGRAM_BINARY_RETRIEVABLE_HINT, GL_TRUE);
++        while ((e_ = gi_->gl_ops.gl.p_glGetError()) != GL_NO_ERROR)
++            if (!mgs2_pbc.hint_err) mgs2_pbc.hint_err = e_;
++    }
 +    GL_EXTCALL(glAttachShader(program, shader_id));
 +
 +    if (!shader_glsl_use_explicit_attrib_location(gl_info))
@@ -2906,7 +3044,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  static HRESULT shader_glsl_compile_compute_shader(struct shader_glsl_priv *priv,
          const struct wined3d_context_gl *context_gl, struct wined3d_shader *shader)
  {
-@@ -10812,7 +12094,13 @@
+@@ -10812,7 +12218,13 @@
      struct glsl_shader_prog_link *entry;
      GLuint shader_id, program_id;
  
@@ -2921,7 +3059,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      {
          ERR("Out of memory.\n");
          return E_OUTOFMEMORY;
-@@ -10864,21 +12152,7 @@
+@@ -10864,21 +12276,7 @@
      list_add_head(&shader->linked_programs, &entry->cs.shader_entry);
  
      TRACE("Linking GLSL shader program %u.\n", program_id);
@@ -2944,7 +3082,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      shader_glsl_validate_link(gl_info, program_id);
  
      GL_EXTCALL(glUseProgram(program_id));
-@@ -10942,6 +12216,7 @@
+@@ -10942,6 +12340,7 @@
  static void set_glsl_shader_program(const struct wined3d_context_gl *context_gl, const struct wined3d_state *state,
          struct shader_glsl_priv *priv, struct glsl_context_data *ctx_data)
  {
@@ -2952,7 +3090,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      const struct wined3d_d3d_info *d3d_info = context_gl->c.d3d_info;
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
      const struct wined3d_shader *pre_rasterization_shader;
-@@ -10949,6 +12224,8 @@
+@@ -10949,6 +12348,8 @@
      struct glsl_shader_prog_link *entry = NULL;
      struct wined3d_shader *vshader = NULL;
      struct wined3d_shader *pshader = NULL;
@@ -2961,7 +3099,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      GLuint reorder_shader_id = 0;
      struct glsl_program_key key;
      uint32_t attribs_map;
-@@ -10959,14 +12236,23 @@
+@@ -10959,14 +12360,23 @@
      GLuint ds_id = 0;
      GLuint gs_id = 0;
      GLuint ps_id = 0;
@@ -2986,7 +3124,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          if (use_vs(state) || d3d_info->ffp_hlsl)
              vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
      }
-@@ -10979,16 +12265,17 @@
+@@ -10979,16 +12389,17 @@
          find_vs_compile_args(state, vshader, &vs_compile_args, &context_gl->c);
          vs_id = find_glsl_vertex_shader(context_gl, priv, vshader, &vs_compile_args);
          vs_list = &vshader->linked_programs;
@@ -3008,7 +3146,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
  
      hshader = state->shader[WINED3D_SHADER_TYPE_HULL];
-@@ -11034,6 +12321,9 @@
+@@ -11034,6 +12445,9 @@
          ps_id = ctx_data->glsl_program->ps.id;
          ps_list = &ctx_data->glsl_program->ps.shader_entry;
  
@@ -3018,7 +3156,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          if (use_ps(state))
              pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
      }
-@@ -11045,17 +12335,25 @@
+@@ -11045,17 +12459,25 @@
                  &ps_compile_args, &context_gl->c);
          ps_id = find_glsl_fragment_shader(context_gl, priv, pshader, &ps_compile_args);
          ps_list = &pshader->linked_programs;
@@ -3049,7 +3187,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
  
      key.vs_id = vs_id;
-@@ -11070,12 +12368,72 @@
+@@ -11070,12 +12492,72 @@
          return;
      }
  
@@ -3123,7 +3261,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      entry->id = program_id;
      entry->vs.id = vs_id;
      entry->hs.id = hs_id;
-@@ -11210,22 +12568,21 @@
+@@ -11210,22 +12692,47 @@
  
      /* Link the program */
      TRACE("Linking GLSL shader program %u.\n", program_id);
@@ -3138,19 +3276,44 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
 -            mgs2_link_ms += mgs2_now_ms() - t0;
 -            mgs2_link_twice_probe(gl_info, program_id, mgs2_now_ms() - t0);
 -            mgs2_shader_report();
--        }
--        else GL_EXTCALL(glLinkProgram(program_id));
--        mgs2_glsl_save_binary(gl_info, program_id);
--    }
 +    probe_start = mgs2_probe_now();
 +    GL_EXTCALL(glLinkProgram(program_id));
 +    probe_link = mgs2_probe_now();
-     shader_glsl_validate_link(gl_info, program_id);
++    shader_glsl_validate_link(gl_info, program_id);
 +    /* c carries how much of the stall the LINK_STATUS query accounts for: on a
 +     * driver that links lazily the cost shows up there, not in glLinkProgram. */
 +    /* d says why this pair took the monolithic path: bit 0 programmable VS,
 +     * 1 programmable PS, 2 FFP VS available, 3 FFP PS available, 4 a hull/
 +     * domain/geometry stage is present, 5 the candidate is enabled at all. */
++    if (!mgs2_pbc.mono_tried && mgs2_progbin_state > 0 && mgs2_glGetProgramBinary)
++    {
++        const struct wined3d_gl_info *gi_ = MGS2_GL_INFO(gl_info);
++        GLint msize = 0, mlinked = 0;
++        GLsizei mgot = 0;
++        GLenum mformat = 0;
++        char *mblob;
++
++        GL_EXTCALL(glGetProgramiv(program_id, GL_LINK_STATUS, &mlinked));
++        if (mlinked)
++        {
++            ++mgs2_pbc.mono_tried;
++            GL_EXTCALL(glGetProgramiv(program_id, GL_PROGRAM_BINARY_LENGTH, &msize));
++            while (gi_->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++            if (msize > 0 && (mblob = malloc(msize)))
++            {
++                mgs2_glGetProgramBinary(program_id, msize, &mgot, &mformat, mblob);
++                while (gi_->gl_ops.gl.p_glGetError() != GL_NO_ERROR) { }
++                mgs2_pbc.mono_size = (unsigned int)mgot;
++                if (mgot > 0)
++                    mgs2_progbin_roundtrip(gl_info, mgs2_glProgramBinary, mformat,
++                            mblob, mgot, &mgs2_pbc.mono_ok, &mgs2_pbc.mono_err, FALSE);
++                free(mblob);
++            }
+         }
+-        else GL_EXTCALL(glLinkProgram(program_id));
+-        mgs2_glsl_save_binary(gl_info, program_id);
+     }
+-    shader_glsl_validate_link(gl_info, program_id);
 +    mgs2_probe_record(MGS2_PROBE_OP_LINK_PROGRAM, probe_start, vs_id, ps_id,
 +            mgs2_probe_frequency ? (unsigned int)((mgs2_probe_now() - probe_link)
 +            * 1000000 / mgs2_probe_frequency) : 0,
@@ -3160,7 +3323,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      shader_glsl_init_vs_uniform_locations(gl_info, priv, program_id, &entry->vs,
              vshader ? vshader->limits->constant_float : 0);
-@@ -11392,14 +12749,22 @@
+@@ -11392,14 +12899,22 @@
  {
      struct glsl_context_data *ctx_data = context_gl->c.shader_backend_data;
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
@@ -3188,7 +3351,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      set_glsl_shader_program(context_gl, state, priv, ctx_data);
      glsl_program = ctx_data->glsl_program;
  
-@@ -11434,11 +12799,45 @@
+@@ -11434,11 +12949,45 @@
  
      TRACE("Using GLSL program %u.\n", program_id);
  
@@ -3237,7 +3400,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          if (glsl_program)
              context_gl->c.constant_update_mask |= glsl_program->constant_update_mask;
      }
-@@ -11446,32 +12845,6 @@
+@@ -11446,32 +12995,6 @@
      context_gl->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_COMPUTE);
  }
  
@@ -3270,7 +3433,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  static void shader_glsl_update_legacy_states(struct wined3d_context_gl *context_gl, const struct wined3d_state *state);
  
  static void shader_glsl_apply_draw_state(void *shader_priv, struct wined3d_context *context,
-@@ -11480,30 +12853,22 @@
+@@ -11480,30 +13003,22 @@
      struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
      struct shader_glsl_priv *priv = shader_priv;
  
@@ -3301,7 +3464,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
  }
  
-@@ -11548,6 +12913,10 @@
+@@ -11548,6 +13063,10 @@
  {
      struct glsl_context_data *ctx_data = context->shader_backend_data;
  
@@ -3312,7 +3475,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      ctx_data->glsl_program = NULL;
      context->shader_update_mask = (1u << WINED3D_SHADER_TYPE_PIXEL)
              | (1u << WINED3D_SHADER_TYPE_VERTEX)
-@@ -11566,11 +12935,15 @@
+@@ -11566,11 +13085,15 @@
      struct shader_glsl_priv *priv = shader_priv;
  
      shader_glsl_invalidate_current_program(context);
@@ -3330,7 +3493,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      if (needs_legacy_glsl_syntax(gl_info) && gl_info->supported[ARB_COLOR_BUFFER_FLOAT])
      {
-@@ -11826,6 +13199,9 @@
+@@ -11826,6 +13349,9 @@
      SIZE_T stack_size = wined3d_log2i(max(WINED3D_MAX_VS_CONSTS_F, WINED3D_MAX_PS_CONSTS_F)) + 1;
      void *vertex_priv, *fragment_priv;
      struct shader_glsl_priv *priv;
@@ -3340,7 +3503,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      if (!(priv = calloc(1, sizeof(*priv))))
          return E_OUTOFMEMORY;
-@@ -11837,6 +13213,8 @@
+@@ -11837,6 +13363,8 @@
      }
  
      string_buffer_list_init(&priv->string_buffers);
@@ -3349,7 +3512,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      if (!(vertex_priv = vertex_pipe->vp_alloc(&glsl_shader_backend, priv)))
      {
-@@ -11878,6 +13256,53 @@
+@@ -11878,6 +13406,53 @@
      }
  
      wine_rb_init(&priv->program_lookup, glsl_program_key_compare);
@@ -3403,7 +3566,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      priv->next_constant_version = 1;
      priv->vertex_pipe = vertex_pipe;
      priv->fragment_pipe = fragment_pipe;
-@@ -11900,19 +13325,52 @@
+@@ -11900,19 +13475,52 @@
      return E_OUTOFMEMORY;
  }
  
@@ -3456,7 +3619,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      free(device->shader_priv);
      device->shader_priv = NULL;
-@@ -11939,7 +13397,7 @@
+@@ -11939,7 +13547,7 @@
      struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
      const struct wined3d_gl_info *gl_info = context_gl->gl_info;
  
@@ -3465,7 +3628,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      checkGLcall("GL_PROGRAM_POINT_SIZE");
  }
  
-@@ -12380,7 +13838,7 @@
+@@ -12380,7 +13988,7 @@
      {
          delete_glsl_program_entry(ctx->priv, gl_info, program);
      }
@@ -3474,7 +3637,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      free(shader);
  }
  
-@@ -12608,7 +14066,7 @@
+@@ -12608,7 +14216,7 @@
      {
          delete_glsl_program_entry(ctx->priv, gl_info, program);
      }
@@ -3483,7 +3646,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      free(shader);
  }
  
-@@ -12672,18 +14130,6 @@
+@@ -12672,18 +14280,6 @@
       * on would move the ladder's own baseline. Skipping it also means alpha test
       * must come from the generated GLSL, which is unproven here. A/B it on its own:
       *   MGS2_GLES_ALPHA_SKIP=1 */
@@ -3502,7 +3665,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      const struct wined3d_ffp_ps_constants *constants;
      struct wined3d_buffer *buffer;
      GLfloat ref;
-@@ -12695,7 +14141,7 @@
+@@ -12695,7 +14291,7 @@
              ref = (constants = wined3d_buffer_load_sysmem(buffer, &context_gl->c))->alpha_test_ref;
          else
              ref = 0.0f;
@@ -3511,7 +3674,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
          checkGLcall("glAlphaFunc");
      }
  }
-@@ -12880,12 +14326,13 @@
+@@ -12880,12 +14476,13 @@
      struct wined3d_blitter *next;
  
      if ((next = blitter->next))
@@ -3527,7 +3690,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
  
      wine_rb_destroy(&glsl_blitter->programs, glsl_free_blitter_program, context_gl);
      string_buffer_list_cleanup(&glsl_blitter->string_buffers);
-@@ -13362,11 +14809,11 @@
+@@ -13362,11 +14959,11 @@
  
      GL_EXTCALL(glUseProgram(program));
      loc = GL_EXTCALL(glGetUniformLocation(program, "sampler"));
@@ -3541,7 +3704,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
      }
  
      return program;
-@@ -13382,20 +14829,20 @@
+@@ -13382,20 +14979,20 @@
      palette = texture_gl->t.swapchain ? texture_gl->t.swapchain->palette : NULL;
  
      if (!blitter->palette_texture)
@@ -3568,7 +3731,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                  GL_UNSIGNED_INT_8_8_8_8_REV, palette->colors);
      }
      else
-@@ -13403,7 +14850,7 @@
+@@ -13403,7 +15000,7 @@
          static const DWORD black;
  
          FIXME("P8 texture loaded without a palette.\n");
@@ -3577,7 +3740,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                  GL_UNSIGNED_INT_8_8_8_8_REV, &black);
      }
  
-@@ -13566,7 +15013,8 @@
+@@ -13566,7 +15163,8 @@
          }
  
          TRACE("Forwarding to blitter %p.\n", next);
@@ -3587,7 +3750,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                  src_rect, dst_texture, dst_sub_resource_idx, dst_location, dst_rect, colour_key, filter,
                  resolve_format);
      }
-@@ -13661,7 +15109,7 @@
+@@ -13661,7 +15259,7 @@
          case COMPLEX_FIXUP_YUV:
              src_level = src_sub_resource_idx % src_texture->level_count;
              location = GL_EXTCALL(glGetUniformLocation(program->id, "size"));
@@ -3596,7 +3759,7 @@ SHIPPED in FINALPLAY11 as wined3d_fp11.dll.
                      wined3d_texture_get_level_height(src_texture, src_level)));
              break;
  
-@@ -13674,15 +15122,15 @@
+@@ -13674,15 +15272,15 @@
  
          wined3d_format_get_float_color_key(src_texture->resource.format, colour_key, float_key);
          location = GL_EXTCALL(glGetUniformLocation(program->id, "colour_key.low"));
