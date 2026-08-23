@@ -214,10 +214,20 @@ if [ "$DEPLOY" = "--deploy" ]; then
         echo "       $file copied"
     done < "$OUT/FINALPLAY.manifest"
     scp -q "$OUT/FINALPLAY.manifest" "$DEV:$GAMEDIR/FINALPLAY.manifest"
+    # Every launcher in device/, not just launch-play.sh.
+    #
     # The launcher names the binaries and asserts the manifest covers all of them,
-    # so it is part of the release rather than something the device happens to have.
-    scp -q "$REPO/device/launch-play.sh" "$REPO/device/launch-research.sh" "$DEV:$GAMEDIR/"
-    ssh -o BatchMode=yes "$DEV" "cd $GAMEDIR && chmod +x box86-$NAME launch-play.sh launch-research.sh"
+    # so it is part of the release rather than something the device happens to
+    # have. And the named experiments are now COUPLED to it: launch-play.sh
+    # refuses a binary override unless MGS2_RESEARCH_RUN is set, and the thing
+    # that sets it is each launch-*.sh. Shipping the production launcher without
+    # them would leave every experiment on the device exiting 1.
+    #
+    # The device carries far more scripts than device/ does; nothing is deleted,
+    # only the ones on record are overwritten.
+    scp -q "$REPO"/device/*.sh "$DEV:$GAMEDIR/"
+    ssh -o BatchMode=yes "$DEV" "cd $GAMEDIR && chmod +x box86-$NAME *.sh"
+    echo "       $(ls "$REPO"/device/*.sh | wc -l) launchers copied"
     echo "ok     deployed; launch-play.sh on the device mounts $NAME"
 fi
 echo
