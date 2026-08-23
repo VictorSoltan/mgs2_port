@@ -38,13 +38,21 @@ LGT_MAGIC = 0x3154474C      # 'LGT1' -- FFP light uniform redundancy simulator
 LCA_MAGIC = 0x3141434C      # 'LCA1' -- the real FFP light-colour cache
 UCT_MAGIC = 0x31544355      # 'UCT1' -- measured cost of one GL call on this stack
 FRM_MAGIC = 0x314D5246      # 'FRM1' -- presented frames, counted in the presenter
+TXT_MAGIC = 0x31545854      # 'TXT1' -- texture-matrix group cost, by arm and slot count
+TXT_SLOTS = 9
+TXT_BINS = 40
 EXT_NAME = 40               # sizeof(mgs2_ext_site.name)
 EXT_SITE = EXT_NAME + 4
 SHADOW_MAGIC = 0x314C4753   # 'SGL1' -- the shadow simulator
 SHADOW_NAME = 48
 SHADOW_SITE = SHADOW_NAME + 8
 ATTRIB_MAGIC = 0x31485341   # 'ASH1' -- the real vertex-attribute shadow (closed)
-TXM_MAGIC = 0x314D5854      # 'TXM1' -- the FFP texture-matrix program cache
+# TXM1/TXT1 were the FFP texture-matrix cache and its stratified group timer.
+# The cache was removed 2026-08-23 on its own measurement (0.774 us per removed
+# upload, 0.34 ms on a 105 ms combat frame), so neither record exists in a
+# current build. The readers stay: they cost nothing when the scan finds
+# nothing, and they are what a rebuild of that idea would be judged with.
+TXM_MAGIC = 0x314D5854      # 'TXM1' -- removed; see above
 TXM_TEX = 8
 ASP_MAGIC = 0x31505341      # 'ASP1' -- the separable stage selector
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
@@ -198,6 +206,39 @@ def read_asp_stats(pid):
                 out.append(d)
                 i = blob.find(pat, i + 4)
     return out
+
+
+def read_txt_stats(pid):
+    """TXT1: qpc_khz, groups[2][9], uploads[2][9], hist[2][9][40]."""
+    n = 4 + 1 + 2 * TXT_SLOTS * 2 + 2 * TXT_SLOTS * TXT_BINS
+    pat = struct.pack("<IIII", TXT_MAGIC, 1, n, (~TXT_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, _ in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                if len(blob) - i >= n * 4:
+                    out.append(struct.unpack("<%dI" % n, blob[i:i + n * 4])[4:])
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def txt_split(r):
+    """(qpc_khz, groups[arm][slot], uploads[arm][slot], hist[arm][slot][bin])"""
+    khz = r[0]
+    o = 1
+    g = [[r[o + a * TXT_SLOTS + k] for k in range(TXT_SLOTS)] for a in range(2)]
+    o += 2 * TXT_SLOTS
+    u = [[r[o + a * TXT_SLOTS + k] for k in range(TXT_SLOTS)] for a in range(2)]
+    o += 2 * TXT_SLOTS
+    h = [[[r[o + (a * TXT_SLOTS + k) * TXT_BINS + b] for b in range(TXT_BINS)]
+          for k in range(TXT_SLOTS)] for a in range(2)]
+    return khz, g, u, h
 
 
 def read_frm_stats(pid):
@@ -469,6 +510,7 @@ def main():
 
     f0 = frames(a.log) if a.log else None
     r0 = read_frm_stats(a.pid)
+    x0 = read_txt_stats(a.pid)
     before = sample(a.pid, addrs)
     ebefore = sample_ext(a.pid, eaddrs) if eaddrs else {}
     cbefore = sample_calls(a.pid, caddrs) if caddrs else {}
@@ -492,6 +534,7 @@ def main():
     s1 = read_asp_stats(a.pid)
     f1 = frames(a.log) if a.log else None
     r1 = read_frm_stats(a.pid)
+    x1 = read_txt_stats(a.pid)
 
     # FRM1 first. The log-derived count is a step function -- the presenter emits
     # one line per N frames -- so a window that spans k lines always reports k*N
@@ -561,6 +604,54 @@ def main():
                   % (att / nframes, skp / nframes))
         print("  identity attempted == skipped + executed: %s"
               % ("PASS" if att == skp + exe else "FAIL"))
+
+    if x1:
+        khz = max(txt_split(r)[0] for r in x1) or 1
+        def acc(recs):
+            G = [[0] * TXT_SLOTS for _ in range(2)]
+            U = [[0] * TXT_SLOTS for _ in range(2)]
+            H = [[[0] * TXT_BINS for _ in range(TXT_SLOTS)] for _ in range(2)]
+            for r in recs:
+                _k, g, u, h = txt_split(r)
+                for a in range(2):
+                    for k in range(TXT_SLOTS):
+                        G[a][k] += g[a][k]; U[a][k] += u[a][k]
+                        for b in range(TXT_BINS):
+                            H[a][k][b] += h[a][k][b]
+            return G, U, H
+        G1, U1, H1 = acc(x1)
+        G0, U0, H0 = acc(x0) if x0 else ([[0] * TXT_SLOTS for _ in range(2)],
+                                         [[0] * TXT_SLOTS for _ in range(2)],
+                                         [[[0] * TXT_BINS for _ in range(TXT_SLOTS)]
+                                          for _ in range(2)])
+        print("\nTEXTURE-MATRIX GROUP COST, per slot count (this window)")
+        print("  Stratified on purpose: if one arm meets more 8-slot groups than")
+        print("  the other, a pooled median moves for that reason and not the cache.")
+        print("\n  slots  groups A/B   median A/B us   uploads/group A/B   saving/upload")
+        total_saving_us = 0.0
+        for k in range(TXT_SLOTS):
+            ga = G1[0][k] - G0[0][k]
+            gb = G1[1][k] - G0[1][k]
+            if ga < 30 or gb < 30:
+                continue
+            ha = [H1[0][k][b] - H0[0][k][b] for b in range(TXT_BINS)]
+            hb = [H1[1][k][b] - H0[1][k][b] for b in range(TXT_BINS)]
+            ma, mb = uct_quantile(ha, 0.5), uct_quantile(hb, 0.5)
+            ua = (U1[0][k] - U0[0][k]) / float(ga)
+            ub = (U1[1][k] - U0[1][k]) / float(gb)
+            if ma is None or mb is None or ua - ub <= 0.01:
+                continue
+            per = (ma - mb) / (ua - ub)
+            # Steady state runs arm B everywhere, so the saving is arm B's group
+            # rate times what each removed upload is worth.
+            total_saving_us += (ga + gb) * (ua - ub) * per
+            print("  %5d  %5d/%-5d  %6.1f/%-6.1f  %8.3f/%-8.3f  %+8.3f us"
+                  % (k, ga, gb, ma, mb, ua, ub, per))
+        if nframes and total_saving_us:
+            print("\n  weighted over strata: %.2f ms/frame in a steady build"
+                  % (total_saving_us / nframes / 1000.0))
+            print("  (groups from both arms, because a steady build runs the cache"
+                  " in every frame)")
 
     if u1:
         # EVERYTHING here is windowed, and it has to be: the histogram was
