@@ -1,4 +1,28 @@
 #!/bin/sh
+# WHAT THIS FILE IS NOW, 2026-08-23
+#
+# The question below was ANSWERED and the header is kept as its record, not as
+# instructions. Async collapsed the wait AND the paired frame time moved, so the
+# dmabuf presenter was built, measured at -9.45 ms/frame on FINALPLAY8 and shipped
+# as FINALPLAY9.
+#
+# The binary this defaulted to, winewayland_presentab1.so, no longer exists -- it
+# was cleared off the device during the FINALPLAY14 cleanup and it is in no
+# repository and on no build host, so it cannot come back. It does not need to:
+# the ABBA machinery it carried is in the PRODUCTION presenter, which now supplies
+# the default here. What changes is that MGS2_PRESENT_AB_MODE is no longer
+# optional reading, because the arms differ per mode:
+#
+#   0 (default)  flips MGS2_GL_ASYNC          -- the original question, below.
+#                Needs MGS2_GL_DMABUF=0 to mean anything: the code forces dmabuf
+#                off for any nonzero mode but not for this one.
+#   1            flips the dmabuf presenter against the shm one -- this is what
+#                produced the -9.45 ms result, and the arm names in the log read
+#                "async" for dmabuf and "sync" for shm.
+#   2            flips wined3d's FFP texture-matrix uniform cache, via TXM1.
+#
+# MGS2_GL_READ_SPLIT and the MGS2_GL_PBO=0 requirement below apply to mode 0 only.
+#
 # Present gate: does removing the GPU wait from the frame make the frame shorter?
 #
 # WHY THIS RUN EXISTS
@@ -64,7 +88,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # time. The run is still verified -- a mismatch is reported instead of ignored.
 export MGS2_RESEARCH_RUN=1
 
-MGS2_WAYLAND_SO="${MGS2_WAYLAND_SO:-winewayland_presentab1.so}" \
+MGS2_WAYLAND_SO="${MGS2_WAYLAND_SO:-winewayland_dmabuf_prod.so}" \
 MGS2_PRESENT_AB="${MGS2_PRESENT_AB:-64}" \
 MGS2_PRESENT_AB_SETTLE="${MGS2_PRESENT_AB_SETTLE:-2}" \
 MGS2_GL_READ_SPLIT=1 \
