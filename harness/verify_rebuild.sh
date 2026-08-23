@@ -21,6 +21,10 @@ WINE_LIVE="${WINE_SRC:-/mnt/data/holden/mgs/recovered-session/wine-11.0}"
 TARBALL="${WINE_TARBALL:-/mnt/data/holden/mgs/recovered-session/wine-11.0.tar.xz}"
 BOX86_LIVE="${BOX86_SRC:-/mnt/data/holden/mgs/box86-src}"
 LOCK="$REPO/device/FINALPLAY.lock"
+# The cross toolchain is not on a login PATH; --build silently produced an empty
+# hash the first time for exactly that reason.
+MINGW="${MINGW_BIN:-/mnt/data/holden/mgs/recovered-session/mingw/bin}"
+[ -d "$MINGW" ] && PATH="$MINGW:$PATH" && export PATH
 WORK="${WORK_DIR:-/mnt/data/holden/mgs/_repro}"
 fail=0
 lock() { awk -v k="$1" '$1==k {print $2}' "$LOCK"; }
@@ -69,7 +73,9 @@ if [ "${1:-}" = "--build" ]; then
         && make -j8 dlls/wined3d/i386-windows/wined3d.dll >/dev/null 2>&1 \
         && python3 "$REPO/harness/pe_normalised_sha.py" \
                 dlls/wined3d/i386-windows/wined3d.dll ) > "$WORK/built.txt" 2>&1
-    got=$(cut -d" " -f1 < "$WORK/built.txt")
+    got=$(awk 'NF==2 {print $1}' "$WORK/built.txt" | tail -1)
+    [ -n "$got" ] || { echo "       (build produced no hash; last output below)";
+                       tail -3 "$WORK/built.txt" | sed 's/^/       /'; }
     want=$(lock wined3d_normalised_sha256_of_current_tree)
     if [ "$got" = "$want" ]; then echo "ok     rebuild reproduces the locked normalised hash"
     else echo "FAIL   rebuilt $got, lock says $want"; fail=1; fi
