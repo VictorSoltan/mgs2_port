@@ -1,4 +1,4 @@
-# MGS2 Substance on the Anbernic RG353VS — FINALPLAY11
+# MGS2 Substance on the Anbernic RG353VS — FINALPLAY12
 
 Promoted 23 August 2026. The chain, because it is now three deep and the
 sections below are in reverse order:
@@ -7,7 +7,15 @@ sections below are in reverse order:
 FINALPLAY9   P75A separable stage selector + dmabuf presenter   22 Aug
 FINALPLAY10  + native ARM dither converter                      23 Aug
 FINALPLAY11  + FFP light-colour cache, + PBC machinery (off)    23 Aug
+FINALPLAY12  no renderer change: the first release with provenance 23 Aug
 ```
+
+FINALPLAY12 changes nothing a player can see. It exists because FINALPLAY11's
+binaries could not be traced to any recorded source, and this is the first pair
+produced by `harness/make_release.sh` from the pinned bases -- built twice, same
+hashes, manifest generated from those exact bytes. It also drops the P80
+texture-matrix cache, which was measured at 0.34 ms on a 105 ms combat frame and
+removed on that number.
 
 Each release keeps everything the one above it added; only the box86/WineD3D
 pair is rebuilt. The full account of how all three were arrived at, including
@@ -23,17 +31,22 @@ minutes, and the launcher was then exercised through the ordinary entry point
 hand-built command line.
 
 ```text
-box86      box86-fp11                   (MGS2_BOX86_NATIVE_DITHER=1)
-           ea3e367d71703039bd4a10b32e34b6c6f331b104f4316bc7180dfbf22052d120
-wined3d    wined3d_fp11.dll
-           b35529b0ba4570bac910763f4c0180bac61d3648ab3a4033e718de5e31d02706
+box86      box86-fp12                   (MGS2_BOX86_NATIVE_DITHER=1)
+           3318f02ae840affc06d1f2790a4b38e65b1c4ac483f195482db0107367fdbcef
+wined3d    wined3d_fp12.dll
+           0d5db0a7fbea784ff6b2c378d2daab5dfbc9138d194b77da65bf02591f0bfcdf
 presenter  winewayland_dmabuf_prod.so   (MGS2_GL_DMABUF=1, SYNC=3) -- unchanged
            51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169
 island     0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41
 ```
 
-`launch-play.sh` now hashes the three MOUNTED files against those values before
-it starts the game and refuses to run if any differs, saying which. Overrides
+Both are byte-reproducible: building the same sources twice gives the same
+hashes, once `-Wl,--no-insert-timestamp` and `SOURCE_DATE_EPOCH` are pinned. The
+first pinned three bytes of PE header, the second twenty-three bytes that
+followed `__DATE__`/`__TIME__` in `src/build_info.c`.
+
+`launch-play.sh` hashes the three MOUNTED files against `FINALPLAY.manifest`
+before it starts the game and refuses to run if any differs, saying which. Overrides
 downgrade it to a notice, because that is how experiments are run. The class-B
 registry made this worth automating: it maps guest WineD3D RVAs, so a mismatched
 pair does not fail cleanly, and "almost FINALPLAY10" is the worst thing to

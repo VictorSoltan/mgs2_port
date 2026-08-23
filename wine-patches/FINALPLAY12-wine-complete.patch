@@ -1,4 +1,4 @@
-FINALPLAY11 -- the COMPLETE WineD3D-side delta, as one verifiable patch.
+FINALPLAY12 -- the COMPLETE WineD3D-side delta, as one verifiable patch.
 
 WHY THIS EXISTS ALONGSIDE THE NUMBERED PATCHES
 
@@ -11,7 +11,7 @@ After the 53 that do apply, 25 files still differ from the production tree,
 among them glsl_shader.c, winewayland.drv/opengl.c, swapchain.c, context_gl.c,
 cs.c and device.c.
 
-So until this file existed, FINALPLAY11's WineD3D could not be rebuilt from any
+So until this file existed, FINALPLAY12's WineD3D could not be rebuilt from any
 recorded source. Keep reading the numbered patches for WHY each change was made;
 use this one to reproduce WHAT was built.
 
@@ -26,7 +26,7 @@ BASE
 REPRODUCE
 
   tar xf wine-11.0.tar.xz
-  cd wine-11.0 && patch -p1 < FINALPLAY11-wine-complete.patch
+  cd wine-11.0 && patch -p1 < FINALPLAY12-wine-complete.patch
 
 --- a/dlls/d3d8/buffer.c
 +++ b/dlls/d3d8/buffer.c

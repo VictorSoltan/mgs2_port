@@ -1,14 +1,8 @@
-# FINALPLAY11 -- the three files whose identity the launcher checks at startup.
-#
-# One truth, not two. The hashes used to be hardcoded inside launch-play.sh AND
-# listed in FINAL_PRODUCTION.sha256, and the launcher was changed without the
-# list: the manifest recorded 381f2350 for a script that hashed ff7be199. Now
-# the launcher reads this file, so the pair cannot drift apart.
-#
-# Columns: mounted path, sha256, the file in the game directory it comes from.
-# The MOUNTED path is what gets hashed -- what was asked for is not evidence of
-# what is actually in place, and the class-B registry makes a half-updated pair
-# worse than an outright failure to start.
-/usr/bin/box86	ea3e367d71703039bd4a10b32e34b6c6f331b104f4316bc7180dfbf22052d120	box86-fp11
-/usr/lib/wine/i386-windows/wined3d.dll	b35529b0ba4570bac910763f4c0180bac61d3648ab3a4033e718de5e31d02706	wined3d_fp11.dll
+# fp12, produced by harness/make_release.sh -- do not hand-edit.
+# Columns: mounted path, sha256, the file in the game directory.
+# The MOUNTED file is what the launcher hashes: what was asked for is
+# not evidence of what is in place, and a half-updated class-B pair
+# does not fail cleanly.
+/usr/bin/box86	3318f02ae840affc06d1f2790a4b38e65b1c4ac483f195482db0107367fdbcef	box86-fp12
+/usr/lib/wine/i386-windows/wined3d.dll	0d5db0a7fbea784ff6b2c378d2daab5dfbc9138d194b77da65bf02591f0bfcdf	wined3d_fp12.dll
 /usr/lib/wine/i386-unix/winewayland.so	51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169	winewayland_dmabuf_prod.so

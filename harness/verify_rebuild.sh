@@ -31,6 +31,9 @@ LOCK="$REPO/device/FINALPLAY.lock"
 # The cross toolchain is not on a login PATH; --build silently produced an empty
 # hash the first time for exactly that reason.
 MINGW="${MINGW_BIN:-/mnt/data/holden/mgs/recovered-session/mingw/bin}"
+# Box86's build embeds __DATE__/__TIME__ via src/build_info.c; without this the
+# ELF differs by 23 bytes between two builds of the same source.
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1756000000}"
 [ -d "$MINGW" ] && PATH="$MINGW:$PATH" && export PATH
 WORK="${WORK_DIR:-/mnt/data/holden/mgs/_repro}"
 fail=0
@@ -127,18 +130,26 @@ else echo "FAIL   the complete box86 patch does not apply to $base"; fail=1; fi
 
 if [ "${1:-}" = "--build" ]; then
     echo
-    echo "== wined3d rebuild, normalised =="
+    echo "== wined3d rebuild, exact bytes =="
+    # The deterministic flags are not optional here: without them two builds of
+    # identical sources differ in the PE TimeDateStamp and checksum, and the
+    # comparison below can never pass. They live in the lock so the release
+    # pipeline and this check cannot drift apart.
     ( cd "${WINE_BUILD:-/mnt/data/holden/mgs/recovered-session/build-wine-i386}" \
         && touch "$WINE_LIVE/dlls/wined3d/glsl_shader.c" \
-        && make -j8 dlls/wined3d/i386-windows/wined3d.dll >/dev/null 2>&1 \
-        && python3 "$REPO/harness/pe_normalised_sha.py" \
-                dlls/wined3d/i386-windows/wined3d.dll ) > "$WORK/built.txt" 2>&1
+        && make -j8 i386_LDFLAGS="$(grep '^wined3d_ldflags' "$LOCK" | cut -d' ' -f2-)" \
+                dlls/wined3d/i386-windows/wined3d.dll >/dev/null 2>&1 \
+        && sha256sum dlls/wined3d/i386-windows/wined3d.dll ) > "$WORK/built.txt" 2>&1
     got=$(awk 'NF==2 {print $1}' "$WORK/built.txt" | tail -1)
-    [ -n "$got" ] || { echo "       (build produced no hash; last output below)";
-                       tail -3 "$WORK/built.txt" | sed 's/^/       /'; }
-    want=$(lock wined3d_normalised_sha256_of_current_tree)
-    if [ "$got" = "$want" ]; then echo "ok     rebuild reproduces the locked normalised hash"
-    else echo "FAIL   rebuilt $got, lock says $want"; fail=1; fi
+    want=$(lock wined3d_fp12_sha256)
+    if [ -z "$got" ]; then
+        echo "FAIL   the build produced no hash; last output below"; fail=1
+        tail -3 "$WORK/built.txt" | sed 's/^/       /'
+    elif [ "$got" = "$want" ]; then
+        echo "ok     rebuild reproduces the shipped wined3d byte for byte"
+    else
+        echo "FAIL   rebuilt $got, the shipped binary is $want"; fail=1
+    fi
 fi
 
 echo
