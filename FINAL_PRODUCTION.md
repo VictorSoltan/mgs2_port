@@ -12,8 +12,9 @@ FINALPLAY11  + FFP light-colour cache, + PBC machinery (off)    23 Aug
 Each release keeps everything the one above it added; only the box86/WineD3D
 pair is rebuilt. The full account of how all three were arrived at, including
 the measurements that closed branches and the two that were wrong first, is
-`docs/briefs/MGS2_FREEZE_AND_PROVENANCE_2026-08-23.md`. FINALPLAY9's record follows below the other two and is
-unchanged.
+`docs/briefs/MGS2_FREEZE_AND_PROVENANCE_2026-08-23.md`.
+
+FINALPLAY9's record follows below the other two and is unchanged.
 
 FINALPLAY9 was promoted 22 August 2026, replacing FINALPLAY6's `island41` /
 `p56` pair. The owner authorised promotion after playing the exact binaries for 144
