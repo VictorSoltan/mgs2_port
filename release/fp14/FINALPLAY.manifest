@@ -1,0 +1,19 @@
+# fp14, produced by harness/make_release.sh -- do not hand-edit.
+# Columns: mounted path, sha256, the file in the game directory.
+# The MOUNTED file is what the launcher hashes: what was asked for is
+# not evidence of what is in place, and a half-updated class-B pair
+# does not fail cleanly.
+# Every bind mount in device/launch-play.sh is here, generated from its
+# own mount_bind lines. It used to be three of eleven, and the launcher
+# asserts the count so the two cannot drift apart again.
+/usr/bin/box86	e227b39f151e99efd75f353f1a521cb2d82cb0bb82cb384a4f28b70b3a3556ba	box86-fp14
+/usr/lib/wine/i386-unix/win32u.so	6acdbbaeb8b88ba64fc160a1faf865ae304108705c38bccadaf6bc538f2be63a	win32u_glfuncs3.so
+/usr/lib/wine/i386-unix/winewayland.so	51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169	winewayland_dmabuf_prod.so
+/usr/lib/wine/i386-unix/opengl32.so	9340f708462a29debffec37fe493ad3044afc903ffb6466ddf1f30d46da628af	opengl32_finalplay_sso.so
+/usr/lib/wine/i386-windows/wined3d.dll	f266e9febdc2dd98a277bfe785aec949b929acaae606e0eb996c9c9bbdd5f341	wined3d_fp14.dll
+/usr/lib/wine/i386-windows/user32.dll	4f8b82c7a9dd0fab03b699aa8948f6c76852801f17a096cff22384dc2997fe4e	user32_peek1.dll
+/usr/lib/wine/i386-windows/d3d8.dll	841ff73c2b99fd6ca2ee00b0796abbb9e0d38b584cb298cb9860afbee9ea1de0	d3d8_finalplay3_nocullcache.dll
+/usr/lib/wine/i386-windows/dmsynth.dll	b4ec2cd09f26a670eb8206d708f864597d2acde84ff1788732574c116b6baed2	dmsynth_p34_interp_reset.dll
+/usr/lib/wine/i386-windows/dsound.dll	302eff548429c6b87aed3931bb0bb1acd4c4c8a130a96ae7025612c2d7eb999c	dsound_p36_native_fir_target.dll
+/usr/lib/wine/i386-windows/dmime.dll	ce3e3f14a62a190966183802c871a5a26a7a3a828c7f23b4d6f0ab9f90ace877	dmime_transition1.dll
+/usr/lib/wine/i386-windows/dmusic.dll	1fe0a571503bdd17166474838b83cf54c0f56fe5b44da371ffeb4123ebc8208e	dmusic_shared_lifetime1.dll

@@ -103,7 +103,11 @@ plus the shared SoC thermal budget, not memory bandwidth.
 AGENTS.md                 entry point for anyone, human or model, picking this up
 docs/DEVICE.md            how to run, measure and stop the console safely
 device/launch-play.sh     fixed FINALPLAY launcher: final DLL bind-mounts,
-                          1992 MHz, audio, presentation and emergency guard
+                          1992 MHz, audio, presentation and emergency guard.
+                          Rejects binary overrides and hashes every one of the
+                          eleven files it mounts against FINALPLAY.manifest
+device/launch-research.sh the deliberate opt-in for a run that substitutes a
+                          binary, since launch-play.sh now refuses to
 device/launch.sh          archival laboratory launcher and A/B harness
 device/MGS2-Substance.sh  minimal menu entry for launch-play.sh
 harness/box86_guest_profile.py  resolve Box86 JIT perf samples through a bounded

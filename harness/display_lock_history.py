@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""Read the bounded Box86 history for production win32u's display_lock."""
+"""Read the bounded Box86 history for production win32u's display_lock.
+
+The v1 ring answered "is this thread waiting on a mutex it already owns" -- owner
+== tid with lock == 2 -- and that is where FINALPLAY13 stopped.  It is not enough
+to fix anything: a recursive ATTEMPT and an ordinary contended ATTEMPT produce the
+same record, and the sixteen-word stack window ran out about two frames past the
+pthread wrapper, so the win32u function that took the lock FIRST was never named.
+
+v2 carries the missing half.  Each record now names the acquisition the same
+thread has not released yet (owner_acquire_seq) and hashes its call chain, and the
+window is 64 words.  So this prints the pair -- the acquisition that is still
+standing, and the call that walked back in -- which is the thing a surgical
+_locked()/_nolock() split needs and a recursive mutex would paper over.
+
+Both versions are read, because the rollback binaries carry v1.
+"""
 
 import argparse
 import pathlib
@@ -9,11 +24,11 @@ import subprocess
 
 
 MAGIC = 0x314C444D  # MDL1
-CAPACITY = 256
-STACK_WORDS = 16
 HEADER = struct.Struct("<10I")
-RECORD = struct.Struct("<25I")
 EVENTS = {1: "ATTEMPT", 2: "ACQUIRED", 3: "RELEASED"}
+# Fixed words before stack[], per version.  v2 inserts owner_acquire_seq and
+# chain_hash between result and stack.
+FIXED_WORDS = {1: 9, 2: 11}
 
 
 def symbol_value(path, name):
@@ -88,18 +103,49 @@ def read_stable(mem, address, size):
 
 
 def addr2line(path, rvas):
+    """Function names for win32u RVAs, or an empty map.
+
+    The device has readelf and NOT addr2line, and this used to die on that with a
+    FileNotFoundError -- at the one moment it matters, with a frozen game holding
+    the evidence and a pid that will not survive a reinstall. Nothing here needs
+    symbols: the RECURSIVE verdict comes from owner_acquire_seq, and a bare
+    win32u+0x... resolves on the build host afterwards. So this degrades.
+    """
     if not rvas:
         return {}
     ordered = sorted(rvas)
-    output = subprocess.check_output(
-        ["addr2line", "-e", path, "-f", "-C", *[hex(value) for value in ordered]], text=True
-    ).splitlines()
+    try:
+        output = subprocess.check_output(
+            ["addr2line", "-e", path, "-f", "-C", *[hex(value) for value in ordered]],
+            text=True).splitlines()
+    except (FileNotFoundError, subprocess.CalledProcessError) as error:
+        print(f"note: no symbols ({error.__class__.__name__}); addresses print as "
+              f"win32u+0x... and resolve on the build host with")
+        print(f"      addr2line -e <win32u.so> -f -C " +
+              " ".join(hex(v) for v in ordered[:6]) +
+              (" ..." if len(ordered) > 6 else ""))
+        return {}
     result = {}
     for index, rva in enumerate(ordered):
         function = output[2 * index] if 2 * index < len(output) else "??"
         location = output[2 * index + 1] if 2 * index + 1 < len(output) else "??:0"
         result[rva] = f"{function} ({location})"
     return result
+
+
+class Record:
+    """One ring entry, with the version differences already flattened away."""
+
+    def __init__(self, words, version):
+        fixed = FIXED_WORDS[version]
+        (self.sequence, self.tid, self.event, self.mutex,
+         self.caller, self.stack_pointer, self.lock, self.owner,
+         self.result) = words[:9]
+        if version >= 2:
+            self.owner_acquire_seq, self.chain_hash = words[9], words[10]
+        else:
+            self.owner_acquire_seq, self.chain_hash = 0, 0
+        self.stack = words[fixed:]
 
 
 def main():
@@ -110,24 +156,31 @@ def main():
     args = parser.parse_args()
 
     history_address = runtime_address(args.pid, args.box86, "mgs2_display_lock_history")
-    size = HEADER.size + CAPACITY * RECORD.size
     with open(f"/proc/{args.pid}/mem", "rb", buffering=0) as mem:
-        data = read_stable(mem, history_address, size)
-
-    header = HEADER.unpack_from(data)
-    expected_words = size // 4
-    if header[:4] != (MAGIC, 1, expected_words, (~MAGIC & 0xFFFFFFFF)):
-        raise RuntimeError(f"bad history header: {header[:4]}")
-    if header[5:7] != (CAPACITY, RECORD.size // 4):
-        raise RuntimeError(f"bad history layout: capacity={header[5]} words={header[6]}")
+        header = HEADER.unpack(read_exact(mem, history_address, HEADER.size))
+        magic, version, size_words, signature = header[:4]
+        if magic != MAGIC or signature != (~MAGIC & 0xFFFFFFFF):
+            raise RuntimeError(f"bad history header: {header[:4]}")
+        if version not in FIXED_WORDS:
+            raise RuntimeError(f"history version {version} is not one this reader knows")
+        capacity, record_words = header[5], header[6]
+        stack_words = record_words - FIXED_WORDS[version]
+        if stack_words <= 0 or HEADER.size // 4 + capacity * record_words != size_words:
+            raise RuntimeError(
+                f"bad history layout: capacity={capacity} record_words={record_words} "
+                f"size_words={size_words}")
+        record_struct = struct.Struct(f"<{record_words}I")
+        data = read_stable(mem, history_address, size_words * 4)
 
     win32u_base = mapped_base(args.pid, args.win32u)
     win32u_maps = mappings(args.pid, args.win32u)
     display_address = win32u_base + symbol_value(args.win32u, "display_lock")
     session_address = win32u_base + symbol_value(args.win32u, "session_lock")
     target, target_caller = header[8], header[9]
-    print(f"history @ {history_address:#x}: enabled={header[4]} writes={header[7]}")
-    print(f"win32u base {win32u_base:#x}: display_lock={display_address:#x} session_lock={session_address:#x}")
+    print(f"history @ {history_address:#x}: v{version} enabled={header[4]} writes={header[7]} "
+          f"capacity={capacity} stack_words={stack_words}")
+    print(f"win32u base {win32u_base:#x}: display_lock={display_address:#x} "
+          f"session_lock={session_address:#x}")
     print(f"captured target={target:#x} caller={target_caller:#x}")
     if target:
         if target != display_address:
@@ -135,41 +188,80 @@ def main():
         print("identity: MATCH display_lock; session_lock is excluded")
     else:
         print("identity: target call site has not executed yet")
+    if version < 2:
+        print("note: v1 ring -- no owner_acquire_seq, so a recursive ATTEMPT cannot be")
+        print("      distinguished from ordinary contention and the first acquirer is unnamed")
+
+    def in_win32u(value):
+        return any(start <= value < end for start, end, _offset in win32u_maps)
 
     records = []
     win32u_addresses = set()
-    for slot in range(CAPACITY):
-        record = RECORD.unpack_from(data, HEADER.size + slot * RECORD.size)
-        if not record[0]:
+    for slot in range(capacity):
+        words = record_struct.unpack_from(data, HEADER.size + slot * record_struct.size)
+        if not words[0]:
             continue
+        record = Record(words, version)
         records.append(record)
-        for value in (record[4], *record[9:]):
-            if any(start <= value < end for start, end, _offset in win32u_maps):
+        for value in (record.caller, *record.stack):
+            if in_win32u(value):
                 win32u_addresses.add(value - win32u_base)
-    records.sort(key=lambda item: item[0])
-    if len(records) > CAPACITY:
-        records = records[-CAPACITY:]
+    records.sort(key=lambda item: item.sequence)
+    by_sequence = {record.sequence: record for record in records}
     symbols = addr2line(args.win32u, win32u_addresses)
 
-    self_waits = 0
-    for record in records:
-        sequence, tid, event, mutex, caller, stack_pointer, lock, owner, result = record[:9]
-        suffix = " SELF-WAIT" if event == 1 and lock == 2 and owner == tid else ""
-        if suffix:
-            self_waits += 1
-        caller_rva = caller - win32u_base if any(start <= caller < end for start, end, _ in win32u_maps) else None
-        caller_text = f" win32u+{caller_rva:#x} {symbols.get(caller_rva, '')}" if caller_rva is not None else ""
-        print(f"{sequence:8d} tid={tid:<6d} {EVENTS.get(event, str(event)):<8s} "
-              f"mutex={mutex:#x} lock={lock} owner={owner} result={result:#x} "
-              f"eip={caller:#x}{caller_text}{suffix}")
-        stack_items = []
-        for value in record[9:]:
+    def chain_lines(record, indent):
+        """Only the words that land inside win32u -- the rest of the window is
+        saved registers and locals, and printing 64 of those buries the four that
+        matter. Symbols are added when there are any."""
+        items = []
+        for offset, value in enumerate(record.stack):
+            if not in_win32u(value):
+                continue
             rva = value - win32u_base
-            if rva in symbols:
-                stack_items.append(f"{value:#x}=win32u+{rva:#x} {symbols[rva]}")
-        if stack_items:
-            print(f"         esp={stack_pointer:#x}: " + " | ".join(stack_items))
-    print(f"verdict witness: self_wait_attempts={self_waits}")
+            name = f" {symbols[rva]}" if rva in symbols else ""
+            items.append(f"{indent}  esp+{offset * 4:<4d} {value:#x} = win32u+{rva:#x}{name}")
+        return items
+
+    self_waits = 0
+    recursive = []
+    for record in records:
+        caller_rva = record.caller - win32u_base if in_win32u(record.caller) else None
+        caller_text = (f" win32u+{caller_rva:#x} {symbols.get(caller_rva, '')}"
+                       if caller_rva is not None else "")
+        flags = ""
+        if record.event == 1 and record.lock == 2 and record.owner == record.tid:
+            self_waits += 1
+            flags += " SELF-WAIT"
+        held = by_sequence.get(record.owner_acquire_seq)
+        if record.event == 1 and record.owner_acquire_seq:
+            # The verdict this reader exists for.  The thread is asking for a
+            # lock it is recorded as still holding, and both call chains are here.
+            flags += f" RECURSIVE, standing on ACQUIRED #{record.owner_acquire_seq}"
+            if held is None:
+                flags += " (aged out of the ring)"
+            recursive.append(record)
+        print(f"#{record.sequence:<8d} tid={record.tid:<6d} {EVENTS.get(record.event, str(record.event)):<8s} "
+              f"mutex={record.mutex:#x} lock={record.lock} owner={record.owner} "
+              f"result={record.result:#x} chain={record.chain_hash:#010x} "
+              f"eip={record.caller:#x}{caller_text}{flags}")
+        for line in chain_lines(record, "        "):
+            print(line)
+        if record.event == 1 and record.owner_acquire_seq and held is not None:
+            print(f"        --- still-held ACQUIRED #{held.sequence} took it at "
+                  f"eip={held.caller:#x}, chain={held.chain_hash:#010x} ---")
+            for line in chain_lines(held, "        "):
+                print(line)
+
+    print(f"verdict witness: self_wait_attempts={self_waits} recursive_attempts={len(recursive)}")
+    if recursive:
+        print("The pair above IS the fix site: split the function that appears in the")
+        print("RECURSIVE chain but not in the still-held one into a _locked() variant and")
+        print("call that from inside the lock. Do not make display_lock recursive -- the")
+        print("hang becomes a read of gpus/sources/monitors while they are half-rebuilt.")
+    elif version >= 2:
+        print("No recursive attempt in the ring. Either the freeze is not this, or the")
+        print("chain is longer than the ring: check whether writes exceeds capacity.")
 
 
 if __name__ == "__main__":

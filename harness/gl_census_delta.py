@@ -38,7 +38,8 @@ LGT_MAGIC = 0x3154474C      # 'LGT1' -- FFP light uniform redundancy simulator
 LCA_MAGIC = 0x3141434C      # 'LCA1' -- the real FFP light-colour cache
 UCT_MAGIC = 0x31544355      # 'UCT1' -- measured cost of one GL call on this stack
 FRM_MAGIC = 0x314D5246      # 'FRM1' -- presented frames, counted in the presenter
-PSW_MAGIC = 0x31575350      # 'PSW1' -- the present-wait recovery counters
+PSW_MAGIC = 0x31575350      # 'PSW1' -- FINALPLAY13's present-wait recovery counters
+PSW2_MAGIC = 0x32575350     # 'PSW2' -- FINALPLAY14's frame-latency semaphore
 TXT_MAGIC = 0x31545854      # 'TXT1' -- texture-matrix group cost, by arm and slot count
 TXT_SLOTS = 9
 TXT_BINS = 40
@@ -56,6 +57,7 @@ ATTRIB_MAGIC = 0x31485341   # 'ASH1' -- the real vertex-attribute shadow (closed
 TXM_MAGIC = 0x314D5854      # 'TXM1' -- removed; see above
 TXM_TEX = 8
 ASP_MAGIC = 0x31505341      # 'ASP1' -- the separable stage selector
+APS_MAGIC = 0x31535041      # 'APS1' -- P81, the active-program shadow behind it
 FIELDS = ("ext_calls draw_state_applies state_apply_callbacks uniform_loads "
           "program_selects texture_binds sampler_applies shader_resource_binds "
           "fbo_checks").split()
@@ -205,6 +207,66 @@ def read_asp_stats(pid):
                 d = dict(zip(keys, w[4:]))
                 d["where"] = (name or "(anon)").split("/")[-1]
                 out.append(d)
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_aps_stats(pid):
+    """APS1 records, one per copy of glsl_shader.c, NOT summed.
+
+    Which copy does the work is the first question this candidate has to answer,
+    because only one of them can follow the ABBA arm: mgs2_texmatrix_ab_present()
+    runs on the PE side, and the present path is not a routed island entry, so
+    box86's native copy sits at its static enabled=0 for a whole unpinned run.
+    Summing the two would hide exactly that. The report prints each record and
+    the total.
+    """
+    pat = struct.pack("<IIII", APS_MAGIC, 1, 13, (~APS_MAGIC) & 0xFFFFFFFF)
+    keys = ("enabled attempted redundant skipped executed vs_attempted "
+            "ps_attempted verified mismatch").split()
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                w = struct.unpack("<13I", blob[i:i + 52])
+                d = dict(zip(keys, w[4:]))
+                d["where"] = (name or "(anon)").split("/")[-1]
+                out.append(d)
+                i = blob.find(pat, i + 4)
+    return out
+
+
+def read_psw2_stats(pid):
+    """PSW2: acquires, releases, blocking_waits, longest_wait_ms.
+
+    FINALPLAY14 replaced the present event with a per-swapchain semaphore, and
+    this is what the two halves look like from outside. acquires - releases is how
+    many presents the producer is ahead and cannot exceed max_frame_latency;
+    parked there with releases frozen is the CS thread wedged inside a handler,
+    which is the freeze captured on 2026-08-23. There is no lost-wake counter
+    because a counting semaphore has no wake to lose.
+    """
+    pat = struct.pack("<IIII", PSW2_MAGIC, 2, 8, (~PSW2_MAGIC) & 0xFFFFFFFF)
+    out = []
+    with open("/proc/%d/mem" % pid, "rb", 0) as mem:
+        for lo, hi, name in readable_regions(pid):
+            try:
+                mem.seek(lo)
+                blob = mem.read(hi - lo)
+            except (OSError, ValueError, OverflowError):
+                continue
+            i = blob.find(pat)
+            while i >= 0:
+                w = struct.unpack("<8I", blob[i:i + 32])[4:]
+                out.append({"where": (name or "(anon)").split("/")[-1],
+                            "acquires": w[0], "releases": w[1],
+                            "blocking_waits": w[2], "longest_wait_ms": w[3]})
                 i = blob.find(pat, i + 4)
     return out
 
@@ -541,6 +603,7 @@ def main():
     k0 = read_lca_stats(a.pid)
     u0 = read_uct_stats(a.pid)
     s0 = read_asp_stats(a.pid)
+    q0 = read_aps_stats(a.pid)
     time.sleep(a.seconds)
     after = sample(a.pid, addrs)
     eafter = sample_ext(a.pid, eaddrs) if eaddrs else {}
@@ -552,10 +615,12 @@ def main():
     k1 = read_lca_stats(a.pid)
     u1 = read_uct_stats(a.pid)
     s1 = read_asp_stats(a.pid)
+    q1 = read_aps_stats(a.pid)
     f1 = frames(a.log) if a.log else None
     r1 = read_frm_stats(a.pid)
     x1 = read_txt_stats(a.pid)
     w1 = read_psw_stats(a.pid)
+    v0 = read_psw2_stats(a.pid)
 
     # FRM1 first. The log-derived count is a step function -- the presenter emits
     # one line per N frames -- so a window that spans k lines always reports k*N
@@ -819,6 +884,68 @@ def main():
                      (avs + aps) / nframes))
         print("  mirror self-check MISSED (both must be 0): VS %d, PS %d -- %s"
               % (mvs, mps, "PASS" if not (mvs or mps) else "FAIL, run is void"))
+
+    if v0:
+        print("\nPRESENT FRAME-LATENCY SEMAPHORE (PSW2, %d record%s)"
+              % (len(v0), "" if len(v0) == 1 else "s"))
+        for r in v0:
+            inflight = r["acquires"] - r["releases"]
+            print("  %-28s acquires %8d  releases %8d  in flight %d"
+                  % (r["where"], r["acquires"], r["releases"], inflight))
+            print("  %-28s producer had to block %d time%s, longest %d ms"
+                  % ("", r["blocking_waits"],
+                     "" if r["blocking_waits"] == 1 else "s", r["longest_wait_ms"]))
+            if inflight < 0:
+                print("  %-28s IMPOSSIBLE: more releases than acquires -- a token was"
+                      " invented" % "")
+            elif inflight > 3:
+                print("  %-28s in flight above any plausible max_frame_latency;"
+                      " read it again before believing it" % "")
+
+    if q1:
+        # Match records by where they live, so the PE DLL and the island's native
+        # copy are never averaged into one number.
+        def by_where(rs):
+            return {r["where"]: r for r in rs}
+        b, e = by_where(q0), by_where(q1)
+        print("\nP81 ACTIVE-PROGRAM SHADOW (%d record%s)"
+              % (len(q1), "" if len(q1) == 1 else "s"))
+        tot = dict.fromkeys(("attempted", "redundant", "skipped", "executed",
+                             "verified", "mismatch"), 0)
+        for where in sorted(e):
+            cur, prev = e[where], b.get(where)
+            d = {k: cur[k] - (prev[k] if prev else 0) for k in tot}
+            for k in tot:
+                tot[k] += d[k]
+            share = (100.0 * d["redundant"] / d["attempted"]) if d["attempted"] else 0.0
+            print("  %-28s enabled=%d attempted %7d  redundant %7d (%.1f%%)  "
+                  "skipped %7d  executed %7d"
+                  % (where, cur["enabled"], d["attempted"], d["redundant"], share,
+                     d["skipped"], d["executed"]))
+        if len(q1) > 1:
+            share = (100.0 * tot["redundant"] / tot["attempted"]) if tot["attempted"] else 0.0
+            print("  %-28s %11s attempted %7d  redundant %7d (%.1f%%)  "
+                  "skipped %7d  executed %7d"
+                  % ("TOTAL", "", tot["attempted"], tot["redundant"], share,
+                     tot["skipped"], tot["executed"]))
+        idle = [w for w in e if e[w]["attempted"] == (b[w]["attempted"] if w in b else 0)]
+        if idle and len(q1) > 1:
+            print("  NOTE: no selections at all in %s -- that copy did not run this"
+                  % ", ".join(idle))
+            print("        window, so the ABBA can measure the other one alone")
+        if nframes and tot["attempted"]:
+            print("  per frame: reaching P81 %.1f, of which redundant %.1f, skipped %.1f"
+                  % (tot["attempted"] / nframes, tot["redundant"] / nframes,
+                     tot["skipped"] / nframes))
+            # P75A priced this exact call at 14.80 ms / 1380 calls on this stack.
+            print("  at P75A's measured 10.7 us/call that is up to %.2f ms/frame"
+                  % (10.7e-3 * tot["redundant"] / nframes))
+        if tot["verified"]:
+            print("  invariant check: %d read-backs of GL_ACTIVE_PROGRAM, %d mismatches"
+                  " -- %s" % (tot["verified"], tot["mismatch"],
+                              "PASS" if not tot["mismatch"] else "FAIL, run is void"))
+        else:
+            print("  invariant NOT checked this run: set MGS2_GL_APS_VERIFY=1 once")
 
     if t1:
         print("\nFFP TEXTURE-MATRIX PROGRAM CACHE (%d record%s: %s)"
