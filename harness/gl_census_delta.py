@@ -712,7 +712,9 @@ def main():
         noo = tot(t1, "no_owner") - tot(t0, "no_owner")
         own = tot(t1, "owner_mismatch") - tot(t0, "owner_mismatch")
         loc = tot(t1, "location_mismatch") - tot(t0, "location_mismatch")
-        print("  misses: cold %d, changed %d, relink resets %d" % (cold, chg, rst))
+        # "resets" fires once per source on first touch, not on a relink: a
+        # source is assigned a program exactly once and is freed with it.
+        print("  misses: cold %d, changed %d, first-touch stamps %d" % (cold, chg, rst))
         # The vetoes are the correctness readout. P74A shipped a cache whose
         # owner was wrong and the only symptom was the picture jumping; here the
         # same mistake shows up as a number before anyone has to look at a frame.

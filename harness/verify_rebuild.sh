@@ -12,9 +12,16 @@
 # So this asks the question that matters: pinned base + one complete patch,
 # reconstructed from scratch, compared against the live tree.
 #
-#   ./verify_rebuild.sh          reconstruct both trees and diff  (~1 min)
-#   ./verify_rebuild.sh --build  also rebuild WineD3D and compare its
-#                                normalised hash against the lock
+#   ./verify_rebuild.sh            reconstruct both trees and diff  (~1 min)
+#   ./verify_rebuild.sh --build    also rebuild WineD3D and compare its
+#                                  normalised hash against the lock
+#   ./verify_rebuild.sh --refresh  regenerate both complete patches from the
+#                                  live trees, then verify
+#
+# --refresh exists because the record drifts the moment anything is built, and
+# three times in one afternoon this check went red for exactly that reason. The
+# record is not something to reconcile by hand after the fact; regenerate it as
+# part of the build and commit the result.
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 WINE_LIVE="${WINE_SRC:-/mnt/data/holden/mgs/recovered-session/wine-11.0}"
@@ -28,6 +35,53 @@ MINGW="${MINGW_BIN:-/mnt/data/holden/mgs/recovered-session/mingw/bin}"
 WORK="${WORK_DIR:-/mnt/data/holden/mgs/_repro}"
 fail=0
 lock() { awk -v k="$1" '$1==k {print $2}' "$LOCK"; }
+
+refresh_wine() {
+    P="$WORK/pristine/wine-11.0"
+    rm -rf "$WORK/pristine"; mkdir -p "$WORK/pristine"
+    ( cd "$WORK/pristine" && tar xf "$TARBALL" )
+    out="$REPO/$(lock wine_complete_patch)"
+    head -30 "$out" > "$WORK/hdr"
+    : > "$WORK/body"
+    diff -rq -x '*.orig' "$P" "$WINE_LIVE" 2>/dev/null | grep " differ$" \
+        | sed "s|^Files $P/||; s| and .* differ$||" | sort > "$WORK/mod"
+    while read -r f; do
+        diff -u --label "a/$f" --label "b/$f" "$P/$f" "$WINE_LIVE/$f" >> "$WORK/body"
+    done < "$WORK/mod"
+    diff -rq -x '*.orig' "$P" "$WINE_LIVE" 2>/dev/null | grep "^Only in $P" \
+        | sed "s|^Only in $P/*||; s|: |/|" | sort > "$WORK/del"
+    while read -r f; do
+        diff -u --label "a/$f" --label "b/$f" "$P/$f" /dev/null >> "$WORK/body"
+    done < "$WORK/del"
+    cat "$WORK/hdr" "$WORK/body" > "$out"
+    echo "refreshed $(basename "$out"): $(wc -l < "$WORK/mod") modified, $(wc -l < "$WORK/del") deleted"
+}
+
+refresh_box86() {
+    out="$REPO/$(lock box86_complete_patch)"
+    head -42 "$out" > "$WORK/bhdr"
+    {
+        cat "$WORK/bhdr"
+        cd "$BOX86_LIVE" || exit 1
+        git diff "$(lock box86_base_commit)" -- . \
+            ':!src/island' ':!src/island-gcc.bak' ':!*.orig'
+        for f in $(git status --porcelain | awk '$1=="??"{print $2}' \
+                | grep -vE '^src/island/|^src/island-gcc.bak/|\.orig$|mgs2_island_class_b\.h$'); do
+            [ -d "$f" ] || diff -u --label "a/$f" --label "b/$f" /dev/null "$f"
+        done
+    } > "$WORK/bnew"
+    mv "$WORK/bnew" "$out"
+    echo "refreshed $(basename "$out")"
+}
+
+if [ "${1:-}" = "--refresh" ]; then
+    echo "== regenerating the complete patches from the live trees =="
+    mkdir -p "$WORK"
+    refresh_wine
+    refresh_box86
+    echo
+    shift
+fi
 
 echo "== base identities =="
 want=$(lock wine_base_sha256)
@@ -58,8 +112,14 @@ rm -rf "$WORK/box86"
 ( cd "$BOX86_LIVE" && git worktree prune && git worktree add -q --detach "$WORK/box86" "$base" )
 awk '/^diff --git|^--- a\//{p=1} p' "$REPO/$(lock box86_complete_patch)" > "$WORK/box86.diff"
 if ( cd "$WORK/box86" && patch -p1 -E --silent < "$WORK/box86.diff" >/dev/null 2>&1 ); then
-    # island/ and island-gcc.bak/ are build products of build_island_objects.sh.
+    # island/ and island-gcc.bak/ are build products of build_island_objects.sh,
+    # and so is mgs2_island_class_b.h: the generator writes it straight into the
+    # source tree from the exact wined3d.dll, so every island build mutated what
+    # used to be tracked source and this check went red within the hour. It is a
+    # function of the WineD3D binary -- which is the whole class-B invariant --
+    # so it is generated, never restored.
     n=$(diff -rq -x '.git*' -x island -x island-gcc.bak -x '*.orig' -x 'build*' \
+            -x mgs2_island_class_b.h \
             "$WORK/box86" "$BOX86_LIVE" 2>/dev/null | grep -vc "^Only in $BOX86_LIVE")
     if [ "$n" = 0 ]; then echo "ok     reconstructed, 0 differences outside build products"
     else echo "FAIL   $n differences after reconstruction"; fail=1; fi
