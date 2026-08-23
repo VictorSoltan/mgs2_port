@@ -37,6 +37,13 @@ wined3d_ldflags      -Wl,--disable-stdcall-fixup -Wl,--no-insert-timestamp
 # BY NAME, and that rename is precisely the step nobody remembers. make_release.sh
 # rewrites all four of these lines itself.
 release_name         fp14
+# The live tree is AHEAD of that release. P81 (the active-program shadow, see
+# wine-patches/history/81-active-program-shadow.patch) is in it as a research
+# candidate, built as binaries/wined3d_p81_aps.dll + box86-island56-p81-aps and
+# selected only by device/launch-p81-census.sh. So a rebuild does NOT reproduce
+# wined3d_sha256, and --build says so instead of reporting a broken build. Clear
+# this line when P81 is promoted into a release or reverted out of the tree.
+candidate_in_tree    P81-active-program-shadow
 box86_sha256         e227b39f151e99efd75f353f1a521cb2d82cb0bb82cb384a4f28b70b3a3556ba
 wined3d_sha256       f266e9febdc2dd98a277bfe785aec949b929acaae606e0eb996c9c9bbdd5f341
 presenter_sha256     51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169

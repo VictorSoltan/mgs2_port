@@ -1,0 +1,334 @@
+Patch 81 -- skip the active-program selection that selects what is already
+selected.
+
+SCOPE: dlls/wined3d/glsl_shader.c. One field, one census, one helper, two call
+sites, one line of A/B wiring. Ships OFF: this is a census first.
+
+WHY THIS CALL AND NOT ANOTHER
+
+Every other GL candidate in this project had to estimate what a call costs. This
+one does not. P75A removed ~1380 of ~1572 glActiveShaderProgram calls per combat
+frame and measured -14.80 ms/frame, which prices THIS call on THIS driver through
+THIS emulator at
+
+    14.80 ms / 1380 ~= 10.7 us
+
+About 192 survive per frame, because an upload genuinely follows them. So the
+ceiling is 192 x 10.7 us ~= 2.05 ms/frame and a 50% redundancy rate is worth
+~1.0 ms. Not a fps headline; a real millisecond on a 70 ms frame.
+
+WHY IT IS NOT ANOTHER FAILED SHADOW
+
+Two GL shadow candidates were closed here for caching values under a wrong key.
+This caches no value. glActiveShaderProgram(pipeline, program) chooses which
+program subsequent glUniform* calls write into, and it is state OF THE PIPELINE
+OBJECT -- GL exposes it as GL_ACTIVE_PROGRAM of that pipeline. Setting the same
+program again is a semantic no-op with no payload.
+
+So the key has to be the pipeline, and it is: the shadow is a field in
+glsl_shader_prog_link, next to pipeline_id. That is a 1:1 key, checked rather than
+assumed -- glGenProgramPipelines() is called per entry at glsl_shader.c:12013 and
+12144 and the pipeline is deleted with the entry at 8355. The STAGE PROGRAMS are
+shared between entries, which is exactly why the light cache is keyed on
+vs_program_id, but the pipeline is not shared and it is the pipeline that owns the
+state. A file-scope "last program" would be the old mistake in a new place.
+
+calloc'd with the entry, and 0 is truthful rather than merely convenient: a fresh
+pipeline's GL_ACTIVE_PROGRAM really is 0.
+
+THE INVARIANT IS MEASURED, NOT ARGUED
+
+MGS2_GL_APS_VERIFY=1 reads GL_ACTIVE_PROGRAM back with glGetProgramPipelineiv on
+the first selection and every 4096th, and compares. A mismatch is counted, logged,
+and disables the skip for the rest of the run -- so the run stays correct and the
+counter says it is void. Not production: glGet* can be expensive. This exists so
+the first correctness run reports mismatch=0 instead of resting on the source
+audit above.
+
+THE TRAP THAT WOULD HAVE VOIDED THE MEASUREMENT
+
+Box86's island links a SECOND native ARM copy of glsl_shader.c, so there are two
+mgs2_aps_stats records in the process. mgs2_texmatrix_ab_present() -- which writes
+the arm -- runs on the PE side only, because the present path is not a routed
+island entry. Under an unpinned ABBA the island's copy therefore sits at its
+static enabled=0 for the whole run while the PE copy alternates: if
+context_apply_draw_state reaches shader_glsl_load_constants natively, that half of
+the work never sees arm B and the ABBA can only UNDER-report.
+
+Two things follow, and both are in the patch. The helper consults MGS2_GL_APS
+through getenv() rather than reading the struct the presenter writes, because
+getenv works in both copies and a pinned arm is the only one both can follow. And
+harness/gl_census_delta.py prints the APS1 records SEPARATELY instead of summing
+them, so run 1 answers which copy does the work before anyone chooses between the
+ABBA and two pinned runs. P75A had the same asymmetry and got away with it because
+its production value was the static initialiser.
+
+WHAT THE COUNTERS MEAN
+
+  attempted   selections that reached P81, i.e. P75A did not already avoid them.
+              P75A's avoided_vs/avoided_ps are the rest.
+  redundant   ...and the program was already this pipeline's active program.
+              Counted whether or not the skip is armed, so ONE census run gives
+              the redundancy rate with behaviour identical to FINALPLAY14.
+  skipped     ...and the skip was armed, so the call was not made.
+  executed    the call was made. The shadow is updated on BOTH arms -- an arm
+              starting from a stale shadow would measure the warm-up instead of
+              the optimisation, the same reason the light cache updates its
+              entries regardless of its own enable.
+
+A GOOD RUN 1
+
+  attempted 50000  redundant 35000 (70%)  skipped 0  executed 50000
+  mismatch 0
+
+Then arm it. If redundancy is near zero the candidate is closed on a census that
+cost nothing, which is the point of shipping it off.
+
+NEXT, AND DELIBERATELY NOT NOW
+
+GL ES 3.1 has glProgramUniform*, which takes the program explicitly and needs no
+selection at all -- that would remove all ~192 rather than the redundant share.
+It also touches every uniform site in the file. Worth doing only if P81 shows the
+redundancy is small, which is a thing run 1 answers for the price of a census.
+
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -262,6 +262,16 @@
+     GLuint pipeline_id;
+     GLuint vs_program_id;
+     GLuint ps_program_id;
++    /* P81: GL_ACTIVE_PROGRAM is state of pipeline_id, so the shadow of it lives
++     * here and NOT in a file-scope "last program". pipeline_id is generated per
++     * entry by glGenProgramPipelines() and deleted with the entry, so this is a
++     * 1:1 key. The stage PROGRAMS are shared between entries -- that sharing is
++     * why the light cache is keyed on vs_program_id -- but the pipeline is not,
++     * and it is the pipeline that owns the state being cached. Getting this key
++     * wrong is what closed the two earlier GL shadow candidates.
++     * calloc'd with the entry, and 0 is a truthful initial value: a fresh
++     * pipeline's GL_ACTIVE_PROGRAM is 0. */
++    GLuint mgs2_active_uniform_program;
+     BOOL separable;
+     DWORD constant_update_mask;
+     unsigned int constant_version;
+@@ -359,6 +369,85 @@
+ };
+ 
+ /*
++ * P81: and of the selections P75A lets through, skip the ones that select a
++ * program which is already this pipeline's active program.
++ *
++ * This candidate is not a guess about cost. P75A removed ~1380 of ~1572
++ * glActiveShaderProgram calls per combat frame and that measured -14.80 ms/f,
++ * which prices THIS call on THIS driver at ~10.7 us. About 192 survive per
++ * frame because an upload really does follow them, so the ceiling here is
++ * 192 x 10.7 us ~= 2.05 ms/f and any real redundancy in them is worth taking.
++ *
++ * Why it is safe: glActiveShaderProgram(pipeline, program) sets which program
++ * subsequent glUniform* calls write into, as state of the PIPELINE object.
++ * Setting the same program again is semantically a no-op. There is no payload,
++ * no value comparison and no cached uniform -- the earlier shadow candidates
++ * failed on cached VALUES under a wrong key, and this caches a SELECTOR under
++ * the object that GL itself scopes it to.
++ *
++ * `redundant` is counted whether or not the skip is enabled, so one census run
++ * gives the redundancy rate with the behaviour unchanged. `skipped` is what the
++ * enabled arm actually removed. `attempted` counts only what P75A let through,
++ * which is the population this can act on -- P75A's own avoided_vs/avoided_ps
++ * are the rest.
++ *
++ * The invariant is checkable rather than argued: MGS2_GL_APS_VERIFY=1 asks GL
++ * for GL_ACTIVE_PROGRAM and compares. A mismatch disables the skip for the rest
++ * of the run and is counted, so a correctness run reports mismatch=0 instead of
++ * resting on a source audit. Not production: glGet* can be expensive.
++ */
++#define MGS2_APS_MAGIC 0x31535041u /* APS1 */
++struct mgs2_aps_stats_public
++{
++    unsigned int magic, version, size_words, signature;
++    volatile unsigned int enabled;
++    unsigned int attempted;      /* reached P81, i.e. P75A did not avoid it */
++    unsigned int redundant;      /* ...and the program was already active */
++    unsigned int skipped;        /* ...and the skip was armed, so it was not called */
++    unsigned int executed;
++    unsigned int vs_attempted, ps_attempted;
++    unsigned int verified;       /* GL_ACTIVE_PROGRAM read back and compared */
++    unsigned int mismatch;       /* ...and disagreed with the shadow. Must be 0. */
++};
++struct mgs2_aps_stats_public mgs2_aps_stats =
++{
++    MGS2_APS_MAGIC, 1,
++    sizeof(struct mgs2_aps_stats_public) / sizeof(unsigned int),
++    ~MGS2_APS_MAGIC,
++    0,   /* census only until a number exists; see mgs2_aps_pin() */
++};
++
++/* MGS2_GL_APS pins the skip for a whole run: 0 census only (behaviour identical
++ * to FINALPLAY14), 1 on. Unset leaves the ABBA harness owning it.
++ *
++ * The pin is not a convenience, it is the only arm BOTH copies of this file can
++ * follow. Box86's island links a second native ARM copy of glsl_shader.c, and
++ * mgs2_texmatrix_ab_present() -- which writes mgs2_aps_stats.enabled -- runs on
++ * the PE side only, because the present path is not a routed entry. So under the
++ * ABBA the island's copy stays at its static 0 for the whole run while the PE
++ * copy alternates. If context_apply_draw_state reaches shader_glsl_load_constants
++ * natively, that half of the work never sees arm B and the ABBA can only
++ * UNDER-report. getenv() works in both copies, which is why the helper consults
++ * this directly rather than reading the struct the presenter writes.
++ *
++ * Which copy actually does the work is not a guess to make here: the census
++ * publishes one record per copy and harness/gl_census_delta.py prints them
++ * separately. Read that before choosing between the ABBA and two pinned runs. */
++static int mgs2_aps_pin(void)
++{
++    static int pinned = -2;
++
++    if (pinned == -2)
++    {
++        const char *v = getenv("MGS2_GL_APS");
++
++        pinned = (v && *v) ? atoi(v) : -1;
++        if (pinned > 1) pinned = 1;
++    }
++    return pinned;
++}
++
++/*
+  * The A/B alternates arms every 12 frames, and with -14.8 ms between them that
+  * alternation is VISIBLE as a ~1 Hz stutter -- the owner reported exactly that
+  * while the measurement was running. A steady build must therefore not carry
+@@ -615,6 +704,11 @@
+     mgs2_frm.arm = mgs2_ab_arm ? 1 : 0;
+     ++mgs2_frm.arm_frames[mgs2_frm.arm];
+ 
++    /* Above the early return on purpose: a steady build sets
++     * mgs2_asp_ab_enabled to FALSE and never reaches the block code below, so
++     * this is the only place a pinned P81 arm can be applied. */
++    if (mgs2_aps_pin() >= 0) mgs2_aps_stats.enabled = mgs2_aps_pin();
++
+     if (!mgs2_asp_ab_enabled) return;
+ 
+     if (block_len < 0)
+@@ -633,8 +727,9 @@
+         mgs2_ab_arm = 0;                    /* block 0 is arm A */
+         mgs2_asp_stats.lazy = 1;            /* production, on in both arms */
+         mgs2_lca_stats.enabled = 1;         /* P77 stays on; P80 is the variable */
+-        ERR("MGS2 texmatrix A/B: %d-frame blocks, settle %d, arm A = cache off "
+-            "(MGS2_PRESENT_AB said %s)\n", block_len, settle, v ? v : "nothing");
++        ERR("MGS2 A/B: %d-frame blocks, settle %d, arm A = P81 active-program skip OFF "
++            "(MGS2_PRESENT_AB said %s, MGS2_GL_APS said %s)\n", block_len, settle,
++            v ? v : "nothing", getenv("MGS2_GL_APS") ? getenv("MGS2_GL_APS") : "nothing");
+     }
+     if (!block_len) return;
+ 
+@@ -690,11 +785,17 @@
+     nstamp = 0;
+     mgs2_lca_stats.enabled = 1;                    /* P77: production, on in both arms */
+     mgs2_ab_arm = arm[block & 3];
+-    /* Nothing is wired to the arm right now: P77 ships on in both arms and P80
+-     * was removed on its measurement. The next candidate assigns itself here,
+-     * and mgs2_ab_arm stays the single thing everything else labels a sample
+-     * with -- pinning a cache on while FRM1 still derived the arm from it is
+-     * what produced a whole combat window of "arm A 0 frames / arm B 538". */
++    /* P81 is what is wired to the arm now -- the invitation the previous comment
++     * left. P77 still ships on in both arms and P80 was removed on its
++     * measurement. mgs2_ab_arm stays the single thing everything else labels a
++     * sample with: pinning a cache on while FRM1 still derived the arm from it
++     * is what produced a whole combat window of "arm A 0 frames / arm B 538".
++     *
++     * MGS2_GL_APS takes it back for a run that wants one steady arm. Note the
++     * harness itself cannot be disabled by environment -- block_len falls back
++     * to 12 for any value below 2 -- so pinning here is the only way to get a
++     * build that does not alternate. */
++    if (mgs2_aps_pin() < 0) mgs2_aps_stats.enabled = mgs2_ab_arm;
+ }
+ 
+ struct glsl_program_key
+@@ -891,6 +992,70 @@
+ static PFN_glGetProgramPipelineiv mgs2_glGetProgramPipelineiv;
+ static PFN_glGetProgramPipelineInfoLog mgs2_glGetProgramPipelineInfoLog;
+ 
++/* P81. Called only from the two P75A sites, and only when P75A wants a
++ * selection at all. */
++static void mgs2_select_uniform_program(struct glsl_shader_prog_link *prog,
++        GLuint program, BOOL vs)
++{
++    static int verify = -1;
++    int pin;
++    BOOL same, on;
++
++    ++mgs2_aps_stats.attempted;
++    if (vs) ++mgs2_aps_stats.vs_attempted;
++    else ++mgs2_aps_stats.ps_attempted;
++
++    if (verify < 0)
++    {
++        const char *v = getenv("MGS2_GL_APS_VERIFY");
++
++        verify = v && *v && strcmp(v, "0");
++    }
++    /* A pinned run overrides the harness, in whichever copy of this file is
++     * executing; an unpinned one follows whatever the presenter last wrote,
++     * which in the island's copy is never. Published into the struct so a
++     * capture shows the arm each copy was actually running. */
++    pin = mgs2_aps_pin();
++    on = pin >= 0 ? (BOOL)pin : (BOOL)mgs2_aps_stats.enabled;
++    if (pin >= 0) mgs2_aps_stats.enabled = pin;
++    /* Read the real state and compare, before deciding anything on the shadow.
++     * First attempt as well as every 4096th: a broken invariant should not need
++     * four thousand calls to show itself. */
++    if (verify && mgs2_glGetProgramPipelineiv
++            && (mgs2_aps_stats.attempted == 1 || !(mgs2_aps_stats.attempted & 0xfff)))
++    {
++        GLint actual = 0;
++
++        MGS2_LOCAL(mgs2_glGetProgramPipelineiv)(prog->pipeline_id, GL_ACTIVE_PROGRAM, &actual);
++        ++mgs2_aps_stats.verified;
++        if ((GLuint)actual != prog->mgs2_active_uniform_program)
++        {
++            ++mgs2_aps_stats.mismatch;
++            ERR("P81: pipeline %u active program is %d, shadow says %u -- disabling the skip.\n",
++                    prog->pipeline_id, actual, prog->mgs2_active_uniform_program);
++            /* Fail safe: from here the selector is always called, so the rest of
++             * the run is correct and the counter says the run is not a result. */
++            mgs2_aps_stats.enabled = 0;
++            prog->mgs2_active_uniform_program = (GLuint)actual;
++        }
++    }
++
++    same = prog->mgs2_active_uniform_program == program;
++    if (same) ++mgs2_aps_stats.redundant;
++    if (same && on)
++    {
++        ++mgs2_aps_stats.skipped;
++        return;
++    }
++
++    MGS2_LOCAL(mgs2_glActiveShaderProgram)(prog->pipeline_id, program);
++    /* Recorded on BOTH arms. An arm that started with a stale shadow would
++     * measure the warm-up rather than the optimisation -- the same reason the
++     * light cache updates its entries whether or not the skip is armed. */
++    prog->mgs2_active_uniform_program = program;
++    ++mgs2_aps_stats.executed;
++}
++
+ #ifdef MGS2_ISLAND_ARM
+ void *mgs2_island_gl_by_name(const char *name);
+ #endif
+@@ -3012,7 +3177,7 @@
+         else ++mgs2_asp_stats.avoided_vs;
+ 
+         if (mgs2_asp_need_vs || !mgs2_asp_stats.lazy)
+-            MGS2_LOCAL(mgs2_glActiveShaderProgram)(prog->pipeline_id, prog->vs_program_id);
++            mgs2_select_uniform_program(prog, prog->vs_program_id, TRUE);
+         mgs2_asp_witness = 0;
+     }
+ 
+@@ -3223,7 +3388,7 @@
+ 
+         mgs2_asp_need_ps = need_ps;
+         if (need_ps || !mgs2_asp_stats.lazy)
+-            MGS2_LOCAL(mgs2_glActiveShaderProgram)(prog->pipeline_id, prog->ps_program_id);
++            mgs2_select_uniform_program(prog, prog->ps_program_id, FALSE);
+         mgs2_asp_witness = 0;
+     }
+ 

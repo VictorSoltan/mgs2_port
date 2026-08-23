@@ -147,6 +147,14 @@ if [ "${1:-}" = "--build" ]; then
         tail -3 "$WORK/built.txt" | sed 's/^/       /'
     elif [ "$got" = "$want" ]; then
         echo "ok     rebuild reproduces the shipped wined3d byte for byte"
+    elif [ -n "$(lock candidate_in_tree)" ]; then
+        # Not a broken build: the tree deliberately carries a research candidate
+        # on top of the release. Saying "FAIL" here would train everyone to
+        # ignore the one check that catches an untraceable binary.
+        echo "note   rebuilt $got, release is $want -- expected, the tree carries"
+        echo "       $(lock candidate_in_tree) on top of $(lock release_name)."
+        echo "       Reproducibility of the RELEASE is unverifiable while that is"
+        echo "       true; revert the candidate or promote it to check it again."
     else
         echo "FAIL   rebuilt $got, the shipped binary is $want"; fail=1
     fi
