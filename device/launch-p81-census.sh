@@ -51,32 +51,33 @@
 #
 # RUN 2, once run 1 says the redundancy is real and mismatch is 0
 #
-#   MGS2_GL_APS=1 ./launch-p81-census.sh     one steady armed run, both copies
-#   MGS2_GL_APS= ./launch-p81-census.sh      the in-process ABBA owns the arm,
-#                                            12-frame blocks, A = off
+#   MGS2_GL_APS=1 ./launch-p81-census.sh                  one steady armed run
+#   MGS2_GL_APS= MGS2_PRESENT_AB=12 ./launch-p81-census.sh  the in-process ABBA
+#                                                           owns the arm, A = off
 #
-# The ABBA is the better instrument when the PE copy does the work: same process,
-# same scene, ABBA cancels linear drift. Note it cannot be switched off by
-# environment in this build -- MGS2_PRESENT_AB below 2 falls back to 12 -- so
-# MGS2_GL_APS is the only way to get one steady arm.
+# The ABBA is the better instrument, and run 1 established that it is valid here:
+# the island's copy of glsl_shader.c recorded ZERO selections even with all 19
+# entries armed, so the PE copy -- the only one that follows the arm -- does all
+# the work. Same process, same scene, and ABBA cancels linear drift.
+#
+# MGS2_PRESENT_AB now arms the harness as well as setting the block length, so
+# production (which sets nothing) alternates nothing at all.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
-# This launcher substitutes binaries, so it has to say so: launch-play.sh refuses
-# to accept MGS2_BOX86_BIN and friends from a plain environment, because that used
-# to switch off identity verification for every other mounted file at the same
-# time. The run is still verified -- a mismatch is reported instead of ignored.
-export MGS2_RESEARCH_RUN=1
-
-# The pair is fp14 plus P81 and nothing else. Keep them together: box86's class-B
-# registry maps this exact DLL's RVAs.
-MGS2_BOX86_BIN="${MGS2_BOX86_BIN:-box86-island56-p81-aps}" \
-MGS2_WINED3D_DLL="${MGS2_WINED3D_DLL:-wined3d_p81_aps.dll}" \
+# NO binary override, deliberately. P81 ships inside the production bundle,
+# dormant, so this is the production pair with two switches flipped -- which means
+# the identity check runs in full and this is NOT a research run. That is the
+# whole reason the A/B harness was made runtime-gated: one binary, measurable.
+#
+#   MGS2_GL_APS         0 census only (default here), 1 armed, empty = the ABBA
+#                       owns the arm
+#   MGS2_PRESENT_AB     unset in production = no alternation at all. Set here only
+#                       when MGS2_GL_APS is empty, i.e. for the ABBA.
 MGS2_GL_APS="${MGS2_GL_APS-0}" \
 MGS2_GL_APS_VERIFY="${MGS2_GL_APS_VERIFY:-1}" \
-MGS2_BOX86_ISLAND_FULL=1 \
-MGS2_BOX86_ISLAND_ONLY="0,1,2,3,4,5,6,9,10,14,18,19,22,23,28,29,32,33,41" \
+${MGS2_PRESENT_AB:+MGS2_PRESENT_AB="$MGS2_PRESENT_AB"} \
 MGS2_GL_STATS="${MGS2_GL_STATS:-300}" \
 MGS2_PLAY_WINEDEBUG="${MGS2_PLAY_WINEDEBUG:--all}" \
 exec "$HERE/launch-play.sh"

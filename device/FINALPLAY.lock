@@ -8,12 +8,12 @@
 
 wine_base_tarball    wine-11.0.tar.xz
 wine_base_sha256     c07a6857933c1fc60dff5448d79f39c92481c1e9db5aa628db9d0358446e0701
-wine_complete_patch  wine-patches/FINALPLAY14-wine-complete.patch
+wine_complete_patch  wine-patches/FINALPLAY15-wine-complete.patch
 wine_files_changed   53 modified, 1 deleted
 
 box86_base_remote    https://github.com/ptitSeb/box86.git
 box86_base_commit    0579f8b9
-box86_complete_patch box86-patches/FINALPLAY14-box86-complete.patch
+box86_complete_patch box86-patches/FINALPLAY15-box86-complete.patch
 box86_files_changed  21 tracked, 14 previously untracked and recorded nowhere else
 
 # Builds are byte-reproducible, so the manifest carries exact hashes. Two things
@@ -36,16 +36,9 @@ wined3d_ldflags      -Wl,--disable-stdcall-fixup -Wl,--no-insert-timestamp
 # -- which meant every release renamed a key that harness/verify_rebuild.sh reads
 # BY NAME, and that rename is precisely the step nobody remembers. make_release.sh
 # rewrites all four of these lines itself.
-release_name         fp14
-# The live tree is AHEAD of that release. P81 (the active-program shadow, see
-# wine-patches/history/81-active-program-shadow.patch) is in it as a research
-# candidate, built as binaries/wined3d_p81_aps.dll + box86-island56-p81-aps and
-# selected only by device/launch-p81-census.sh. So a rebuild does NOT reproduce
-# wined3d_sha256, and --build says so instead of reporting a broken build. Clear
-# this line when P81 is promoted into a release or reverted out of the tree.
-candidate_in_tree    P81-active-program-shadow
-box86_sha256         e227b39f151e99efd75f353f1a521cb2d82cb0bb82cb384a4f28b70b3a3556ba
-wined3d_sha256       f266e9febdc2dd98a277bfe785aec949b929acaae606e0eb996c9c9bbdd5f341
+release_name         fp15
+box86_sha256         a0fb0d0d9497a77cb4dc97d1e084df1c725cc8e53ff3e91a6e847ff3e0628171
+wined3d_sha256       e68e8dd04dea339fbda1e39decc56cad5ea436dda71e45b57c7bc87c88a8db47
 presenter_sha256     51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169
 
 # CLOSED as of FINALPLAY12, and held since: the shipped binaries are the ones make_release.sh

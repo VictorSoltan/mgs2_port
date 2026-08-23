@@ -69,7 +69,7 @@ refresh_box86() {
         git diff "$(lock box86_base_commit)" -- . \
             ':!src/island' ':!src/island-gcc.bak' ':!*.orig'
         for f in $(git status --porcelain | awk '$1=="??"{print $2}' \
-                | grep -vE '^src/island/|^src/island-gcc.bak/|\.orig$|mgs2_island_class_b\.h$'); do
+                | grep -vE '^src/island/|^src/island-gcc.bak/|\.orig$|mgs2_island_class_b\.h$|mgs2_island_entry_identity\.h$'); do
             [ -d "$f" ] || diff -u --label "a/$f" --label "b/$f" /dev/null "$f"
         done
     } > "$WORK/bnew"
@@ -116,13 +116,19 @@ rm -rf "$WORK/box86"
 awk '/^diff --git|^--- a\//{p=1} p' "$REPO/$(lock box86_complete_patch)" > "$WORK/box86.diff"
 if ( cd "$WORK/box86" && patch -p1 -E --silent < "$WORK/box86.diff" >/dev/null 2>&1 ); then
     # island/ and island-gcc.bak/ are build products of build_island_objects.sh,
-    # and so is mgs2_island_class_b.h: the generator writes it straight into the
-    # source tree from the exact wined3d.dll, so every island build mutated what
-    # used to be tracked source and this check went red within the hour. It is a
-    # function of the WineD3D binary -- which is the whole class-B invariant --
-    # so it is generated, never restored.
+    # and so are mgs2_island_class_b.h and mgs2_island_entry_identity.h: the
+    # generators write them straight into the source tree from the exact
+    # wined3d.dll, so every island build mutated what used to be tracked source
+    # and this check went red within the hour. Both are FUNCTIONS of the WineD3D
+    # binary -- that is the whole class-B invariant, and for the identity header it
+    # is the entry-routing invariant -- so they are generated, never restored.
+    #
+    # The identity header was added to this list on 2026-08-23, when it turned out
+    # nothing had been generating it at all: it had been carrying p72c's RVAs
+    # through fp12, fp13 and fp14, and Box86 had been refusing 14 of 19 island
+    # entries in silence the whole time.
     n=$(diff -rq -x '.git*' -x island -x island-gcc.bak -x '*.orig' -x 'build*' \
-            -x mgs2_island_class_b.h \
+            -x mgs2_island_class_b.h -x mgs2_island_entry_identity.h \
             "$WORK/box86" "$BOX86_LIVE" 2>/dev/null | grep -vc "^Only in $BOX86_LIVE")
     if [ "$n" = 0 ]; then echo "ok     reconstructed, 0 differences outside build products"
     else echo "FAIL   $n differences after reconstruction"; fail=1; fi
