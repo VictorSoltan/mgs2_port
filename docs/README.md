@@ -39,6 +39,12 @@ supersede it for current decisions.
 
 ## Runtime freezes
 
+- [DXVK pipeline gap and state-cache A/B](briefs/MGS2_DXVK_PIPELINE_GAP_AND_STATE_CACHE_2026-08-25.md)
+  — внешний trigger разделил два похожих `~1.6 s` gap: первый компилирует
+  Vulkan pipeline внутри нативного `libmali`, второй остаётся game/read worker
+  path. Точный Mali reset и NTSync wait отвергнуты; warm state cache и Sarek
+  async (`1`/`2227` skipped draws) не убрали stalls и не promoted. Отдельно
+  подтверждено shared-memory pressure 1-ГБ консоли без OOM-kill.
 - [Win32 waits and RG353VS pressure](briefs/MGS2_DXVK_WAIT_DEVICE_PRESSURE_2026-08-24.md)
   — правильный LOAD GAME route отверг game deadline и thermal/SD/RAM как
   общий источник повторяющегося 1.62-s gap; Sleep(0) A/B снизил CPU load, но

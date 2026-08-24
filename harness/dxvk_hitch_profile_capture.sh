@@ -21,6 +21,8 @@ AUTO_PID=
 PRESENT_PID=
 WAIT_PID=
 PRESSURE_PID=
+GAP_TRIGGER_PID=
+ASYNC_SKIP_PID=
 PERF_PID=
 snapshot_processes() {
     output="$1"
@@ -35,14 +37,63 @@ snapshot_processes() {
         done
     } >"$output"
 }
+snapshot_state_cache() {
+    output="$1"
+    cache_path="${DXVK_STATE_CACHE_PATH:-}"
+    {
+        printf 'DXVK_STATE_CACHE=%s\n' "${DXVK_STATE_CACHE:-0}"
+        printf 'DXVK_STATE_CACHE_PATH=%s\n' "$cache_path"
+        if [ -z "$cache_path" ]; then
+            echo 'cache_snapshot=no-explicit-path'
+        elif [ ! -d "$cache_path" ]; then
+            echo 'cache_snapshot=directory-missing'
+        else
+            found=0
+            for cache_file in "$cache_path"/*.dxvk-cache; do
+                [ -f "$cache_file" ] || continue
+                found=1
+                stat -c 'file=%n size=%s mtime=%Y' "$cache_file"
+                sha256sum "$cache_file"
+            done
+            [ "$found" -eq 1 ] || echo 'cache_snapshot=no-cache-files'
+        fi
+    } >"$output"
+}
 cleanup() {
     [ -n "$PERF_PID" ] && kill -INT "$PERF_PID" 2>/dev/null || true
+    [ -n "$ASYNC_SKIP_PID" ] && kill "$ASYNC_SKIP_PID" 2>/dev/null || true
+    [ -n "$GAP_TRIGGER_PID" ] && kill "$GAP_TRIGGER_PID" 2>/dev/null || true
     [ -n "$PRESSURE_PID" ] && kill "$PRESSURE_PID" 2>/dev/null || true
     [ -n "$WAIT_PID" ] && kill "$WAIT_PID" 2>/dev/null || true
     [ -n "$PRESENT_PID" ] && kill "$PRESENT_PID" 2>/dev/null || true
     [ -n "$AUTO_PID" ] && kill "$AUTO_PID" 2>/dev/null || true
 }
+snapshot_platform() {
+    output="$1"
+    {
+        printf 'tick_ms='; awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime
+        uname -a
+        printf 'dev_ntsync='; ls -l /dev/ntsync 2>&1
+        for file in \
+                /sys/devices/platform/fde60000.gpu/js_scheduling_period \
+                /sys/devices/platform/fde60000.gpu/js_timeouts \
+                /sys/devices/platform/fde60000.gpu/reset_timeout \
+                /sys/devices/platform/fde60000.gpu/soft_job_timeout; do
+            [ -r "$file" ] || continue
+            printf '%s=' "$file"
+            cat "$file"
+        done
+    } >"$output"
+    dmesg 2>/dev/null | grep -Ei \
+        'mali|kbase|soft.?stop|hard.?stop|gpu.*(fault|reset|timeout)|mmu.*fault|job slot|oom notifier|mmc.*(error|timeout)|sdhci.*(error|timeout)|I/O error' \
+        >"${output%.txt}-kernel-events.txt" || true
+}
 trap cleanup INT TERM EXIT
+
+if [ "${MGS2_PROFILE_PLATFORM:-0}" = 1 ]; then
+    snapshot_platform "$OUT/platform-before.txt"
+fi
+snapshot_state_cache "$OUT/state-cache-before.txt"
 
 MGS2_AUTOLOAD_LOG="$OUT/game.log" \
 MGS2_AUTOLOAD_LAUNCHER="$LAUNCHER" \
@@ -80,8 +131,15 @@ echo "pid=$PID renderer_ready_after=${n}s" | tee "$OUT/identity.txt"
 readlink -f "/proc/$PID/exe" | tee -a "$OUT/identity.txt"
 sha256sum "/proc/$PID/exe" | tee -a "$OUT/identity.txt"
 tr '\0' '\n' <"/proc/$PID/environ" | \
-    grep -E '^MGS2_(PEEK_(HOT|WAIT|WAIT_MS)|WAIT_CENSUS|SLEEP0_WAIT_MS)=' | sort | \
+    grep -E '^(MGS2_(PEEK_(HOT|WAIT|WAIT_MS)|WAIT_CENSUS|SLEEP0_WAIT_MS)|DXVK_(ASYNC|STATE_CACHE|STATE_CACHE_PATH|ALL_CORES|CONFIG|HUD)|ASYNC_DRAW_CALL_THRESHOLD)=' | sort | \
     tee -a "$OUT/identity.txt"
+d3d9_path=$(awk '$NF ~ /\/d3d9\.dll$/ { print $NF; exit }' "/proc/$PID/maps")
+if [ -n "$d3d9_path" ]; then
+    echo "d3d9_path=$d3d9_path" | tee -a "$OUT/identity.txt"
+    sha256sum "$d3d9_path" | tee -a "$OUT/identity.txt"
+else
+    echo "d3d9_path=missing" | tee -a "$OUT/identity.txt"
+fi
 user32_path=$(awk '$NF ~ /\/user32\.dll$/ { print $NF; exit }' "/proc/$PID/maps")
 if [ -n "$user32_path" ]; then
     echo "user32_path=$user32_path" | tee -a "$OUT/identity.txt"
@@ -113,6 +171,21 @@ python3 "$G/device_pressure_count.py" "$PID" --interval 0.1 --windows 2400 \
     >"$OUT/device-pressure.tsv" 2>&1 &
 PRESSURE_PID=$!
 
+if [ "${MGS2_PROFILE_GAP_TRIGGER:-0}" = 1 ]; then
+    python3 "$G/dxvk_gap_trigger_capture.py" "$PID" --interval 0.01 \
+        --windows 24000 --thresholds-ms "${MGS2_GAP_TRIGGER_THRESHOLDS_MS:-500,1200}" \
+        --probe-ms "${MGS2_GAP_TRIGGER_PROBE_MS:-25}" \
+        >"$OUT/gap-trigger.txt" 2>&1 &
+    GAP_TRIGGER_PID=$!
+fi
+
+if [ "${MGS2_PROFILE_ASYNC_SKIP:-0}" = 1 ]; then
+    python3 "$G/dxvk_async_skip_capture.py" "$PID" --interval 0.01 \
+        --windows 24000 --max-events "${MGS2_ASYNC_SKIP_MAX_EVENTS:-4096}" \
+        >"$OUT/async-skip.txt" 2>&1 &
+    ASYNC_SKIP_PID=$!
+fi
+
 if [ "${MGS2_PROFILE_PERF:-1}" = 1 ]; then
     echo -1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true
     perf record -k mono -F 199 -e cycles -p "$PID" \
@@ -141,7 +214,21 @@ fi
 kill "$PRESSURE_PID" 2>/dev/null || true
 wait "$PRESSURE_PID" 2>/dev/null || true
 PRESSURE_PID=
+if [ -n "$GAP_TRIGGER_PID" ]; then
+    kill "$GAP_TRIGGER_PID" 2>/dev/null || true
+    wait "$GAP_TRIGGER_PID" 2>/dev/null || true
+    GAP_TRIGGER_PID=
+fi
+if [ -n "$ASYNC_SKIP_PID" ]; then
+    kill "$ASYNC_SKIP_PID" 2>/dev/null || true
+    wait "$ASYNC_SKIP_PID" 2>/dev/null || true
+    ASYNC_SKIP_PID=
+fi
 snapshot_processes "$OUT/processes-after.tsv"
+snapshot_state_cache "$OUT/state-cache-after.txt"
+if [ "${MGS2_PROFILE_PLATFORM:-0}" = 1 ]; then
+    snapshot_platform "$OUT/platform-after.txt"
+fi
 
 # Snapshot while the exact process and its JIT mappings still exist.
 cp "/proc/$PID/maps" "$OUT/maps"
