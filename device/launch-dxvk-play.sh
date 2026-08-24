@@ -149,20 +149,37 @@ export MGS2_PEEK_WAIT_MS=4
 
 mount_bind() {
     local src="$1" dst="$2"
-    [ -r "$src" ] || return 1
+    if [ ! -r "$src" ]; then
+        echo "MGS2: cannot bind $src over $dst -- source is unreadable" >&2
+        return 1
+    fi
     while grep -q " $dst " /proc/mounts; do
         if [ -f "$src" ] && [ -f "$dst" ] && cmp -s "$src" "$dst"; then
             return 0
         fi
-        umount "$dst" 2>/dev/null || return 1
+        if ! umount "$dst" 2>/dev/null; then
+            echo "MGS2: cannot replace busy bind mount $dst" >&2
+            return 1
+        fi
     done
-    mount --bind "$src" "$dst"
+    if ! mount --bind "$src" "$dst"; then
+        echo "MGS2: bind mount failed: $src -> $dst" >&2
+        return 1
+    fi
 }
 
 unmount_all() {
-    local dst="$1"
+    local dst="$1" tries
     while grep -q " $dst " /proc/mounts; do
-        umount "$dst" 2>/dev/null || return
+        tries=0
+        while ! umount "$dst" 2>/dev/null; do
+            tries=$((tries + 1))
+            if [ "$tries" -ge 20 ]; then
+                echo "MGS2: cleanup could not unmount busy $dst" >&2
+                return 1
+            fi
+            sleep 0.1
+        done
     done
 }
 
@@ -226,8 +243,14 @@ cleanup() {
     [ -n "${WINE_PID:-}" ] && kill "$WINE_PID" 2>/dev/null || true
     [ -n "${EXPLORER_PID:-}" ] && kill "$EXPLORER_PID" 2>/dev/null || true
     [ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
-    killall -9 wineserver services.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
+    killall -9 wineserver wineboot.exe services.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
     pkill -9 -f '[m]gs2_sse_rg353vs_port.exe' 2>/dev/null || true
+    i=0
+    while pgrep -f '[w]ineboot.exe|[e]xplorer.exe|[m]gs2_sse_rg353vs_port.exe' >/dev/null 2>&1 \
+          && [ "$i" -lt 20 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
     restore_cpu_state
     unmount_all /usr/lib/wine/i386-windows/wined3d.dll
     unmount_all /usr/lib/wine/i386-windows/d3d8.dll
@@ -326,6 +349,15 @@ export MGS2_BOX86_ISLAND_ONLY="${MGS2_BOX86_ISLAND_ONLY:-0,1,2,3,4,5,6,9,10,14,1
 # during the multi-second freeze after a save loads. Still a switch, so the A/B
 # can be rerun without rebuilding: MGS2_BOX86_NATIVE_DITHER=0 restores the guest.
 export MGS2_BOX86_NATIVE_DITHER="${MGS2_BOX86_NATIVE_DITHER:-1}"
+
+# Clear mutually exclusive WineD3D mounts before installing the Vulkan arm.
+# A power loss or killed older launcher may have skipped its EXIT cleanup.
+unmount_all /usr/lib/wine/i386-unix/win32u.so
+unmount_all /usr/lib/wine/i386-unix/winewayland.so
+unmount_all /usr/lib/wine/i386-unix/opengl32.so
+unmount_all /usr/lib/wine/i386-windows/wined3d.dll
+unmount_all /usr/lib/wine/i386-windows/user32.dll
+unmount_all /usr/lib/wine/i386-windows/d3d8.dll
 mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp15}" /usr/bin/box86 || exit 1
 if [ -z "${MGS2_DXVK_D3D8_DLL:-}" ]; then
     mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
@@ -477,7 +509,7 @@ mount_bind "$GAMEDIR/dmusic_shared_lifetime1.dll" /usr/lib/wine/i386-windows/dmu
 # unless MGS2_RESEARCH_RUN says a research launcher asked for them, and then a
 # mismatch is expected and reported rather than fatal.
 mgs2_verify_identity() {
-    manifest="$GAMEDIR/FINALPLAY.manifest"
+    manifest="$GAMEDIR/${MGS2_IDENTITY_MANIFEST:-FINALPLAY.manifest}"
     if [ ! -r "$manifest" ]; then
         echo "MGS2: no $manifest, cannot verify identity" >&2
         return 1
@@ -500,7 +532,7 @@ mgs2_verify_identity() {
         return 1
     fi
     if [ "$bad" != 0 ]; then
-        if [ -n "${MGS2_RESEARCH_RUN:-}" ]; then
+        if [ -n "${MGS2_RESEARCH_RUN:-}" ] && [ -z "${MGS2_IDENTITY_MANIFEST:-}" ]; then
             echo "MGS2: $bad of $checked mounted files differ from the manifest," \
                  "which is expected on a research run" >&2
             return 0
@@ -509,8 +541,8 @@ mgs2_verify_identity() {
              "match the manifest" >&2
         return 1
     fi
-    echo "MGS2: identity verified, $checked of $checked mounted files match" \
-         "FINALPLAY.manifest" >&2
+    echo "MGS2: identity verified, $checked of $checked runtime files match" \
+         "${manifest##*/}" >&2
 }
 
 mgs2_verify_identity || exit 1
@@ -525,9 +557,9 @@ cd "$GAMEDIR/game/bin" || exit 1
 # game process can reach winevulkan while win32u still exposes the null driver.
 if [ -n "${MGS2_DXVK_D3D8_DLL:-}" ]; then
     if [ "$DXVK_WINE_MODE" = direct32 ]; then
-        box86 /usr/lib/wine/i386-unix/wine explorer /desktop >/tmp/mgs2-dxvk-explorer.log 2>&1 &
+        box86 /usr/lib/wine/i386-unix/wine explorer /desktop 9>&- >/tmp/mgs2-dxvk-explorer.log 2>&1 &
     else
-        box64 /usr/bin/wine explorer /desktop >/tmp/mgs2-dxvk-explorer.log 2>&1 &
+        box64 /usr/bin/wine explorer /desktop 9>&- >/tmp/mgs2-dxvk-explorer.log 2>&1 &
     fi
     EXPLORER_PID=$!
     i=0
@@ -541,18 +573,18 @@ if [ -n "${MGS2_DXVK_D3D8_DLL:-}" ]; then
 fi
 
 if [ -x /usr/bin/gptokeyb ] && [ -r "$GAMEDIR/mgs2.gptk" ]; then
-    /usr/bin/gptokeyb "$EXE" -c "$GAMEDIR/mgs2.gptk" >/tmp/mgs2-gptokeyb.log 2>&1 &
+    /usr/bin/gptokeyb "$EXE" -c "$GAMEDIR/mgs2.gptk" 9>&- >/tmp/mgs2-gptokeyb.log 2>&1 &
     GPTOKEYB_PID=$!
 fi
 
 if [ "$DXVK_WINE_MODE" = direct32 ] && type taskset >/dev/null 2>&1; then
-    taskset -c 0-3 box86 /usr/lib/wine/i386-unix/wine "$EXE" &
+    taskset -c 0-3 box86 /usr/lib/wine/i386-unix/wine "$EXE" 9>&- &
 elif [ "$DXVK_WINE_MODE" = direct32 ]; then
-    box86 /usr/lib/wine/i386-unix/wine "$EXE" &
+    box86 /usr/lib/wine/i386-unix/wine "$EXE" 9>&- &
 elif type taskset >/dev/null 2>&1; then
-    taskset -c 0-3 box64 /usr/bin/wine "$EXE" &
+    taskset -c 0-3 box64 /usr/bin/wine "$EXE" 9>&- &
 else
-    box64 /usr/bin/wine "$EXE" &
+    box64 /usr/bin/wine "$EXE" 9>&- &
 fi
 WINE_PID=$!
 
@@ -581,6 +613,6 @@ thermal_guard() {
         fi
     done
 }
-thermal_guard &
+thermal_guard 9>&- &
 THERMAL_PID=$!
 wait "$WINE_PID"

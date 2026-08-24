@@ -39,6 +39,9 @@ supersede it for current decisions.
 
 ## Runtime freezes
 
+- [Native DXT hitch research](briefs/MGS2_DXVK_NATIVE_DXT_HITCH_RESEARCH_2026-08-24.md)
+  — побитово проверенный нативный DXT снял работу с texture worker, но не
+  сократил 1.62-секундный gameplay gap; production не изменён.
 - [Freeze and provenance](briefs/MGS2_FREEZE_AND_PROVENANCE_2026-08-23.md).
 - [Box86 first-use mutex race](briefs/MGS2_RUNTIME_MUTEX_FREEZE_2026-08-11.md).
 - [Separable third freeze](briefs/MGS2_SEPARABLE_FREEZE_CAPTURE_2026-08-12.md).

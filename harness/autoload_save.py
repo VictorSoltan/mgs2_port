@@ -42,25 +42,93 @@ CONFIRM = sys.argv[2] if len(sys.argv) > 2 else "z"
 # different save; 0 keeps the old behaviour.
 SAVE_UP = int(os.environ.get("MGS2_SAVE_UP", "2"))
 
-# step name, key, seconds to wait AFTER it before the screenshot
-ROUTE = [
-    ("1-main-menu",    CONFIRM, 6),
-    ("2-on-load-game", "down",  3),
-    ("3-save-list",    CONFIRM, 7),
-] + [
-    ("3%s-save-up-%d" % (chr(ord("a") + i), i + 1), "up", 2)
-    for i in range(SAVE_UP)
-] + [
-    ("4-confirm-box",  CONFIRM, 5),
-    ("5-on-yes",       "left",  3),
-    ("6-loaded",       CONFIRM, 50),
-]
+# Fixed 640x480 screen coordinates of the solid 18x10 selection marker.  The
+# animated menu background changes every frame, so whole-image hashes are not a
+# useful route gate; comparing the two marker cells is stable across runs.
+MENU_NEW_GAME_MARKER = "18x10+37+65"
+MENU_LOAD_GAME_MARKER = "18x10+37+92"
+SAVE_MARKER_X = 37
+SAVE_MARKER_FIRST_Y = 153
+SAVE_MARKER_STEP_Y = 26
 
 
 def shot(name):
-    subprocess.run(["grim", os.path.join(OUT, name + ".png")],
-                   capture_output=True, timeout=30)
-    print("  снимок %s" % name, flush=True)
+    path = os.path.join(OUT, name + ".png")
+    result = subprocess.run(["grim", path], capture_output=True, timeout=30)
+    if result.returncode:
+        raise RuntimeError("grim failed for %s: %s" %
+                           (name, result.stderr.decode(errors="replace")))
+    print("  снимок %s tick=%d" %
+          (name, int(time.monotonic() * 1000)), flush=True)
+    return path
+
+
+def image_geometry(path):
+    result = subprocess.run(
+        ["identify", "-format", "%wx%h", path], capture_output=True,
+        text=True, timeout=30, check=True)
+    return result.stdout.strip()
+
+
+def image_metric(path, geometry, colorspace="Gray", channel=None):
+    """Return a bounded ImageMagick crop mean for a fail-closed route gate."""
+    command = ["convert", path, "-crop", geometry, "+repage",
+               "-colorspace", colorspace]
+    if channel:
+        command += ["-channel", channel, "-separate"]
+    command += ["-format", "%[fx:mean]", "info:"]
+    result = subprocess.run(command, capture_output=True, text=True,
+                            timeout=30, check=True)
+    return float(result.stdout)
+
+
+def menu_selection(path):
+    if image_geometry(path) != "640x480":
+        raise RuntimeError("route gate requires 640x480, got %s" %
+                           image_geometry(path))
+    new_game = image_metric(path, MENU_NEW_GAME_MARKER)
+    load_game = image_metric(path, MENU_LOAD_GAME_MARKER)
+    print("  menu-marker new=%.3f load=%.3f" %
+          (new_game, load_game), flush=True)
+    if new_game > load_game + 0.12 and new_game > 0.35:
+        return "new-game"
+    if load_game > new_game + 0.12 and load_game > 0.35:
+        return "load-game"
+    return None
+
+
+def save_selection(path):
+    means = [image_metric(
+        path, "18x10+%d+%d" %
+        (SAVE_MARKER_X, SAVE_MARKER_FIRST_Y + SAVE_MARKER_STEP_Y * index))
+        for index in range(10)]
+    order = sorted(range(len(means)), key=means.__getitem__, reverse=True)
+    best, second = order[:2]
+    print("  save-marker row=%02d mean=%.3f next=%.3f" %
+          (best, means[best], means[second]), flush=True)
+    if means[best] > 0.35 and means[best] > means[second] + 0.12:
+        return best
+    return None
+
+
+def yes_no_selection(path):
+    # Saturation distinguishes the orange selected word from the grey one. The
+    # crops intentionally include no save-row cursor, so a dropped confirm key
+    # remains ambiguous and fails closed instead of entering the wrong route.
+    yes = image_metric(path, "80x30+450+400", "HSL", "G")
+    no = image_metric(path, "80x30+530+400", "HSL", "G")
+    print("  yes-no saturation yes=%.3f no=%.3f" % (yes, no), flush=True)
+    if yes > no + 0.02 and yes > 0.06:
+        return "yes"
+    if no > yes + 0.02 and no > 0.04:
+        return "no"
+    return None
+
+
+def screen_gray_mean(path):
+    value = image_metric(path, "640x480+0+0")
+    print("  screen-gray-mean=%.3f" % value, flush=True)
+    return value
 
 
 def game_pid():
@@ -135,6 +203,7 @@ def main():
     env.setdefault("XDG_RUNTIME_DIR", "/var/run/0-runtime-dir")
     env.setdefault("WAYLAND_DISPLAY", "wayland-1")
     os.environ.update(env)
+    print("autoload-start tick=%d" % int(time.monotonic() * 1000), flush=True)
 
     import fcntl
     import struct
@@ -176,11 +245,103 @@ def main():
     time.sleep(1.5)
     shot("0-title")
 
-    for name, key, wait in ROUTE:
-        print("== %s : %s ==" % (name, key), flush=True)
+    def route_step(name, key, wait):
+        print("== %s : %s tick=%d ==" %
+              (name, key, int(time.monotonic() * 1000)), flush=True)
         press(key)
         time.sleep(wait)
-        shot(name)
+        return shot(name)
+
+    # Every transition is checked from the actual framebuffer. uinput delivery
+    # on this stack is not guaranteed; step names in a log are not evidence that
+    # the game accepted the key.
+    main_menu_path = None
+    for attempt in range(3):
+        suffix = "" if attempt == 0 else "-retry-%d" % attempt
+        main_menu_path = route_step("1-main-menu" + suffix, CONFIRM, 6)
+        if menu_selection(main_menu_path) == "new-game":
+            break
+        send_key.focus_game()
+    else:
+        raise RuntimeError("title -> main menu was not confirmed by pixels")
+
+    load_menu_path = None
+    for attempt in range(3):
+        suffix = "" if attempt == 0 else "-retry-%d" % attempt
+        load_menu_path = route_step("2-on-load-game" + suffix, "down", 3)
+        selection = menu_selection(load_menu_path)
+        if selection == "load-game":
+            break
+        if selection != "new-game":
+            raise RuntimeError("main-menu selection became ambiguous")
+        send_key.focus_game()
+    else:
+        raise RuntimeError("LOAD GAME was not selected; refusing NEW GAME")
+
+    save_list_path = None
+    for attempt in range(3):
+        suffix = "" if attempt == 0 else "-retry-%d" % attempt
+        save_list_path = route_step("3-save-list" + suffix, CONFIRM, 7)
+        selected_save = save_selection(save_list_path)
+        if selected_save is not None:
+            break
+        if menu_selection(save_list_path) != "load-game":
+            raise RuntimeError("LOAD GAME -> save list became ambiguous")
+        send_key.focus_game()
+    else:
+        raise RuntimeError("save list did not open")
+
+    expected_save = selected_save
+    for i in range(SAVE_UP):
+        expected_save -= 1
+        if expected_save < 0:
+            raise RuntimeError("MGS2_SAVE_UP moves above the first save")
+        for attempt in range(3):
+            base = "3%s-save-up-%d" % (chr(ord("a") + i), i + 1)
+            suffix = "" if attempt == 0 else "-retry-%d" % attempt
+            save_path = route_step(base + suffix, "up", 2)
+            actual_save = save_selection(save_path)
+            if actual_save == expected_save:
+                break
+            if actual_save != expected_save + 1:
+                raise RuntimeError("save cursor became ambiguous")
+            send_key.focus_game()
+        else:
+            raise RuntimeError("save cursor did not move to row %02d" %
+                               expected_save)
+
+    confirm_path = None
+    for attempt in range(3):
+        suffix = "" if attempt == 0 else "-retry-%d" % attempt
+        confirm_path = route_step("4-confirm-box" + suffix, CONFIRM, 5)
+        selection = yes_no_selection(confirm_path)
+        if selection == "no":
+            break
+        if save_selection(confirm_path) != expected_save:
+            raise RuntimeError("save -> confirmation box became ambiguous")
+        send_key.focus_game()
+    else:
+        raise RuntimeError("load confirmation box did not open")
+
+    yes_path = None
+    for attempt in range(3):
+        suffix = "" if attempt == 0 else "-retry-%d" % attempt
+        yes_path = route_step("5-on-yes" + suffix, "left", 3)
+        selection = yes_no_selection(yes_path)
+        if selection == "yes":
+            break
+        if selection != "no":
+            raise RuntimeError("YES/NO selection became ambiguous")
+        send_key.focus_game()
+    else:
+        raise RuntimeError("YES was not selected")
+
+    loaded_path = route_step("6-loaded", CONFIRM, 50)
+    if screen_gray_mean(loaded_path) < 0.15:
+        if yes_no_selection(loaded_path) == "yes":
+            loaded_path = route_step("6-loaded-retry-1", CONFIRM, 50)
+        if screen_gray_mean(loaded_path) < 0.15:
+            raise RuntimeError("fixed Strut D gameplay scene was not confirmed")
 
     # Walking is what the player described as the trigger: arriving in a new
     # scene stalls, seeing a new enemy stalls, then it settles. The saved game

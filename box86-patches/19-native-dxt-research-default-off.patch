@@ -1,0 +1,646 @@
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -5,6 +5,7 @@
+ #include <dlfcn.h>
+ #include <math.h>
+ #include <signal.h>
++#include <pthread.h>
+
+ #include "box86context.h"
+ #include "elfloader.h"
+@@ -391,6 +392,428 @@
+
+
+ /* ---------------------------------------------------------------------------
++ * MGS2 native DXT block decoders -- default-off research candidate.
++ *
++ * A correct-save, all-thread perf capture found the texture worker active for
++ * 39.6% of a 1.620 s no-PRESENT interval.  Its four hottest guest blocks were
++ * the caller and the game's scalar x87 DXT1/DXT3/DXT5 routines.  That made the
++ * leaf decoders a bounded native-bridge experiment, not proof that they set the
++ * wall-clock interval.  Indeed, a later symmetric run removed the worker from
++ * the interval but left it at 1.630 s; the main Wine message/yield loop is an
++ * independent barrier.  These functions still decode one 4x4 compressed block
++ * to sixteen float RGBA pixels inefficiently through the x86 dynarec.
++ *
++ * This is deliberately a narrow, default-off bridge, not a replacement for
++ * Box86.  MGS2_BOX86_NATIVE_DXT=1 enables native decode.  Value 2 is a bounded
++ * differential verifier: on real game inputs it runs a relocated copy of the
++ * original guest routine, runs the native routine, compares all 256 output
++ * bytes, and restores the guest output on any mismatch.  It logs only from
++ * context teardown, never from the texture worker.
++ * ------------------------------------------------------------------------- */
++
++enum { MGS2_DXT1 = 0, MGS2_DXT3 = 1, MGS2_DXT5 = 2, MGS2_DXT_COUNT = 3 };
++#define MGS2_DXT_VERIFY_LIMIT 4096u
++
++typedef struct { float c[4]; } mgs2_rgba_t;
++
++static inline float mgs2_float_bits(uint32_t bits)
++{
++    float f;
++    memcpy(&f, &bits, sizeof(f));
++    return f;
++}
++
++/* FINALPLAY16 deliberately keeps Box86's BOX86_DYNAREC_X87DOUBLE default (0),
++ * but the effective precision is instruction-dependent.  FLD float starts an
++ * F32 cache entry; FILD m32 always starts an F64 entry and X87_COMBINE promotes
++ * the other operand.  Consequently RGB interpolation is staged float32, while
++ * integer scale and alpha weighting are staged double with one final FSTPS.
++ * The two real-input regression probes below caught both halves of this rule.
++ * Volatile temporaries preserve guest instruction boundaries and prohibit FMA. */
++static inline float mgs2_dxt_scale(unsigned int n, uint32_t factor_bits)
++{
++    volatile double result = (double)n
++            * (double)mgs2_float_bits(factor_bits);
++    return (float)result;
++}
++
++static inline float mgs2_dxt_lerp(float a, float b, uint32_t factor_bits)
++{
++    volatile float difference = b - a;
++    volatile float scaled = difference * mgs2_float_bits(factor_bits);
++    volatile float result = scaled + a;
++    return result;
++}
++
++static inline float mgs2_dxt_weighted(float a, unsigned int wa,
++        float b, unsigned int wb, uint32_t divisor_bits)
++{
++    volatile double left = (double)wa * (double)a;
++    volatile double right = (double)wb * (double)b;
++    volatile double sum = left + right;
++    volatile double result = sum * (double)mgs2_float_bits(divisor_bits);
++    return (float)result;
++}
++
++static void mgs2_dxt_rgb565(mgs2_rgba_t *out, uint16_t v)
++{
++    out->c[0] = mgs2_dxt_scale(v >> 11, 0x3d042108u);       /* 1/31 */
++    out->c[1] = mgs2_dxt_scale((v >> 5) & 63, 0x3c820821u); /* 1/63 */
++    out->c[2] = mgs2_dxt_scale(v & 31, 0x3d042108u);
++    out->c[3] = 1.0f;
++}
++
++__attribute__((noinline, visibility("default")))
++int mgs2_native_dxt1_kernel(void *dst_address, const void *src_address)
++{
++    mgs2_rgba_t palette[4];
++    mgs2_rgba_t *dst = (mgs2_rgba_t *)dst_address;
++    const unsigned char *src = (const unsigned char *)src_address;
++    uint16_t c0, c1;
++    uint32_t indices;
++    unsigned int i, k;
++
++    memcpy(&c0, src, 2);
++    memcpy(&c1, src + 2, 2);
++    memcpy(&indices, src + 4, 4);
++    mgs2_dxt_rgb565(&palette[0], c0);
++    mgs2_dxt_rgb565(&palette[1], c1);
++    if (c0 <= c1)
++    {
++        for (k = 0; k < 4; ++k)
++            palette[2].c[k] = mgs2_dxt_lerp(palette[0].c[k], palette[1].c[k],
++                    0x3f000000u); /* 1/2 */
++        memset(&palette[3], 0, sizeof(palette[3]));
++    }
++    else
++    {
++        for (k = 0; k < 4; ++k)
++        {
++            palette[2].c[k] = mgs2_dxt_lerp(palette[0].c[k], palette[1].c[k],
++                    0x3eaaaaabu); /* 1/3 */
++            palette[3].c[k] = mgs2_dxt_lerp(palette[0].c[k], palette[1].c[k],
++                    0x3f2aaaabu); /* 2/3 */
++        }
++    }
++    for (i = 0; i < 16; ++i, indices >>= 2)
++        dst[i] = palette[indices & 3];
++    return 0;
++}
++
++__attribute__((noinline, visibility("default")))
++int mgs2_native_dxt3_kernel(void *dst_address, const void *src_address)
++{
++    mgs2_rgba_t *dst = (mgs2_rgba_t *)dst_address;
++    const unsigned char *src = (const unsigned char *)src_address;
++    uint64_t alpha = 0;
++    unsigned int i;
++
++    mgs2_native_dxt1_kernel(dst, src + 8);
++    memcpy(&alpha, src, 8);
++    for (i = 0; i < 16; ++i, alpha >>= 4)
++        dst[i].c[3] = mgs2_dxt_scale((unsigned int)alpha & 15,
++                0x3d888889u); /* 1/15 */
++    return 0;
++}
++
++__attribute__((noinline, visibility("default")))
++int mgs2_native_dxt5_kernel(void *dst_address, const void *src_address)
++{
++    mgs2_rgba_t *dst = (mgs2_rgba_t *)dst_address;
++    const unsigned char *src = (const unsigned char *)src_address;
++    float alpha[8];
++    uint64_t indices = 0;
++    unsigned int i;
++
++    mgs2_native_dxt1_kernel(dst, src + 8);
++    alpha[0] = mgs2_dxt_scale(src[0], 0x3b808081u); /* 1/255 */
++    alpha[1] = mgs2_dxt_scale(src[1], 0x3b808081u);
++    if (src[0] > src[1])
++        for (i = 1; i < 7; ++i)
++            alpha[i + 1] = mgs2_dxt_weighted(alpha[0], 7 - i,
++                    alpha[1], i, 0x3e124925u); /* 1/7 */
++    else
++    {
++        for (i = 1; i < 5; ++i)
++            alpha[i + 1] = mgs2_dxt_weighted(alpha[0], 5 - i,
++                    alpha[1], i, 0x3e4ccccdu); /* 1/5 */
++        alpha[6] = 0.0f;
++        alpha[7] = 1.0f;
++    }
++    for (i = 0; i < 6; ++i)
++        indices |= (uint64_t)src[i + 2] << (i * 8);
++    for (i = 0; i < 16; ++i, indices >>= 3)
++        dst[i].c[3] = alpha[indices & 7];
++    return 0;
++}
++
++static int mgs2_native_dxt_dispatch(unsigned int id, void *dst, const void *src)
++{
++    if (id == MGS2_DXT1) return mgs2_native_dxt1_kernel(dst, src);
++    if (id == MGS2_DXT3) return mgs2_native_dxt3_kernel(dst, src);
++    return mgs2_native_dxt5_kernel(dst, src);
++}
++
++/* Exported only for the out-of-process, read-only verifier.  The hot path does
++ * bounded atomic memory writes; it never formats or emits a log line. */
++__attribute__((visibility("default"))) volatile unsigned int mgs2_dxt_armed;
++__attribute__((visibility("default"))) volatile unsigned int mgs2_dxt_verify;
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_calls[MGS2_DXT_COUNT];
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_compared[MGS2_DXT_COUNT];
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_bad[MGS2_DXT_COUNT];
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_skipped[MGS2_DXT_COUNT];
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_first_bad_set, mgs2_dxt_first_bad_id;
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_first_bad_call, mgs2_dxt_first_bad_byte;
++__attribute__((visibility("default"))) volatile unsigned int
++        mgs2_dxt_first_bad_guest, mgs2_dxt_first_bad_native;
++__attribute__((visibility("default"))) volatile unsigned char
++        mgs2_dxt_first_bad_source[16];
++__attribute__((visibility("default"))) volatile unsigned char
++        mgs2_dxt_first_bad_guest_output[sizeof(mgs2_rgba_t) * 16];
++__attribute__((visibility("default"))) volatile unsigned char
++        mgs2_dxt_first_bad_native_output[sizeof(mgs2_rgba_t) * 16];
++
++static pthread_mutex_t mgs2_dxt_reference_mutex = PTHREAD_MUTEX_INITIALIZER;
++static unsigned char *mgs2_dxt_reference_page;
++static uintptr_t mgs2_dxt_reference_entry[MGS2_DXT_COUNT];
++
++static uintptr_t mgs2_dxt_rel32_target(uintptr_t code, unsigned int at)
++{
++    int32_t disp;
++    memcpy(&disp, (const void *)(code + at + 1), 4);
++    return (uintptr_t)((intptr_t)(code + at + 5) + (intptr_t)disp);
++}
++
++static int mgs2_dxt_relocate_call(unsigned char *copy, unsigned int at,
++        uintptr_t target)
++{
++    int32_t disp;
++    if (copy[at] != 0xe8)
++        return 0;
++    disp = (int32_t)(target - ((uintptr_t)copy + at + 5));
++    memcpy(copy + at + 1, &disp, 4);
++    return 1;
++}
++
++/* Build guest-executable reference copies.  DXT1 has two calls to the RGB565
++ * helper; DXT3 and DXT5 each call DXT1.  Only those rel32 operands need fixing.
++ * Keeping all three copies in one page also guarantees their mutual rel32 is
++ * representable on a 32-bit process. */
++static uintptr_t mgs2_dxt_reference(unsigned int id)
++{
++    static const unsigned int offset[MGS2_DXT_COUNT] = { 0x000, 0x200, 0x300 };
++    static const unsigned int length[MGS2_DXT_COUNT] = { 0x13e, 0x083, 0x13c };
++    static const unsigned int dxt1_call[MGS2_DXT_COUNT] = { 0, 0x10, 0x13 };
++    uintptr_t guest = mgs2_dxt_guest_addr(id), guest1, target, result = 0;
++    unsigned char *copy;
++
++    if (id >= MGS2_DXT_COUNT || !guest)
++        return 0;
++    pthread_mutex_lock(&mgs2_dxt_reference_mutex);
++    if (mgs2_dxt_reference_entry[id])
++    {
++        result = mgs2_dxt_reference_entry[id];
++        goto out;
++    }
++    if (!mgs2_dxt_reference_page)
++    {
++        mgs2_dxt_reference_page = mmap(NULL, 4096,
++                PROT_READ | PROT_WRITE | PROT_EXEC,
++                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++        if (mgs2_dxt_reference_page == MAP_FAILED)
++        {
++            mgs2_dxt_reference_page = NULL;
++            goto out;
++        }
++    }
++
++    guest1 = id == MGS2_DXT1 ? guest
++            : mgs2_dxt_rel32_target(guest, dxt1_call[id]);
++    if (!mgs2_dxt_reference_entry[MGS2_DXT1])
++    {
++        copy = mgs2_dxt_reference_page + offset[MGS2_DXT1];
++        memcpy(copy, (const void *)guest1, length[MGS2_DXT1]);
++        target = mgs2_dxt_rel32_target(guest1, 0x16);
++        if (!mgs2_dxt_relocate_call(copy, 0x16, target)) goto out;
++        target = mgs2_dxt_rel32_target(guest1, 0x26);
++        if (!mgs2_dxt_relocate_call(copy, 0x26, target)) goto out;
++        mgs2_dxt_reference_entry[MGS2_DXT1] = (uintptr_t)copy;
++    }
++    if (id != MGS2_DXT1)
++    {
++        copy = mgs2_dxt_reference_page + offset[id];
++        memcpy(copy, (const void *)guest, length[id]);
++        if (!mgs2_dxt_relocate_call(copy, dxt1_call[id],
++                mgs2_dxt_reference_entry[MGS2_DXT1]))
++            goto out;
++        mgs2_dxt_reference_entry[id] = (uintptr_t)copy;
++    }
++    __builtin___clear_cache((char *)mgs2_dxt_reference_page,
++            (char *)mgs2_dxt_reference_page + 4096);
++    result = mgs2_dxt_reference_entry[id];
++out:
++    pthread_mutex_unlock(&mgs2_dxt_reference_mutex);
++    return result;
++}
++
++static int mgs2_native_dxt_verify_call(unsigned int id, uint32_t dst_address,
++        uint32_t src_address, unsigned int call_number)
++{
++    unsigned char source[16], guest_output[sizeof(mgs2_rgba_t) * 16];
++    const unsigned int source_size = id == MGS2_DXT1 ? 8 : 16;
++    uintptr_t reference = mgs2_dxt_reference(id);
++    x86emu_t *emu = thread_get_emu();
++    unsigned char *dst = (unsigned char *)(uintptr_t)dst_address;
++    unsigned int i;
++    int guest_result;
++
++    if (!reference || !emu)
++    {
++        __atomic_fetch_add(&mgs2_dxt_skipped[id], 1, __ATOMIC_RELAXED);
++        return mgs2_native_dxt_dispatch(id, dst,
++                (const void *)(uintptr_t)src_address);
++    }
++    memcpy(source, (const void *)(uintptr_t)src_address, source_size);
++    ++mgs2_dither_bypass;
++    guest_result = (int)RunFunctionWithEmu(emu, 0, reference, 2,
++            dst_address, src_address);
++    --mgs2_dither_bypass;
++    memcpy(guest_output, dst, sizeof(guest_output));
++    mgs2_native_dxt_dispatch(id, dst, source);
++    if (memcmp(guest_output, dst, sizeof(guest_output)))
++    {
++        __atomic_fetch_add(&mgs2_dxt_bad[id], 1, __ATOMIC_RELAXED);
++        for (i = 0; i < sizeof(guest_output) && guest_output[i] == dst[i]; ++i) {}
++        if (!__atomic_exchange_n(&mgs2_dxt_first_bad_set, 1, __ATOMIC_ACQ_REL))
++        {
++            mgs2_dxt_first_bad_id = id;
++            mgs2_dxt_first_bad_call = call_number;
++            mgs2_dxt_first_bad_byte = i;
++            mgs2_dxt_first_bad_guest = guest_output[i];
++            mgs2_dxt_first_bad_native = dst[i];
++            memcpy((void *)mgs2_dxt_first_bad_source, source, source_size);
++            memcpy((void *)mgs2_dxt_first_bad_guest_output, guest_output,
++                    sizeof(guest_output));
++            memcpy((void *)mgs2_dxt_first_bad_native_output, dst,
++                    sizeof(guest_output));
++        }
++        /* Verify mode is a correctness gate, not a visual experiment. */
++        memcpy(dst, guest_output, sizeof(guest_output));
++    }
++    __atomic_fetch_add(&mgs2_dxt_compared[id], 1, __ATOMIC_RELAXED);
++    return guest_result;
++}
++
++static int mgs2_native_dxt_run(unsigned int id, uint32_t dst, uint32_t src)
++{
++    unsigned int call_number = __atomic_add_fetch(&mgs2_dxt_calls[id], 1,
++            __ATOMIC_RELAXED);
++    /* A route makes about 1.4 M calls.  Checking only calls 1..4096 sampled a
++     * narrow startup prefix, so keep 1024 contiguous probes for early edge
++     * cases and then one per 512 calls across the whole load, still capped at
++     * 4096 total comparisons per format. */
++    if (mgs2_dxt_verify
++            && (call_number <= 1024 || !(call_number & 511))
++            && __atomic_load_n(&mgs2_dxt_compared[id], __ATOMIC_RELAXED)
++                    < MGS2_DXT_VERIFY_LIMIT)
++        return mgs2_native_dxt_verify_call(id, dst, src, call_number);
++    return mgs2_native_dxt_dispatch(id, (void *)(uintptr_t)dst,
++            (const void *)(uintptr_t)src);
++}
++
++static int mgs2_native_dxt1_impl(uint32_t dst, uint32_t src)
++{ return mgs2_native_dxt_run(MGS2_DXT1, dst, src); }
++static int mgs2_native_dxt3_impl(uint32_t dst, uint32_t src)
++{ return mgs2_native_dxt_run(MGS2_DXT3, dst, src); }
++static int mgs2_native_dxt5_impl(uint32_t dst, uint32_t src)
++{ return mgs2_native_dxt_run(MGS2_DXT5, dst, src); }
++
++static void mgs2_native_dxt_wrapper(x86emu_t *emu, uintptr_t fnc)
++{
++    uint32_t esp = GetESP(emu);
++    int result = ((int (*)(uint32_t, uint32_t))fnc)(
++            *(uint32_t *)(esp + 4), *(uint32_t *)(esp + 8));
++    SetEAX(emu, (uint32_t)result);
++}
++
++static int mgs2_native_dxt_selftest(void)
++{
++    unsigned char dxt1[8] = { 0x00, 0xf8, 0xe0, 0x07,
++            0xe4, 0xe4, 0xe4, 0xe4 };
++    unsigned char dxt3[16] = { 0x10, 0x32, 0x54, 0x76,
++            0x98, 0xba, 0xdc, 0xfe };
++    unsigned char dxt5[16] = { 255, 0, 0x88, 0xc6, 0xfa, 0x88, 0xc6, 0xfa };
++    mgs2_rgba_t out[16];
++    uint32_t boundary_bits;
++    unsigned int i;
++
++    memcpy(dxt3 + 8, dxt1, 8);
++    memcpy(dxt5 + 8, dxt1, 8);
++    if (mgs2_native_dxt1_kernel(out, dxt1) || out[0].c[0] != 1.0f
++            || out[0].c[1] != 0.0f || out[1].c[1] != 1.0f
++            || out[3].c[3] != 1.0f)
++        return 0;
++    if (mgs2_native_dxt3_kernel(out, dxt3)) return 0;
++    for (i = 0; i < 16; ++i)
++        if (out[i].c[3] != mgs2_dxt_scale(i, 0x3d888889u)) return 0;
++    if (mgs2_native_dxt5_kernel(out, dxt5)) return 0;
++    if (out[0].c[3] != 1.0f || out[1].c[3] != 0.0f) return 0;
++
++    /* First real differential failure from the fixed-save route.  The DXT1
++     * payload is bytes 8..15 of ffe700002049922494a5000055d50000;
++     * pixel 7 selects palette entry 3.  Double intermediates returned ...3b,
++     * while the guest's staged float32 chain returns the required ...3c. */
++    {
++        static const unsigned char boundary[8] = {
++            0x94, 0xa5, 0x00, 0x00, 0x55, 0xd5, 0x00, 0x00
++        };
++        mgs2_native_dxt1_kernel(out, boundary);
++        memcpy(&boundary_bits, &out[7].c[1], 4);
++    }
++    if (boundary_bits != 0x3e6e643cu) return 0;
++
++    /* Second real failure after the deliberately all-float experiment.  Pixel
++     * 14 alpha is built through FILD, so it must follow staged F64 arithmetic. */
++    {
++        static const unsigned char alpha_boundary[16] = {
++            0x85, 0x00, 0x49, 0x92, 0x24, 0x49, 0x12, 0x2c,
++            0x10, 0x84, 0xef, 0x7b, 0xaa, 0xaa, 0xaa, 0xaa
++        };
++        mgs2_native_dxt5_kernel(out, alpha_boundary);
++        memcpy(&boundary_bits, &out[14].c[3], 4);
++    }
++    return boundary_bits == 0x3ebebec0u;
++}
++
++static void mgs2_native_dxt_report(void)
++{
++    unsigned int i;
++    if (!mgs2_dxt_armed)
++        return;
++    for (i = 0; i < MGS2_DXT_COUNT; ++i)
++        printf_log(LOG_NONE, "MGS2 native DXT%u: %u calls, %u compared, "
++                "%u mismatched, %u skipped\n",
++                i == 0 ? 1 : i == 1 ? 3 : 5,
++                __atomic_load_n(&mgs2_dxt_calls[i], __ATOMIC_RELAXED),
++                __atomic_load_n(&mgs2_dxt_compared[i], __ATOMIC_RELAXED),
++                __atomic_load_n(&mgs2_dxt_bad[i], __ATOMIC_RELAXED),
++                __atomic_load_n(&mgs2_dxt_skipped[i], __ATOMIC_RELAXED));
++    if (mgs2_dxt_first_bad_set)
++        printf_log(LOG_NONE, "MGS2 native DXT: first mismatch DXT%u call %u "
++                "byte %u guest %02x native %02x\n",
++                mgs2_dxt_first_bad_id == 0 ? 1 : mgs2_dxt_first_bad_id == 1 ? 3 : 5,
++                mgs2_dxt_first_bad_call, mgs2_dxt_first_bad_byte,
++                mgs2_dxt_first_bad_guest, mgs2_dxt_first_bad_native);
++}
++
++
++/* ---------------------------------------------------------------------------
+  * MGS2 native RGBA dither pack -- the long load freeze.
+  *
+  * Four unattended captures agree: while the game freezes for 4-7 s after a save
+@@ -1020,6 +1443,35 @@
+                     (void *)bridge, mgs2_dither_verify ? " (VERIFY mode)" : "");
+         }
+     }
++    const char *mgs2_native_dxt_env = getenv("MGS2_BOX86_NATIVE_DXT");
++    if (mgs2_native_dxt_env && atoi(mgs2_native_dxt_env))
++    {
++        static void *impl[MGS2_DXT_COUNT] = {
++            mgs2_native_dxt1_impl, mgs2_native_dxt3_impl, mgs2_native_dxt5_impl
++        };
++        unsigned int i;
++
++        if (!mgs2_native_dxt_selftest())
++            printf_log(LOG_NONE, "MGS2 native DXT: self-test FAILED, bridges disabled\n");
++        else
++        {
++            /* All three guest routines are cdecl and end in plain RET.  N=0
++             * keeps argument cleanup in the caller, exactly as in the EXE. */
++            for (i = 0; i < MGS2_DXT_COUNT; ++i)
++            {
++                uintptr_t bridge = AddBridge(context->system,
++                        mgs2_native_dxt_wrapper, impl[i], 0,
++                        i == MGS2_DXT1 ? "MGS2 native DXT1 decode"
++                        : i == MGS2_DXT3 ? "MGS2 native DXT3 decode"
++                        : "MGS2 native DXT5 decode");
++                SetMGS2NativeDxt(i, bridge);
++            }
++            mgs2_dxt_verify = atoi(mgs2_native_dxt_env) >= 2;
++            mgs2_dxt_armed = 1;
++            printf_log(LOG_NONE, "MGS2 native DXT: self-test passed, three "
++                    "bridges armed%s\n", mgs2_dxt_verify ? " (VERIFY mode)" : "");
++        }
++    }
+     const char *mgs2_native_dsound_fir_env = getenv("MGS2_BOX86_NATIVE_DSOUND_FIR");
+     if (mgs2_native_dsound_fir_env && atoi(mgs2_native_dsound_fir_env))
+     {
+@@ -1079,6 +1531,10 @@
+
+     box86context_t* ctx = *context;   // local copy to do the cleanning
+
++    /* Counters are updated on the texture worker but reported here, after the
++     * guest has stopped, so the instrument cannot create the hitch it measures. */
++    mgs2_native_dxt_report();
++
+     //clean_current_emuthread();    // cleaning main thread seems a bad idea
+     if(ctx->local_maplib)
+         FreeLibrarian(&ctx->local_maplib, NULL);
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -261,6 +261,9 @@
+ static uintptr_t mgs2_dsound_fir_guest;
+ static uintptr_t mgs2_native_dither;
+ static uintptr_t mgs2_dither_guest;
++#define MGS2_DXT_COUNT 3
++static uintptr_t mgs2_native_dxt[MGS2_DXT_COUNT];
++static uintptr_t mgs2_dxt_guest[MGS2_DXT_COUNT];
+ static uintptr_t mgs2_native_island_ffp;
+ static uintptr_t mgs2_island_ffp_guest;
+ static uintptr_t mgs2_native_island_gl;
+@@ -318,6 +321,18 @@
+     mgs2_native_dither = alt;
+ }
+
++void SetMGS2NativeDxt(unsigned int id, uintptr_t alt)
++{
++    if (id < MGS2_DXT_COUNT)
++        mgs2_native_dxt[id] = alt;
++}
++
++uintptr_t mgs2_dxt_guest_addr(unsigned int id)
++{
++    return (id < MGS2_DXT_COUNT)
++        ? __atomic_load_n(&mgs2_dxt_guest[id], __ATOMIC_ACQUIRE) : 0;
++}
++
+ /* The converter's own guest address, published so the native implementation can
+  * derive the module base and reach the pre-transform it sometimes calls. The
+  * exe loads at its preferred base today, but deriving beats assuming. */
+@@ -399,6 +414,37 @@
+     0x08, 0x56, 0x0f, 0xaf, 0xd0, 0x8b, 0x75, 0x0c,
+ };
+
++/* Exact, unique first 48 bytes of the game's DXT1, DXT3 and DXT5 decoders.
++ * They are called through a texture-format function pointer, so they need the
++ * same LinkNext path as the virtual dither converter.  The rel32 call bytes are
++ * stable under PE relocation because every target is in the same image. */
++static const unsigned char mgs2_dxt_signature[MGS2_DXT_COUNT][48] = {
++    {
++        0x55, 0x8b, 0xec, 0x83, 0xec, 0x58, 0x53, 0x8b,
++        0x5d, 0x0c, 0x56, 0x33, 0xf6, 0x66, 0x8b, 0x33,
++        0x57, 0x8d, 0x45, 0xa8, 0x8b, 0xce, 0xe8, 0x5a,
++        0xed, 0xff, 0xff, 0x33, 0xff, 0x66, 0x8b, 0x7b,
++        0x02, 0x8d, 0x45, 0xb8, 0x8b, 0xcf, 0xe8, 0x4a,
++        0xed, 0xff, 0xff, 0x66, 0x3b, 0xf7, 0x77, 0x63,
++    },
++    {
++        0x55, 0x8b, 0xec, 0x56, 0x8b, 0x75, 0x0c, 0x57,
++        0x8b, 0x7d, 0x08, 0x8d, 0x46, 0x08, 0x50, 0x57,
++        0xe8, 0xad, 0xfe, 0xff, 0xff, 0x85, 0xc0, 0x59,
++        0x59, 0x7c, 0x64, 0x8b, 0x0e, 0xd9, 0x05, 0xa4,
++        0xf8, 0x95, 0x00, 0x6a, 0x08, 0x5a, 0x8d, 0x47,
++        0x0c, 0x53, 0x8b, 0xd9, 0x83, 0xe3, 0x0f, 0x85,
++    },
++    {
++        0x55, 0x8b, 0xec, 0x83, 0xec, 0x20, 0x56, 0x8b,
++        0x75, 0x0c, 0x57, 0x8b, 0x7d, 0x08, 0x8d, 0x46,
++        0x08, 0x50, 0x57, 0xe8, 0x27, 0xfe, 0xff, 0xff,
++        0x85, 0xc0, 0x59, 0x59, 0x0f, 0x8c, 0x16, 0x01,
++        0x00, 0x00, 0x8a, 0x06, 0xd9, 0x05, 0x1c, 0x17,
++        0x96, 0x00, 0x0f, 0xb6, 0xc8, 0x89, 0x4d, 0x0c,
++    },
++};
++
+ /* getAlternate() is consulted only for DIRECT rel32 branches. Anything reached
+  * through a C++ vtable arrives at LinkNext() instead, which looks the target up
+  * in the alternates hash and nowhere else -- so a signature matcher for a
+@@ -418,19 +464,59 @@
+ void* mgs2_indirect_alternate(void* addr)
+ {
+     uintptr_t guest;
++    unsigned int i;
+
+-    if (!mgs2_native_dither || mgs2_dither_bypass)
++    if (mgs2_dither_bypass)
+         return addr;
+-    guest = __atomic_load_n(&mgs2_dither_guest, __ATOMIC_ACQUIRE);
+-    if (guest)
+-        return ((uintptr_t)addr == guest) ? (void *)mgs2_native_dither : addr;
+-    if (mgs2_signature_readable((uintptr_t)addr, sizeof(mgs2_dither_signature))
+-            && !memcmp(addr, mgs2_dither_signature, sizeof(mgs2_dither_signature)))
+-    {
+-        __atomic_store_n(&mgs2_dither_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
+-        printf_log(LOG_NONE, "MGS2 native dither: matched guest %p -> bridge %p\n",
+-                addr, (void *)mgs2_native_dither);
+-        return (void *)mgs2_native_dither;
++    if (mgs2_native_dither)
++    {
++        guest = __atomic_load_n(&mgs2_dither_guest, __ATOMIC_ACQUIRE);
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_dither;
++        if (!guest
++                && mgs2_signature_readable((uintptr_t)addr, sizeof(mgs2_dither_signature))
++                && !memcmp(addr, mgs2_dither_signature, sizeof(mgs2_dither_signature)))
++        {
++            __atomic_store_n(&mgs2_dither_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
++            printf_log(LOG_NONE, "MGS2 native dither: matched guest %p -> bridge %p\n",
++                    addr, (void *)mgs2_native_dither);
++            return (void *)mgs2_native_dither;
++        }
++    }
++    /* Hot cached lookup first.  This route is reached about 1.4 million times
++     * per fixed-save load, and that load only uses DXT5.  Interleaving lookup
++     * and discovery made every cached DXT5 call run getProtection()+memcmp()
++     * for the still-unseen DXT1 and DXT3 signatures before reaching slot 2.
++     * The first native profile showed that bookkeeping in rb_get/memcmp/locks.
++     * Three atomic loads are enough once any target has been discovered. */
++    for (i = 0; i < MGS2_DXT_COUNT; ++i)
++    {
++        if (!mgs2_native_dxt[i])
++            continue;
++        guest = __atomic_load_n(&mgs2_dxt_guest[i], __ATOMIC_ACQUIRE);
++        if (guest && (uintptr_t)addr == guest)
++            return (void *)mgs2_native_dxt[i];
++    }
++    /* Cold discovery only after no cached target matched. */
++    for (i = 0; i < MGS2_DXT_COUNT; ++i)
++    {
++        if (!mgs2_native_dxt[i])
++            continue;
++        guest = __atomic_load_n(&mgs2_dxt_guest[i], __ATOMIC_ACQUIRE);
++        if (!guest && mgs2_signature_readable((uintptr_t)addr, 48)
++                && !memcmp(addr, mgs2_dxt_signature[i], 48))
++        {
++            uintptr_t expected = 0;
++
++            if (!__atomic_compare_exchange_n(&mgs2_dxt_guest[i], &expected,
++                    (uintptr_t)addr, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
++                    && expected != (uintptr_t)addr)
++                continue;
++            printf_log(LOG_NONE, "MGS2 native DXT%u: matched guest %p -> bridge %p\n",
++                    i == 0 ? 1 : i == 1 ? 3 : 5,
++                    addr, (void *)mgs2_native_dxt[i]);
++            return (void *)mgs2_native_dxt[i];
++        }
+     }
+     return addr;
+ }
+@@ -531,7 +617,8 @@
+             return (void *)mgs2_native_dsound_fir;
+         }
+     }
+-    if (mgs2_native_dither)
++    if (mgs2_native_dither || mgs2_native_dxt[0]
++            || mgs2_native_dxt[1] || mgs2_native_dxt[2])
+     {
+         void *alt = mgs2_indirect_alternate(addr);
+
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -31,6 +31,8 @@
+ void SetMGS2NativeDsoundFir(uintptr_t alt);
+ void SetMGS2NativeDither(uintptr_t alt);
+ uintptr_t mgs2_dither_guest_addr(void);
++void SetMGS2NativeDxt(unsigned int id, uintptr_t alt);
++uintptr_t mgs2_dxt_guest_addr(unsigned int id);
+ void* mgs2_indirect_alternate(void* addr);
+ extern __thread int mgs2_dither_bypass;

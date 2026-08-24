@@ -1,0 +1,204 @@
+The FINALPLAY16 Vulkan bridge inherited the bring-up diagnostics used while the
+32-to-64-bit graphics-pipeline layout was being established.  They printed and
+flushed large structure dumps from vkCreateGraphicsPipelines and also logged
+descriptor layouts, render passes and shader modules unconditionally.  That is
+the same first-use path being measured for scene and enemy hitches.
+
+Make all bridge diagnostics default-off.  MGS2_BOX86_VK_DIAG=1 restores the
+bounded first-512 pipeline dump and enables the existing DMC3_VK_* diagnostic
+knobs.  The ordinary path retains the same structure alignment and native
+Vulkan calls and performs only one cached atomic flag read per intercepted
+creation call.
+
+--- a/src/wrapped/wrappedvulkan.c
++++ b/src/wrapped/wrappedvulkan.c
+@@ -509,6 +509,18 @@
+ }
+
+ CREATE(vkCreateDescriptorPool)
++static int dmc3_vk_diag_enabled(void)
++{
++    static int cached = -1;
++    int enabled = __atomic_load_n(&cached, __ATOMIC_ACQUIRE);
++    if (enabled < 0) {
++        const char *value = getenv("MGS2_BOX86_VK_DIAG");
++        enabled = value && value[0] && strcmp(value, "0");
++        __atomic_store_n(&cached, enabled, __ATOMIC_RELEASE);
++    }
++    return enabled;
++}
++
+ static void dmc3_dump_words(const char *name, const void *data, uint32_t word_count);
+ EXPORT int my_vkCreateDescriptorSetLayout(x86emu_t* emu, void* device, void* pCreateInfo, my_VkAllocationCallbacks_t* pAllocator, void* pSetLayout)
+ {
+@@ -517,14 +529,16 @@
+     my_VkAllocationCallbacks_t my_alloc;
+     int ret = my->vkCreateDescriptorSetLayout(device, pCreateInfo,
+             find_VkAllocationCallbacks(&my_alloc, pAllocator), pSetLayout);
+-    uint64_t handle = 0;
+-    if (!ret && pSetLayout)
+-        memcpy(&handle, pSetLayout, sizeof(handle));
+-    fprintf(stderr, "DMC3VK descriptor-layout result=%d handle=%016llx\n", ret, (unsigned long long)handle);
+-    dmc3_dump_words("dsl-info", info, 5);
+-    if (info)
+-        dmc3_dump_words("dsl-bindings", (const void *)(uintptr_t)info[4], info[3] * 5);
+-    fflush(stderr);
++    if (dmc3_vk_diag_enabled()) {
++        uint64_t handle = 0;
++        if (!ret && pSetLayout)
++            memcpy(&handle, pSetLayout, sizeof(handle));
++        fprintf(stderr, "DMC3VK descriptor-layout result=%d handle=%016llx\n", ret, (unsigned long long)handle);
++        dmc3_dump_words("dsl-info", info, 5);
++        if (info)
++            dmc3_dump_words("dsl-bindings", (const void *)(uintptr_t)info[4], info[3] * 5);
++        fflush(stderr);
++    }
+     return ret;
+ }
+ CREATE(vkCreateDescriptorUpdateTemplate)
+@@ -714,9 +728,10 @@
+     void* aligned;
+     const char* desc="upiuppppppppppUUuUi"; //TODO: check if any substruct need alignement!
+     aligned = vkalignStruct(pCreateInfos, desc, count);
++    const int diag = dmc3_vk_diag_enabled();
+     static uint32_t dmc3_call_id;
+-    const uint32_t this_call = ++dmc3_call_id;
+-    if (this_call <= 512) {
++    const uint32_t this_call = diag ? __sync_add_and_fetch(&dmc3_call_id, 1) : 0;
++    if (diag && this_call <= 512) {
+         fprintf(stderr, "DMC3VK enter call=%u device=%p cache=%016llx count=%u infos=%p aligned=%p allocator=%p pipelines=%p\n",
+                 this_call, device, (unsigned long long)pipelineCache, count,
+                 pCreateInfos, aligned, pAllocator, pPipelines);
+@@ -726,7 +741,7 @@
+         fflush(stderr);
+     }
+     void *no_spec_stages = NULL;
+-    const char *no_spec_call = getenv("DMC3_VK_NO_SPEC_CALL");
++    const char *no_spec_call = diag ? getenv("DMC3_VK_NO_SPEC_CALL") : NULL;
+     if (no_spec_call && (uint32_t)strtoul(no_spec_call, NULL, 10) == this_call && count == 1) {
+         dmc3_vk_graphics_pipeline_arm_t *a = aligned;
+         const size_t stage_size = 8 * sizeof(uint32_t);
+@@ -741,14 +756,14 @@
+         }
+     }
+     static pthread_mutex_t dmc3_pipeline_mutex = PTHREAD_MUTEX_INITIALIZER;
+-    const char *serialize = getenv("DMC3_VK_SERIALIZE_PIPELINES");
++    const char *serialize = diag ? getenv("DMC3_VK_SERIALIZE_PIPELINES") : NULL;
+     const int serialize_pipelines = serialize && serialize[0] && strcmp(serialize, "0");
+     if (serialize_pipelines)
+         pthread_mutex_lock(&dmc3_pipeline_mutex);
+     int ret = my->vkCreateGraphicsPipelines(device, pipelineCache, count, aligned, find_VkAllocationCallbacks(&my_alloc, pAllocator), pPipelines);
+     if (serialize_pipelines)
+         pthread_mutex_unlock(&dmc3_pipeline_mutex);
+-    if (this_call <= 512) {
++    if (diag && this_call <= 512) {
+         fprintf(stderr, "DMC3VK leave call=%u result=%d\n", this_call, ret);
+         fflush(stderr);
+     }
+@@ -810,16 +825,18 @@
+     my_VkAllocationCallbacks_t my_alloc;
+     int ret = my->vkCreatePipelineLayout(device, pCreateInfo,
+             find_VkAllocationCallbacks(&my_alloc, pAllocator), pPipelineLayout);
+-    uint64_t handle = 0;
+-    if (!ret && pPipelineLayout)
+-        memcpy(&handle, pPipelineLayout, sizeof(handle));
+-    fprintf(stderr, "DMC3VK pipeline-layout result=%d handle=%016llx\n", ret, (unsigned long long)handle);
+-    dmc3_dump_words("pl-info", info, 7);
+-    if (info) {
+-        dmc3_dump_words("pl-sets", (const void *)(uintptr_t)info[4], info[3] * 2);
+-        dmc3_dump_words("pl-push", (const void *)(uintptr_t)info[6], info[5] * 3);
++    if (dmc3_vk_diag_enabled()) {
++        uint64_t handle = 0;
++        if (!ret && pPipelineLayout)
++            memcpy(&handle, pPipelineLayout, sizeof(handle));
++        fprintf(stderr, "DMC3VK pipeline-layout result=%d handle=%016llx\n", ret, (unsigned long long)handle);
++        dmc3_dump_words("pl-info", info, 7);
++        if (info) {
++            dmc3_dump_words("pl-sets", (const void *)(uintptr_t)info[4], info[3] * 2);
++            dmc3_dump_words("pl-push", (const void *)(uintptr_t)info[6], info[5] * 3);
++        }
++        fflush(stderr);
+     }
+-    fflush(stderr);
+     return ret;
+ }
+ CREATE(vkCreateQueryPool)
+@@ -830,26 +847,28 @@
+     my_VkAllocationCallbacks_t my_alloc;
+     int ret = my->vkCreateRenderPass(device, pCreateInfo,
+             find_VkAllocationCallbacks(&my_alloc, pAllocator), pRenderPass);
+-    uint64_t handle = 0;
+-    if (!ret && pRenderPass)
+-        memcpy(&handle, pRenderPass, sizeof(handle));
+-    fprintf(stderr, "DMC3VK render-pass result=%d handle=%016llx\n", ret, (unsigned long long)handle);
+-    dmc3_dump_words("rp-info", info, 9);
+-    if (info) {
+-        dmc3_dump_words("rp-attachments", (const void *)(uintptr_t)info[4], info[3] * 9);
+-        const uint32_t *subpasses = (const uint32_t *)(uintptr_t)info[6];
+-        for (uint32_t i = 0; subpasses && i < info[5] && i < 16; ++i) {
+-            const uint32_t *sp = subpasses + i * 10;
+-            dmc3_dump_words("rp-subpass", sp, 10);
+-            dmc3_dump_words("rp-input-ref", (const void *)(uintptr_t)sp[3], sp[2] * 2);
+-            dmc3_dump_words("rp-color-ref", (const void *)(uintptr_t)sp[5], sp[4] * 2);
+-            dmc3_dump_words("rp-resolve-ref", (const void *)(uintptr_t)sp[6], sp[6] ? sp[4] * 2 : 0);
+-            dmc3_dump_words("rp-depth-ref", (const void *)(uintptr_t)sp[7], sp[7] ? 2 : 0);
+-            dmc3_dump_words("rp-preserve", (const void *)(uintptr_t)sp[9], sp[8]);
++    if (dmc3_vk_diag_enabled()) {
++        uint64_t handle = 0;
++        if (!ret && pRenderPass)
++            memcpy(&handle, pRenderPass, sizeof(handle));
++        fprintf(stderr, "DMC3VK render-pass result=%d handle=%016llx\n", ret, (unsigned long long)handle);
++        dmc3_dump_words("rp-info", info, 9);
++        if (info) {
++            dmc3_dump_words("rp-attachments", (const void *)(uintptr_t)info[4], info[3] * 9);
++            const uint32_t *subpasses = (const uint32_t *)(uintptr_t)info[6];
++            for (uint32_t i = 0; subpasses && i < info[5] && i < 16; ++i) {
++                const uint32_t *sp = subpasses + i * 10;
++                dmc3_dump_words("rp-subpass", sp, 10);
++                dmc3_dump_words("rp-input-ref", (const void *)(uintptr_t)sp[3], sp[2] * 2);
++                dmc3_dump_words("rp-color-ref", (const void *)(uintptr_t)sp[5], sp[4] * 2);
++                dmc3_dump_words("rp-resolve-ref", (const void *)(uintptr_t)sp[6], sp[6] ? sp[4] * 2 : 0);
++                dmc3_dump_words("rp-depth-ref", (const void *)(uintptr_t)sp[7], sp[7] ? 2 : 0);
++                dmc3_dump_words("rp-preserve", (const void *)(uintptr_t)sp[9], sp[8]);
++            }
++            dmc3_dump_words("rp-dependencies", (const void *)(uintptr_t)info[8], info[7] * 7);
+         }
+-        dmc3_dump_words("rp-dependencies", (const void *)(uintptr_t)info[8], info[7] * 7);
++        fflush(stderr);
+     }
+-    fflush(stderr);
+     return ret;
+ }
+ CREATE(vkCreateSampler)
+@@ -860,7 +879,8 @@
+     (void)emu;
+     const uint32_t *info = pCreateInfo;
+     my_VkAllocationCallbacks_t my_alloc;
+-    const char *dump_dir = getenv("DMC3_VK_DUMP_MODULE_DIR");
++    const int diag = dmc3_vk_diag_enabled();
++    const char *dump_dir = diag ? getenv("DMC3_VK_DUMP_MODULE_DIR") : NULL;
+     if (dump_dir && dump_dir[0] && info && info[3] && info[4]) {
+         static uint32_t module_id;
+         const uint32_t this_module = __sync_add_and_fetch(&module_id, 1);
+@@ -875,13 +895,15 @@
+     }
+     int ret = my->vkCreateShaderModule(device, pCreateInfo,
+             find_VkAllocationCallbacks(&my_alloc, pAllocator), pShaderModule);
+-    uint64_t module = 0;
+-    if (!ret && pShaderModule)
+-        memcpy(&module, pShaderModule, sizeof(module));
+-    fprintf(stderr, "DMC3VK shader-module result=%d device=%p code_size=%u code=%p module=%016llx\n",
+-            ret, device, info ? info[3] : 0,
+-            info ? (void *)(uintptr_t)info[4] : NULL, (unsigned long long)module);
+-    fflush(stderr);
++    if (diag) {
++        uint64_t module = 0;
++        if (!ret && pShaderModule)
++            memcpy(&module, pShaderModule, sizeof(module));
++        fprintf(stderr, "DMC3VK shader-module result=%d device=%p code_size=%u code=%p module=%016llx\n",
++                ret, device, info ? info[3] : 0,
++                info ? (void *)(uintptr_t)info[4] : NULL, (unsigned long long)module);
++        fflush(stderr);
++    }
+     return ret;
+ }

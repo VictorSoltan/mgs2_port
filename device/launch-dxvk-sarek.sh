@@ -12,7 +12,7 @@ mkdir -p "$LOGDIR"
 
 D3D8=d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
 D3D9=d3d9_dxvk_sarek_1.11.1_mali_count1.dll
-BOX86=box86_dxvk_wayland_fix1
+BOX86=box86-fp17-dxvk-quiet
 
 verify_one() {
     want="$1"
@@ -26,13 +26,14 @@ verify_one() {
 
 verify_one 22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa "$D3D8"
 verify_one cf67ce743ebe4c4e0ce909811193b3a90b234d74feec4649d018c9b956fe6b92 "$D3D9"
-verify_one d0a6177c5ccfe09fdfdbc660c5db22c4a2fe99d0edfeecde1bf6e0b2979889ea "$BOX86"
+verify_one 83f9349c6dc26f8f769e714a5ed57c4d76f3a523161ead31f75e52ccc1da7fba "$BOX86"
 
 export MGS2_RESEARCH_RUN=dxvk-sarek-d3d8
 export MGS2_BOX86_BIN="$BOX86"
 export MGS2_DXVK_D3D8_DLL="$D3D8"
 export MGS2_DXVK_D3D9_DLL="$D3D9"
 export MGS2_DXVK_WINE_MODE=direct32
+export MGS2_IDENTITY_MANIFEST=FINALPLAY16_DXVK_HITCH.manifest
 
 # DXVK needs Box86's native libwayland-client wrapper so native libmali receives
 # native wl_display / wl_surface objects. Keep all other compatibility choices
@@ -47,6 +48,10 @@ export MGS2_BOX86_ISLAND_FULL=0
 # First correctness run is cold and has no state-cache ambiguity. A later
 # research run may opt in explicitly after a lit, changing gameplay frame.
 export DXVK_STATE_CACHE="${MGS2_DXVK_STATE_CACHE:-0}"
+export DXVK_STATE_CACHE_PATH="${MGS2_DXVK_STATE_CACHE_PATH:-$HERE/cache/dxvk-state}"
+if [ "$DXVK_STATE_CACHE" != 0 ]; then
+    mkdir -p "$DXVK_STATE_CACHE_PATH"
+fi
 export DXVK_LOG_LEVEL="${MGS2_DXVK_LOG_LEVEL:-info}"
 export DXVK_LOG_PATH="$LOGDIR"
 export DXVK_HUD="${MGS2_DXVK_HUD:-fps}"
@@ -56,6 +61,6 @@ export MGS2_GL_STATS=0
 # before it can signal desktop readiness to the game process.
 export MGS2_GL_DMABUF=0
 
-echo "MGS2 DXVK: RESEARCH arm, state_cache=$DXVK_STATE_CACHE" >&2
+echo "MGS2 DXVK: RESEARCH arm, state_cache=$DXVK_STATE_CACHE cache_path=$DXVK_STATE_CACHE_PATH" >&2
 echo "MGS2 DXVK: d3d8=$D3D8 d3d9=$D3D9 box86=$BOX86" >&2
 exec "$HERE/launch-dxvk-play.sh"

@@ -67,17 +67,51 @@ MGS2_GL_STATS="${MGS2_GL_STATS:-60}" \
 MGS2_PLAY_WINEDEBUG="${MGS2_PLAY_WINEDEBUG:--all,err+waylanddrv}" \
     setsid nohup $LAUNCHER > "$LOG" 2>&1 < /dev/null &
 
-# Wait for real frames rather than a fixed sleep: the driver prints a stats line
-# every 60 frames, so two of them means the title screen is up and animating.
+# Wait for real renderer readiness rather than a fixed startup delay. WineD3D
+# prints a stats line every 60 frames. DXVK does not, so its bounded research
+# route instead requires the exact game process, a mapped d3d9.dll and the MGS2
+# Wayland renderer. A mapped DLL is earlier than the first visible title frame,
+# so the fixed delay is followed by a bounded external screenshot-size gate.
+# The black startup capture on this device is about 2.5 KiB while the title is
+# about 280 KiB; 10 KiB leaves ample margin without decoding pixels on-device.
 n=0
+ready=timeout
 while [ "$n" -lt 150 ]; do
     frames=0
     [ -r "$LOG" ] && frames=$(grep -c 'present stats' "$LOG" 2>/dev/null || true)
-    [ "${frames:-0}" -ge 2 ] && break
+    if [ "${frames:-0}" -ge 2 ]; then
+        ready=wined3d-present-stats
+        break
+    fi
+    game_pid=
+    for p in /proc/[0-9]*; do
+        [ "$(cat "$p/comm" 2>/dev/null)" = "mgs2_sse_rg353v" ] && game_pid=${p#/proc/}
+    done
+    if [ -n "$game_pid" ] && grep -qi '/d3d9.dll' "/proc/$game_pid/maps" 2>/dev/null; then
+        ready=dxvk-d3d9
+        break
+    fi
     n=$((n + 2)); sleep 2
 done
-echo "кадры пошли через ${n}c"
-sleep 6
+echo "renderer-ready=$ready через ${n}c"
+sleep "${MGS2_AUTOLOAD_READY_SETTLE:-6}"
+visual_ready=timeout
+visual_n=0
+visual_probe="$OUT/.renderer-ready.png"
+visual_min="${MGS2_AUTOLOAD_MIN_SHOT_BYTES:-10000}"
+visual_retries="${MGS2_AUTOLOAD_VISUAL_RETRIES:-30}"
+while [ "$visual_n" -lt "$visual_retries" ]; do
+    grim "$visual_probe" 2>/dev/null || true
+    visual_bytes=$(stat -c %s "$visual_probe" 2>/dev/null || echo 0)
+    if [ "$visual_bytes" -ge "$visual_min" ]; then
+        visual_ready=visible-frame
+        break
+    fi
+    visual_n=$((visual_n + 1))
+    sleep 1
+done
+echo "visual-ready=$visual_ready bytes=${visual_bytes:-0} через ${visual_n}c"
+sleep 3
 shot 0-title
 
 echo "== ввод: одно uinput-устройство на всю последовательность =="

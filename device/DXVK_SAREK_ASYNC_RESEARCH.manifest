@@ -1,0 +1,19 @@
+# Reproducible source and artifact record for the research-only async arm.
+source_repository https://github.com/zeyadadev/DXVK-Sarek.git
+source_branch     origin/async
+source_commit     464513e36c5a0e18a27c6c351ca8519be067e9cd
+mali_commit       617958fe1cf2b10e06fa751d3e40bd765dcf2cc6
+mali_patch        dxvk-patches/01-mali-d3d9-pipeline-compat.patch
+mali_patch_sha    43cd0cc1790128a2674d8fda96d324bc86e86d3421d1217bafc754d78f69a77a
+d3d8_wsi_patch    dxvk-patches/02-d3d8-wine-user-driver-init.patch
+d3d8_wsi_sha      8131048ac81e93911c678137bd44ef864c5fd21e0185ed4078a4fc62d015e4df
+counter_patch     dxvk-patches/03-memory-only-present-counter.patch
+counter_sha       bd7e438b620651a60f133058c2b718aa35060331243c703a632df9630eef4815
+counter_rva       0x313040
+meson             1.10.1
+mingw              13-posix
+wine_mode         direct32
+
+2b811cf2bf86309c44ccf9af0161d366289b1e1554e275010f96d26e40bb4131  d3d8_dxvk_sarek_1.11.0_async_mali_wsi1.dll
+a15e8a3d4590cb04cb7752bdeada1c974c6c5254295021b09a2720c26242d111  d3d9_dxvk_sarek_1.11.0_async_mali_count1.dll
+83f9349c6dc26f8f769e714a5ed57c4d76f3a523161ead31f75e52ccc1da7fba  box86-fp17-dxvk-quiet

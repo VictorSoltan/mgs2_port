@@ -1,6 +1,10 @@
 # Historical artifact hash catalogue. Compiled artifacts are not tracked in
 # Git; current production identity is enforced by device/FINALPLAY16_DXVK.manifest.
 # Lines marked "device only" are documentary and are not valid sha256sum -c rows.
+83f9349c6dc26f8f769e714a5ed57c4d76f3a523161ead31f75e52ccc1da7fba  box86-fp17-dxvk-quiet  (research candidate, not versioned here)
+d244919ea84ddba44782fd10a35609d2a6c561d47b15426b63dfc60e71960bcc  box86-fp18-dxvk-native-dxt  (rejected research candidate, not versioned here)
+2b811cf2bf86309c44ccf9af0161d366289b1e1554e275010f96d26e40bb4131  d3d8_dxvk_sarek_1.11.0_async_mali_wsi1.dll  (research candidate, not versioned here)
+a15e8a3d4590cb04cb7752bdeada1c974c6c5254295021b09a2720c26242d111  d3d9_dxvk_sarek_1.11.0_async_mali_count1.dll  (research candidate, not versioned here)
 415c55d3aa4b6f695080dc00a3c13850612931781796771b8460fe0bb8366f71  box86-clean1
 7b8daa6a4daebac8f7970ac07359e4f55dbc70a6325f7c9799cab398ca8f3e0e  box86-island10
 d30dacc34b211174a36f95de1a478a4724fe049f5ef4e26faaffdd510dd37cb1  box86-island1  (device only, not versioned here)
