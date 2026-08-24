@@ -1,0 +1,55 @@
+--- a/dlls/kernelbase/sync.c
++++ b/dlls/kernelbase/sync.c
+@@ -525,17 +525,50 @@ DWORD WINAPI DECLSPEC_HOTPATCH SignalObjectAndWait( HANDLE signal, HANDLE wait,
+ }
+ 
+ 
++/* MGS2 research-only empty-message-loop wait.
++ *
++ * The exact Substance executable calls Sleep(0) from 0x4011a2 after its game
++ * tick when PeekMessageA found no input; 0x4011a8 is the immediate return
++ * address.  On the RG353VS this loop was measured at about 54.4k iterations/s
++ * and overlaps recurring no-PRESENT gaps with CPU pressure but no I/O or
++ * memory pressure.
++ *
++ * MGS2_SLEEP0_WAIT_MS=1 converts only that caller to Sleep(1).  Every other
++ * executable and every other Sleep call retain their exact timeout.  The
++ * default and every malformed value are off.  The environment is read once;
++ * subsequent hot calls do one cached load and no counter, clock or I/O write.
++ * Control and candidate therefore use the same DLL bytes. */
++static DWORD mgs2_sleep0_wait( DWORD timeout, void *return_address )
++{
++    static LONG cached = -1;
++
++    if (timeout || (ULONG_PTR)return_address != 0x4011a8) return timeout;
++    if (cached == -1)
++    {
++        char value[8];
++        DWORD length = GetEnvironmentVariableA( "MGS2_SLEEP0_WAIT_MS", value,
++                                                 sizeof(value) );
++        LONG wait = length == 1 && value[0] == '1';
++
++        InterlockedCompareExchange( &cached, wait, -1 );
++    }
++    return cached == 1 ? 1 : 0;
++}
++
++
+ /***********************************************************************
+  *              Sleep  (kernelbase.@)
+  */
+ void WINAPI DECLSPEC_HOTPATCH Sleep( DWORD timeout )
+ {
+-    struct mgs2_wait_census_entry *entry = timeout ? mgs2_wait_census_begin(
+-            MGS2_WAIT_SLEEP, __builtin_return_address(0), 0, timeout, 0 ) : NULL;
++    void *return_address = __builtin_return_address(0);
++    struct mgs2_wait_census_entry *entry = timeout ? mgs2_wait_census_begin(
++            MGS2_WAIT_SLEEP, return_address, 0, timeout, 0 ) : NULL;
+     /* Sleep(0) is the game's 50k+/s message-loop yield.  Even a counter write
+      * there perturbs the timing question, so the bounded census ignores it. */
+     LARGE_INTEGER time;
+ 
++    timeout = mgs2_sleep0_wait( timeout, return_address );
+     NtDelayExecution( FALSE, get_nt_timeout( &time, timeout ) );
+     mgs2_wait_census_end( entry, WAIT_OBJECT_0 );
+ }

@@ -1,0 +1,260 @@
+--- a/dlls/kernelbase/sync.c
++++ b/dlls/kernelbase/sync.c
+@@ -43,5 +43,174 @@
+ static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+ 
++/* MGS2 research-only Win32 timing/wait census.
++ *
++ * The exact game imports Sleep[Ex] and the Win32 object-wait APIs. Recording
++ * here preserves the guest return address; by the
++ * time an Nt* syscall reaches the Unix side that address has been lost.  The
++ * hot path only updates this fixed memory record.  An external /proc reader
++ * timestamps deltas against PRESENT, and no game thread writes a log.
++ *
++ * MGS2_WAIT_CENSUS=1 enables the record.  The default is completely passive.
++ * Calls whose return address is outside the main executable are ignored, so
++ * Wine's own synchronization does not fill the table or feed back into it. */
++#define MGS2_WAIT_CENSUS_MAGIC 0x31544357u /* "WCT1" */
++#define MGS2_WAIT_CENSUS_CAPACITY 128
++
++enum mgs2_wait_census_kind
++{
++    MGS2_WAIT_SLEEP = 2,
++    MGS2_WAIT_SLEEP_EX,
++    MGS2_WAIT_SINGLE,
++    MGS2_WAIT_SINGLE_EX,
++    MGS2_WAIT_MULTIPLE,
++    MGS2_WAIT_MULTIPLE_EX,
++};
++
++struct mgs2_wait_census_entry
++{
++    volatile LONG state; /* 0 free, 1 initializing, 2 ready */
++    ULONG caller;
++    ULONG tid;
++    ULONG kind;
++    volatile ULONG calls;
++    volatile ULONG active;
++    volatile ULONG last_handle;
++    volatile ULONG last_timeout;
++    volatile ULONG last_aux;
++    volatile ULONG last_result;
++    volatile ULONG return_ok;
++    volatile ULONG return_timeout;
++    volatile ULONG return_failed;
++    volatile ULONG return_other;
++    volatile ULONG requested_ms_total;
++    volatile ULONG max_timeout;
++    volatile ULONG finite_timeouts;
++    volatile ULONG infinite_timeouts;
++};
++
++struct mgs2_wait_census_public
++{
++    ULONG magic;
++    ULONG version;
++    ULONG words;
++    ULONG magic_inverse;
++    volatile ULONG enabled;
++    ULONG capacity;
++    volatile ULONG overflow;
++    volatile ULONG exe_base;
++    volatile ULONG exe_end;
++    volatile ULONG used;
++    struct mgs2_wait_census_entry entries[MGS2_WAIT_CENSUS_CAPACITY];
++};
++
++struct mgs2_wait_census_public mgs2_wait_census =
++{
++    MGS2_WAIT_CENSUS_MAGIC, 1, sizeof(mgs2_wait_census) / sizeof(ULONG),
++    ~MGS2_WAIT_CENSUS_MAGIC, 0, MGS2_WAIT_CENSUS_CAPACITY,
++};
++
++static int mgs2_wait_census_on(void)
++{
++    static LONG cached = -1;
++
++    if (cached == -1)
++    {
++        char value[8];
++        LONG enabled = GetEnvironmentVariableA( "MGS2_WAIT_CENSUS", value,
++                                                 sizeof(value) ) && value[0] == '1';
++        InterlockedCompareExchange( &cached, enabled, -1 );
++        if (cached) mgs2_wait_census.enabled = 1;
++    }
++    return cached != 0;
++}
++
++static int mgs2_wait_census_caller( ULONG caller )
++{
++    static LONG range_state;
++
++    if (!mgs2_wait_census_on()) return 0;
++    if (range_state != 2)
++    {
++        if (!InterlockedCompareExchange( &range_state, 1, 0 ))
++        {
++            void *base = NtCurrentTeb()->Peb->ImageBaseAddress;
++            IMAGE_NT_HEADERS *nt = RtlImageNtHeader( base );
++
++            if (nt)
++            {
++                mgs2_wait_census.exe_base = (ULONG)(ULONG_PTR)base;
++                mgs2_wait_census.exe_end = mgs2_wait_census.exe_base
++                        + nt->OptionalHeader.SizeOfImage;
++            }
++            InterlockedExchange( &range_state, 2 );
++        }
++        else return 0; /* another thread is publishing the immutable range */
++    }
++    return caller >= mgs2_wait_census.exe_base && caller < mgs2_wait_census.exe_end;
++}
++
++static struct mgs2_wait_census_entry *mgs2_wait_census_slot( ULONG kind, void *return_address )
++{
++    struct mgs2_wait_census_entry *entry;
++    ULONG caller = (ULONG)(ULONG_PTR)return_address;
++    ULONG tid = HandleToULong( NtCurrentTeb()->ClientId.UniqueThread );
++    ULONG index, probe;
++
++    if (!mgs2_wait_census_caller( caller )) return NULL;
++    index = ((caller >> 4) ^ tid ^ kind * 2654435761u) & (MGS2_WAIT_CENSUS_CAPACITY - 1);
++    for (probe = 0; probe < MGS2_WAIT_CENSUS_CAPACITY; ++probe)
++    {
++        entry = &mgs2_wait_census.entries[(index + probe) & (MGS2_WAIT_CENSUS_CAPACITY - 1)];
++        if (entry->state == 2 && entry->caller == caller && entry->tid == tid
++                && entry->kind == kind)
++            return entry;
++        if (!entry->state && !InterlockedCompareExchange( &entry->state, 1, 0 ))
++        {
++            entry->caller = caller;
++            entry->tid = tid;
++            entry->kind = kind;
++            InterlockedIncrement( (LONG *)&mgs2_wait_census.used );
++            InterlockedExchange( &entry->state, 2 );
++            return entry;
++        }
++    }
++    InterlockedIncrement( (LONG *)&mgs2_wait_census.overflow );
++    return NULL;
++}
++
++static struct mgs2_wait_census_entry *mgs2_wait_census_begin( ULONG kind,
++        void *return_address, ULONG handle, DWORD timeout, ULONG aux )
++{
++    struct mgs2_wait_census_entry *entry = mgs2_wait_census_slot( kind, return_address );
++
++    if (!entry) return NULL;
++    ++entry->calls;
++    ++entry->active;
++    entry->last_handle = handle;
++    entry->last_timeout = timeout;
++    entry->last_aux = aux;
++    if (timeout == INFINITE) ++entry->infinite_timeouts;
++    else
++    {
++        ++entry->finite_timeouts;
++        if (timeout > entry->max_timeout) entry->max_timeout = timeout;
++        if (~0u - entry->requested_ms_total < timeout) entry->requested_ms_total = ~0u;
++        else entry->requested_ms_total += timeout;
++    }
++    return entry;
++}
++
++static void mgs2_wait_census_end( struct mgs2_wait_census_entry *entry, DWORD result )
++{
++    if (!entry) return;
++    entry->last_result = result;
++    if (result == WAIT_TIMEOUT) ++entry->return_timeout;
++    else if (result == WAIT_FAILED) ++entry->return_failed;
++    else if (result < WAIT_ABANDONED_0) ++entry->return_ok;
++    else ++entry->return_other;
++    --entry->active;
++}
++
+ /* check if current version is NT or Win95 */
+ static inline BOOL is_version_nt(void)
+ {
+@@ -362,6 +531,11 @@
+ void WINAPI DECLSPEC_HOTPATCH Sleep( DWORD timeout )
+ {
++    struct mgs2_wait_census_entry *entry = timeout ? mgs2_wait_census_begin(
++            MGS2_WAIT_SLEEP, __builtin_return_address(0), 0, timeout, 0 ) : NULL;
++    /* Sleep(0) is the game's 50k+/s message-loop yield.  Even a counter write
++     * there perturbs the timing question, so the bounded census ignores it. */
+     LARGE_INTEGER time;
+ 
+     NtDelayExecution( FALSE, get_nt_timeout( &time, timeout ) );
++    mgs2_wait_census_end( entry, WAIT_OBJECT_0 );
+ }
+@@ -373,9 +547,13 @@
+ DWORD WINAPI DECLSPEC_HOTPATCH SleepEx( DWORD timeout, BOOL alertable )
+ {
++    struct mgs2_wait_census_entry *entry = mgs2_wait_census_begin(
++            MGS2_WAIT_SLEEP_EX, __builtin_return_address(0), 0, timeout, alertable );
+     NTSTATUS status;
+     LARGE_INTEGER time;
++    DWORD result;
+ 
+     status = NtDelayExecution( alertable, get_nt_timeout( &time, timeout ) );
+-    if (status == STATUS_USER_APC) return WAIT_IO_COMPLETION;
+-    return 0;
++    result = status == STATUS_USER_APC ? WAIT_IO_COMPLETION : 0;
++    mgs2_wait_census_end( entry, result );
++    return result;
+ }
+@@ -396,4 +574,8 @@
+ DWORD WINAPI DECLSPEC_HOTPATCH WaitForSingleObject( HANDLE handle, DWORD timeout )
+ {
+-    return WaitForSingleObjectEx( handle, timeout, FALSE );
++    struct mgs2_wait_census_entry *entry = mgs2_wait_census_begin(
++            MGS2_WAIT_SINGLE, __builtin_return_address(0), HandleToULong(handle), timeout, 0 );
++    DWORD result = WaitForSingleObjectEx( handle, timeout, FALSE );
++    mgs2_wait_census_end( entry, result );
++    return result;
+ }
+@@ -405,4 +587,7 @@
+ DWORD WINAPI DECLSPEC_HOTPATCH WaitForSingleObjectEx( HANDLE handle, DWORD timeout, BOOL alertable )
+ {
++    struct mgs2_wait_census_entry *entry = mgs2_wait_census_begin(
++            MGS2_WAIT_SINGLE_EX, __builtin_return_address(0), HandleToULong(handle), timeout,
++            alertable );
+     NTSTATUS status;
+     LARGE_INTEGER time;
+@@ -415,5 +600,6 @@
+         SetLastError( RtlNtStatusToDosError(status) );
+         status = WAIT_FAILED;
+     }
++    mgs2_wait_census_end( entry, status );
+     return status;
+ }
+@@ -425,5 +611,11 @@
+ DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjects( DWORD count, const HANDLE *handles,
+                                                        BOOL wait_all, DWORD timeout )
+ {
+-    return WaitForMultipleObjectsEx( count, handles, wait_all, timeout, FALSE );
++    struct mgs2_wait_census_entry *entry = mgs2_wait_census_begin(
++            MGS2_WAIT_MULTIPLE, __builtin_return_address(0),
++            count && handles ? HandleToULong(handles[0]) : 0, timeout,
++            count | (wait_all ? 0x10000 : 0) );
++    DWORD result = WaitForMultipleObjectsEx( count, handles, wait_all, timeout, FALSE );
++    mgs2_wait_census_end( entry, result );
++    return result;
+ }
+@@ -435,5 +627,9 @@
+ DWORD WINAPI DECLSPEC_HOTPATCH WaitForMultipleObjectsEx( DWORD count, const HANDLE *handles,
+                                                          BOOL wait_all, DWORD timeout, BOOL alertable )
+ {
++    struct mgs2_wait_census_entry *entry = mgs2_wait_census_begin(
++            MGS2_WAIT_MULTIPLE_EX, __builtin_return_address(0),
++            count && handles ? HandleToULong(handles[0]) : 0, timeout,
++            count | (wait_all ? 0x10000 : 0) | (alertable ? 0x20000 : 0) );
+     NTSTATUS status;
+     HANDLE hloc[MAXIMUM_WAIT_OBJECTS];
+@@ -454,5 +650,6 @@
+         SetLastError( RtlNtStatusToDosError(status) );
+         status = WAIT_FAILED;
+     }
++    mgs2_wait_census_end( entry, status );
+     return status;
+ }

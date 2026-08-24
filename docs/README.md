@@ -39,6 +39,14 @@ supersede it for current decisions.
 
 ## Runtime freezes
 
+- [Win32 waits and RG353VS pressure](briefs/MGS2_DXVK_WAIT_DEVICE_PRESSURE_2026-08-24.md)
+  — правильный LOAD GAME route отверг game deadline и thermal/SD/RAM как
+  общий источник повторяющегося 1.62-s gap; Sleep(0) A/B снизил CPU load, но
+  оставил `1.59--1.60 s`, поэтому busy loop не является основным freeze cause.
+- [PeekMessage wait hitch A/B/C](briefs/MGS2_DXVK_PEEK_WAIT_HITCH_AB_2026-08-24.md)
+  — live provenance исправил ложную границу A/B: FINALPLAY16 использует
+  системный user32 без caller-specific wait; последующий wait census и
+  system-pressure result находятся в brief выше.
 - [Native DXT hitch research](briefs/MGS2_DXVK_NATIVE_DXT_HITCH_RESEARCH_2026-08-24.md)
   — побитово проверенный нативный DXT снял работу с texture worker, но не
   сократил 1.62-секундный gameplay gap; production не изменён.

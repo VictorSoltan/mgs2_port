@@ -40,6 +40,7 @@ mgs2_reject_research_overrides() {
     found=""
     for v in MGS2_BOX86_BIN MGS2_WINED3D_DLL MGS2_WAYLAND_SO MGS2_D3D8_DLL \
              MGS2_DXVK_D3D8_DLL MGS2_DXVK_D3D9_DLL \
+             MGS2_KERNELBASE_DLL \
              MGS2_DMSYNTH_DLL MGS2_DSOUND_DLL MGS2_DMIME_DLL \
              MGS2_WINEDLLOVERRIDES MGS2_BOX86_EMULATED_LIBS; do
         eval "value=\${$v:-}"
@@ -260,6 +261,7 @@ cleanup() {
     unmount_all /usr/lib/wine/i386-unix/win32u.so
     unmount_all /usr/lib/wine/i386-unix/opengl32.so
     unmount_all /usr/lib/wine/i386-windows/user32.dll
+    unmount_all /usr/lib/wine/i386-windows/kernelbase.dll
     unmount_all /usr/lib/wine/i386-windows/dmsynth.dll
     unmount_all /usr/lib/wine/i386-windows/dsound.dll
     unmount_all /usr/lib/wine/i386-windows/dmime.dll
@@ -357,8 +359,12 @@ unmount_all /usr/lib/wine/i386-unix/winewayland.so
 unmount_all /usr/lib/wine/i386-unix/opengl32.so
 unmount_all /usr/lib/wine/i386-windows/wined3d.dll
 unmount_all /usr/lib/wine/i386-windows/user32.dll
+unmount_all /usr/lib/wine/i386-windows/kernelbase.dll
 unmount_all /usr/lib/wine/i386-windows/d3d8.dll
 mount_bind "$GAMEDIR/${MGS2_BOX86_BIN:-box86-fp15}" /usr/bin/box86 || exit 1
+if [ -n "${MGS2_KERNELBASE_DLL:-}" ]; then
+    mount_bind "$GAMEDIR/$MGS2_KERNELBASE_DLL" /usr/lib/wine/i386-windows/kernelbase.dll || exit 1
+fi
 if [ -z "${MGS2_DXVK_D3D8_DLL:-}" ]; then
     mount_bind "$GAMEDIR/win32u_glfuncs3.so" /usr/lib/wine/i386-unix/win32u.so || exit 1
 fi

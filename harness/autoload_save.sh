@@ -45,6 +45,7 @@ killall -9 launch-play.sh wine wine-preloader box86 box64 gptokeyb wineserver wi
 sleep 4
 rm -f /tmp/mgs2-substance.lock
 for m in /usr/lib/wine/i386-windows/wined3d.dll /usr/lib/wine/i386-windows/user32.dll \
+         /usr/lib/wine/i386-windows/kernelbase.dll \
          /usr/lib/wine/i386-windows/d3d8.dll /usr/lib/wine/i386-windows/dmsynth.dll \
          /usr/lib/wine/i386-windows/dsound.dll /usr/lib/wine/i386-windows/dmime.dll \
          /usr/lib/wine/i386-windows/dmusic.dll /usr/lib/wine/i386-unix/winewayland.so \
