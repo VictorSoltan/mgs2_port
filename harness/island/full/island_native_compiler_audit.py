@@ -34,12 +34,17 @@ import re
 import subprocess
 import sys
 
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import island_draw_phases
 import island_icall_audit
 import island_mutable_state_audit
 
-BOX86_SRC = pathlib.Path(os.environ.get("BOX86_SRC", "/mnt/data/holden/mgs/box86-src"))
+BOX86_SRC = repo_env.workspace_path("BOX86_SRC", "box86-src")
 OBJDUMP = "arm-linux-gnueabihf-objdump"
 NM = "arm-linux-gnueabihf-nm"
 

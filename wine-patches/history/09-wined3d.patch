@@ -1,4 +1,3 @@
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/adapter_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/adapter_gl.c
 --- a/dlls/wined3d/adapter_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/adapter_gl.c	2026-08-08 01:15:15.543841940 +0300
 @@ -487,6 +487,16 @@
@@ -428,7 +427,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      while (upper != lower)
      {
          test = (upper + lower) / 2;
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/buffer.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/buffer.c
 --- a/dlls/wined3d/buffer.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/buffer.c	2026-08-02 01:30:46.504061257 +0300
 @@ -28,6 +28,86 @@
@@ -527,7 +525,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (!buffer->map_ptr)
          return WINED3D_OK;
  
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/context_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/context_gl.c
 --- a/dlls/wined3d/context_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/context_gl.c	2026-08-08 01:14:41.052374608 +0300
 @@ -36,6 +36,12 @@
@@ -3120,7 +3117,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      if (context->uses_uavs)
      {
          GL_EXTCALL(glMemoryBarrier(GL_ALL_BARRIER_BITS));
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/cs.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/cs.c
 --- a/dlls/wined3d/cs.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/cs.c	2026-08-08 01:14:41.052374608 +0300
 @@ -20,6 +20,10 @@
@@ -3440,7 +3436,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          }
      }
  
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/device.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/device.c
 --- a/dlls/wined3d/device.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/device.c	2026-07-12 09:36:21.677624266 +0300
 @@ -601,13 +601,13 @@
@@ -3477,7 +3472,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      {
          GLuint buffer;
  
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/ffp_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/ffp_gl.c
 --- a/dlls/wined3d/ffp_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/ffp_gl.c	2026-08-01 13:26:16.960381879 +0300
 @@ -225,11 +225,29 @@
@@ -3560,7 +3554,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      wined3d_context_gl_end_transform_feedback(context_gl);
  
      for (i = 0; i < ARRAY_SIZE(state->stream_output); ++i)
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/glsl_shader.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/glsl_shader.c
 --- a/dlls/wined3d/glsl_shader.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/glsl_shader.c	2026-08-08 00:19:20.949137137 +0300
 @@ -410,7 +410,21 @@
@@ -4504,7 +4497,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          GL_EXTCALL(glBindFragDataLocation(program, 0, "ps_out"));
  
      GL_EXTCALL(glCompileShader(vshader_id));
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/texture.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/texture.c
 --- a/dlls/wined3d/texture.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/texture.c	2026-08-02 00:35:49.523481412 +0300
 @@ -20,9 +20,36 @@
@@ -4556,7 +4548,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      TRACE("texture %p, resource_type %s, format %s, multisample_type %#x, multisample_quality %#x, "
              "usage %s, bind_flags %s, access %s, width %u, height %u, depth %u, layer_count %u, level_count %u, "
              "flags %#x, device %p, parent %p, parent_ops %p, sub_resources %p, texture_ops %p.\n",
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/texture_gl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/texture_gl.c
 --- a/dlls/wined3d/texture_gl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/texture_gl.c	2026-08-02 05:05:34.299647621 +0300
 @@ -35,6 +35,189 @@
@@ -5202,7 +5193,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          }
  
          if (format->stencil_size)
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/utils.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/utils.c
 --- a/dlls/wined3d/utils.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/utils.c	2026-08-08 00:19:20.949137137 +0300
 @@ -1053,6 +1053,258 @@
@@ -5960,7 +5950,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
          settings->flatshading = state->extra_vs_args.flat_shading;
      else
          settings->flatshading = FALSE;
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/wined3d_gl.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/wined3d_gl.h
 --- a/dlls/wined3d/wined3d_gl.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/wined3d_gl.h	2026-08-01 01:26:08.750640867 +0300
 @@ -360,6 +360,7 @@
@@ -5981,7 +5970,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  }
  
  /* Checking of API calls */
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/wined3d/wined3d_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d/wined3d_private.h
 --- a/dlls/wined3d/wined3d_private.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/wined3d/wined3d_private.h	2026-07-12 09:38:41.666299063 +0300
 @@ -242,6 +242,7 @@

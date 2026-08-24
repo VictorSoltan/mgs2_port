@@ -1,0 +1,197 @@
+MGS2 DXVK: RESEARCH arm, state_cache=0
+MGS2 DXVK: d3d8=d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll d3d9=d3d9_dxvk_sarek_1.11.1_mali_nullfix1.dll box86=box86_dxvk_wayland_fix1
+# RG353VS - ROCKNIX
+```bash
+DEVICE_INFO_VERSION=0.1.15
+PM_VERSION=2026.05.24-0035
+CFW_NAME=ROCKNIX
+CFW_VERSION=20260822
+CFW_GLIBC=241
+DEVICE_NAME=RG353VS
+DEVICE_CPU=RK3566
+DEVICE_ARCH=aarch64
+DEVICE_RAM=1
+DEVICE_HAS_ARMHF="Y"
+DEVICE_HAS_AARCH64="Y"
+DEVICE_HAS_X86="N"
+DEVICE_HAS_X86_64="N"
+DISPLAY_WIDTH=640
+DISPLAY_HEIGHT=480
+DISPLAY_ORIENTATION=0
+ASPECT_X=4
+ASPECT_Y=3
+ANALOG_STICKS=2
+```
+p-cores: 0,1,2,3 (@1992.0000mhz)
+cmd: taskset -c 0,1,2,3 
+## ES Dev Mapper ##
+retrogame_joypad :: 19009b4d4b4800000111000000010000
+Skipping 'hotkeyenable', same mapping as 'select'
+MGS2: RESEARCH RUN, binaries overridden: MGS2_BOX86_BIN=box86_dxvk_wayland_fix1 MGS2_DXVK_D3D8_DLL=d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll MGS2_DXVK_D3D9_DLL=d3d9_dxvk_sarek_1.11.1_mali_nullfix1.dll MGS2_WINEDLLOVERRIDES=mscoree=;mshtml=;winemenubuilder.exe=;winepulse.drv=d;d3d8=n,b;d3d9=n,b;dxgi=builtin MGS2_BOX86_EMULATED_LIBS=winewayland.so:winevulkan.so:libffi.so.8:libwayland-egl.so.1:libxkbcommon.so.0:libxkbregistry.so.0:libxml2.so.2:libicuuc.so.72:libicudata.so.72:liblzma.so.5:libstdc++.so.6
+MGS2: /usr/bin/box86 is d0a6177c5ccfe09fdfdbc660c5db22c4a2fe99d0edfeecde1bf6e0b2979889ea, manifest expects a0fb0d0d9497a77cb4dc97d1e084df1c725cc8e53ff3e91a6e847ff3e0628171 (box86-fp15)
+MGS2: /usr/lib/wine/i386-unix/win32u.so is 04f8472bd672d37cd77b45cc647b95f698904b610d630bcc6cf2abfc9a4eecd8, manifest expects 6acdbbaeb8b88ba64fc160a1faf865ae304108705c38bccadaf6bc538f2be63a (win32u_glfuncs3.so)
+MGS2: /usr/lib/wine/i386-unix/winewayland.so is f1aca90bc0d27ee49f5bbba6e654481b4a27d83408cb9d71cc0e24565b2f628b, manifest expects 51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169 (winewayland_dmabuf_prod.so)
+MGS2: /usr/lib/wine/i386-unix/opengl32.so is 749f1c4bcfad47690a9c7366069d99db2f4a0663365a46fa1fd5f4720e178387, manifest expects 9340f708462a29debffec37fe493ad3044afc903ffb6466ddf1f30d46da628af (opengl32_finalplay_sso.so)
+MGS2: /usr/lib/wine/i386-windows/wined3d.dll is 65669750ec68415a6b2d4acd147f58bafa11f2a2f8aa07bc8b5f375af714a520, manifest expects e68e8dd04dea339fbda1e39decc56cad5ea436dda71e45b57c7bc87c88a8db47 (wined3d_fp15.dll)
+MGS2: /usr/lib/wine/i386-windows/user32.dll is 1635f4c6917dc54f6764e1fceddd39b4ce04692a93a88f473fa6cbcf03d83d84, manifest expects 4f8b82c7a9dd0fab03b699aa8948f6c76852801f17a096cff22384dc2997fe4e (user32_peek1.dll)
+MGS2: /usr/lib/wine/i386-windows/d3d8.dll is 755e5a870911815315ae724bdba876fb08794b580a843ff0a23729d019deafe0, manifest expects 841ff73c2b99fd6ca2ee00b0796abbb9e0d38b584cb298cb9860afbee9ea1de0 (d3d8_finalplay3_nocullcache.dll)
+MGS2: 7 of 11 mounted files differ from the manifest, which is expected on a research run
+MGS2 native dither: self-test passed, bridge 0x40020020 armed
+MGS2 native dither: self-test passed, bridge 0x40020020 armed
+shell-init: error retrieving current directory: getcwd: cannot access parent directories: Inappropriate ioctl for device
+Could not open module param file '/sys/module/bifrost_kbase/parameters/large_page_conf'
+info:  Game: mgs2_sse_rg353vs_port.exe
+info:  DXVK-Sarek: v1.11.0
+info:  Built-in extension providers:
+info:    Win32 WSI
+info:    OpenVR
+info:    OpenXR
+info:  OpenVR: could not open registry key, status 2
+info:  OpenVR: Failed to locate module
+info:  Enabled instance extensions:
+info:    VK_KHR_get_surface_capabilities2
+info:    VK_KHR_surface
+info:    VK_KHR_win32_surface
+Could not open module param file '/sys/module/bifrost_kbase/parameters/large_page_conf'
+arm_release_ver: g29p1-12eac0, rk_so_ver: 5
+info:  D3D9: VK_FORMAT_D16_UNORM_S8_UINT -> VK_FORMAT_D24_UNORM_S8_UINT
+info:  Mali-G52:
+info:    Driver: 29.1.0
+info:    Vulkan: 1.3.303
+info:    Memory Heap[0]: 
+info:      Size: 1024 MiB
+info:      Flags: 0x1
+info:      Memory Type[0]: Property Flags = 0x7
+info:      Memory Type[1]: Property Flags = 0xb
+info:      Memory Type[2]: Property Flags = 0x11
+info:  Process set as DPI aware
+info:  The D3D9 interface is now operating in D3D8 compatibility mode.
+info:  Device properties:
+info:    Device name:     : Mali-G52
+info:    Driver version   : 29.1.0
+info:  Enabled device extensions:
+info:    VK_EXT_4444_formats
+info:    VK_EXT_custom_border_color
+info:    VK_EXT_extended_dynamic_state
+info:    VK_EXT_host_query_reset
+info:    VK_EXT_non_seamless_cube_map
+info:    VK_EXT_robustness2
+info:    VK_EXT_shader_demote_to_helper_invocation
+info:    VK_EXT_transform_feedback
+info:    VK_KHR_create_renderpass2
+info:    VK_KHR_depth_stencil_resolve
+info:    VK_KHR_driver_properties
+info:    VK_KHR_external_memory_win32
+info:    VK_KHR_external_semaphore_win32
+info:    VK_KHR_image_format_list
+info:    VK_KHR_sampler_mirror_clamp_to_edge
+info:    VK_KHR_shader_float_controls
+info:    VK_KHR_swapchain
+info:    VK_KHR_timeline_semaphore
+info:  Device features:
+info:    robustBufferAccess                     : 1
+info:    fullDrawIndexUint32                    : 1
+info:    imageCubeArray                         : 1
+info:    independentBlend                       : 1
+info:    geometryShader                         : 1
+info:    tessellationShader                     : 0
+info:    sampleRateShading                      : 1
+info:    dualSrcBlend                           : 0
+info:    logicOp                                : 0
+info:    multiDrawIndirect                      : 0
+info:    drawIndirectFirstInstance              : 0
+info:    depthClamp                             : 0
+info:    depthBiasClamp                         : 1
+info:    fillModeNonSolid                       : 0
+info:    depthBounds                            : 0
+info:    multiViewport                          : 0
+info:    samplerAnisotropy                      : 1
+info:    textureCompressionBC                   : 0
+info:    occlusionQueryPrecise                  : 1
+info:    pipelineStatisticsQuery                : 0
+info:    vertexPipelineStoresAndAtomics         : 0
+info:    fragmentStoresAndAtomics               : 0
+info:    shaderImageGatherExtended              : 0
+info:    shaderStorageImageExtendedFormats      : 0
+info:    shaderStorageImageReadWithoutFormat    : 0
+info:    shaderStorageImageWriteWithoutFormat   : 1
+info:    shaderClipDistance                     : 0
+info:    shaderCullDistance                     : 0
+info:    shaderFloat64                          : 0
+info:    shaderInt64                            : 0
+info:    variableMultisampleRate                : 0
+info:  VK_EXT_4444_formats
+info:    formatA4R4G4B4                         : 1
+info:    formatA4B4G4R4                         : 1
+info:  VK_EXT_custom_border_color
+info:    customBorderColors                     : 1
+info:    customBorderColorWithoutFormat         : 1
+info:  VK_EXT_depth_clip_enable
+info:    depthClipEnable                        : 0
+info:  VK_EXT_extended_dynamic_state
+info:    extendedDynamicState                   : 1
+info:  VK_EXT_host_query_reset
+info:    hostQueryReset                         : 1
+info:  VK_EXT_memory_priority
+info:    memoryPriority                         : 0
+info:  VK_EXT_non_seamless_cube_map
+info:    nonSeamlessCubeMap                     : 1
+info:  VK_EXT_robustness2
+info:    robustBufferAccess2                    : 0
+info:    robustImageAccess2                     : 0
+info:    nullDescriptor                         : 0
+info:  VK_EXT_shader_demote_to_helper_invocation
+info:    shaderDemoteToHelperInvocation         : 1
+info:  VK_EXT_transform_feedback
+info:    transformFeedback                      : 0
+info:    geometryStreams                        : 0
+info:  VK_EXT_vertex_attribute_divisor
+info:    vertexAttributeInstanceRateDivisor     : 0
+info:    vertexAttributeInstanceRateZeroDivisor : 0
+info:  VK_KHR_buffer_device_address
+info:    bufferDeviceAddress                    : 0
+info:  VK_KHR_timeline_semaphore
+info:    timelineSemaphore                      : 0
+info:  Queue families:
+info:    Graphics : 0
+info:    Transfer : 0
+arm_release_ver: g29p1-12eac0, rk_so_ver: 5
+info:  D3D9DeviceEx::ResetSwapChain:
+info:    Requested Presentation Parameters
+info:      - Width:              640
+info:      - Height:             480
+info:      - Format:             D3D9Format::X8R8G8B8
+info:      - Auto Depth Stencil: true
+info:                  ^ Format: D3D9Format::D24S8
+info:      - Windowed:           false
+info:  Presenter: Actual swap chain properties:
+info:    Format:       VK_FORMAT_R8G8B8A8_UNORM
+info:    Present mode: VK_PRESENT_MODE_MAILBOX_KHR
+info:    Buffer size:  640x480
+info:    Image count:  3
+info:    Exclusive FS: 0
+info:  Setting display mode: 640x480@0
+info:  Presenter: Actual swap chain properties:
+info:    Format:       VK_FORMAT_R8G8B8A8_UNORM
+info:    Present mode: VK_PRESENT_MODE_FIFO_KHR
+info:    Buffer size:  640x480
+info:    Image count:  3
+info:    Exclusive FS: 0
+warn:  D3D9DeviceEx::SetRenderState: Unhandled render state 161
+MGS2 native dither: matched guest 0x90dae1 -> bridge 0x40020020
+MGS2 native dither: 1 calls, 512 pixels
+MGS2 native dither: 2 calls, 1024 pixels
+MGS2 native dither: 4 calls, 2048 pixels
+MGS2 native dither: 8 calls, 4096 pixels
+MGS2 native dither: 16 calls, 8192 pixels
+MGS2 native dither: 32 calls, 16384 pixels
+MGS2 native dither: 64 calls, 32768 pixels
+MGS2 native dither: 128 calls, 65536 pixels
+MGS2 native dither: 256 calls, 131072 pixels
+MGS2 native dither: 512 calls, 226816 pixels
+MGS2 native dither: 1024 calls, 747520 pixels
+MGS2 native dither: 2048 calls, 1730560 pixels
+MGS2 native dither: 4096 calls, 3299328 pixels
+MGS2 native dither: 8192 calls, 5514240 pixels
+MGS2 native dither: 16384 calls, 8173568 pixels
+MGS2 native dither: 32768 calls, 14703232 pixels

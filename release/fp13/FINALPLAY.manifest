@@ -1,8 +1,0 @@
-# fp13, produced by harness/make_release.sh -- do not hand-edit.
-# Columns: mounted path, sha256, the file in the game directory.
-# The MOUNTED file is what the launcher hashes: what was asked for is
-# not evidence of what is in place, and a half-updated class-B pair
-# does not fail cleanly.
-/usr/bin/box86	4db677bf8346f67f6390f6e56f694ffb8ee1374cff0c0e6b493e6161f212e0e4	box86-fp13
-/usr/lib/wine/i386-windows/wined3d.dll	9c3d3aa69176c846dc0724fd89e8ca9bf2ebef5fd6e3849834215d23a6678930	wined3d_fp13.dll
-/usr/lib/wine/i386-unix/winewayland.so	51879e2d706d434e3bf140508e31493802d9506753a16b295be81df154f9f169	winewayland_dmabuf_prod.so

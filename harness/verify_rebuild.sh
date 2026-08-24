@@ -24,18 +24,25 @@
 # part of the build and commit the result.
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-WINE_LIVE="${WINE_SRC:-/mnt/data/holden/mgs/recovered-session/wine-11.0}"
-TARBALL="${WINE_TARBALL:-/mnt/data/holden/mgs/recovered-session/wine-11.0.tar.xz}"
-BOX86_LIVE="${BOX86_SRC:-/mnt/data/holden/mgs/box86-src}"
+if [ -r "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+WORKSPACE="${MGS2_WORKSPACE:-$(dirname "$REPO")}"
+WINE_LIVE="${WINE_SRC:-$WORKSPACE/recovered-session/wine-11.0}"
+TARBALL="${WINE_TARBALL:-$WORKSPACE/recovered-session/wine-11.0.tar.xz}"
+BOX86_LIVE="${BOX86_SRC:-$WORKSPACE/box86-src}"
 LOCK="$REPO/device/FINALPLAY.lock"
 # The cross toolchain is not on a login PATH; --build silently produced an empty
 # hash the first time for exactly that reason.
-MINGW="${MINGW_BIN:-/mnt/data/holden/mgs/recovered-session/mingw/bin}"
+MINGW="${MINGW_BIN:-$WORKSPACE/recovered-session/mingw/bin}"
 # Box86's build embeds __DATE__/__TIME__ via src/build_info.c; without this the
 # ELF differs by 23 bytes between two builds of the same source.
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1756000000}"
 [ -d "$MINGW" ] && PATH="$MINGW:$PATH" && export PATH
-WORK="${WORK_DIR:-/mnt/data/holden/mgs/_repro}"
+WORK="${WORK_DIR:-$WORKSPACE/_repro}"
 fail=0
 lock() { awk -v k="$1" '$1==k {print $2}' "$LOCK"; }
 
@@ -141,7 +148,7 @@ if [ "${1:-}" = "--build" ]; then
     # identical sources differ in the PE TimeDateStamp and checksum, and the
     # comparison below can never pass. They live in the lock so the release
     # pipeline and this check cannot drift apart.
-    ( cd "${WINE_BUILD:-/mnt/data/holden/mgs/recovered-session/build-wine-i386}" \
+    ( cd "${WINE_BUILD:-$WORKSPACE/recovered-session/build-wine-i386}" \
         && touch "$WINE_LIVE/dlls/wined3d/glsl_shader.c" \
         && make -j8 i386_LDFLAGS="$(grep '^wined3d_ldflags' "$LOCK" | cut -d' ' -f2-)" \
                 dlls/wined3d/i386-windows/wined3d.dll >/dev/null 2>&1 \

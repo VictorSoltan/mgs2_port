@@ -42,12 +42,19 @@ usage: island_marker_check.py <unstripped wined3d.dll> [--identity HEADER]
                               [--armed 0,1,2,...] [--target SYMBOL ...]
 """
 import argparse
+import pathlib
 import re
 import subprocess
 import sys
 
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 PREFIX = bytes.fromhex("0f1f84004d4753")
-IDENTITY = "/mnt/data/holden/mgs/box86-src/src/mgs2_island_entry_identity.h"
+IDENTITY = str(repo_env.workspace_path(
+    "BOX86_SRC", "box86-src") / "src/mgs2_island_entry_identity.h")
 
 WINDOW = 64  # Box86 scans offsets 0..64 inclusive; see MGS2_ISLAND_WINDOW in bridge.c
 OBJDUMP = "i686-w64-mingw32-objdump"

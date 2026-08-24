@@ -167,7 +167,7 @@ p35. Select it explicitly:
 ```sh
 # from the host, next to the other custom DLLs
 scp binaries/dmsynth_p35_resume_recover.dll \
-    root@192.168.0.28:/storage/roms/ports/MGS2-Substance/
+    "$MGS2_DEVICE:/storage/roms/ports/MGS2-Substance/"
 
 # on the device, one instance only (rule 5)
 cd /storage/roms/ports

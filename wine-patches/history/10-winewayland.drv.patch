@@ -1,4 +1,3 @@
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/winewayland.drv/opengl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/winewayland.drv/opengl.c
 --- a/dlls/winewayland.drv/opengl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/winewayland.drv/opengl.c	2026-08-07 15:51:46.893966119 +0300
 @@ -18,6 +18,49 @@

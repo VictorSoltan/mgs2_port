@@ -16,7 +16,7 @@ The game is not yet playable enough to call the project complete.  It reaches th
 ## Device and access
 
 ```sh
-ssh root@192.168.0.28
+ssh "$MGS2_DEVICE"
 # password: rocknix
 ```
 
@@ -1123,8 +1123,8 @@ on a device that ships nearly full.
 2. Confirm `/storage` has space and all four production component checksums match expected files. The storage partition has previously been about 99% full with ~650 MB free.
 3. Deploy the two new artifacts (both currently local-only):
    ```sh
-   scp recovered-session/device-artifacts/winewayland_pbo1.so root@192.168.0.28:/storage/roms/ports/MGS2-Substance/
-   scp recovered-session/device-artifacts/launch.sh          root@192.168.0.28:/storage/roms/ports/MGS2-Substance/
+   scp recovered-session/device-artifacts/winewayland_pbo1.so "$MGS2_DEVICE:/storage/roms/ports/MGS2-Substance/"
+   scp recovered-session/device-artifacts/launch.sh          "$MGS2_DEVICE:/storage/roms/ports/MGS2-Substance/"
    ```
    `winewayland_pbo1.so` md5 `42a203de86dcaea37d233cff29792ad0`.
 4. **Baseline first.** Launch with the old driver and stats on, and record the numbers:

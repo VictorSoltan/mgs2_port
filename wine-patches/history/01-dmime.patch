@@ -1,4 +1,3 @@
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dmime/audiopath.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmime/audiopath.c
 --- a/dlls/dmime/audiopath.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmime/audiopath.c	2026-08-04 11:34:26.229402017 +0300
 @@ -28,6 +28,9 @@
@@ -137,7 +136,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
      *params = port_config->params;
      if (!(params->dwValidParams & DMUS_PORTPARAMS_CHANNELGROUPS))
      {
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dmime/dmime_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmime/dmime_private.h
 --- a/dlls/dmime/dmime_private.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmime/dmime_private.h	2026-08-04 11:34:26.074400461 +0300
 @@ -76,6 +76,8 @@
@@ -159,7 +157,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  
  /*****************************************************************************
   * Auxiliary definitions
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dmime/performance.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dmime/performance.c
 --- a/dlls/dmime/performance.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dmime/performance.c	2026-08-05 15:41:33.870308323 +0300
 @@ -24,6 +24,10 @@

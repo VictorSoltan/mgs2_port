@@ -23,8 +23,15 @@ question the review raised: is there an ARM counterpart to redirect *to*.
 usage: island_ops_targets.py <unstripped box86 with the island> [wined3d src dir]
 """
 import re
+import pathlib
 import subprocess
 import sys
+
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 
 OPS_BLOCK = re.compile(
     r"static\s+const\s+struct\s+(\w*_ops)\s+(\w+)\s*=\s*\{(.*?)\n\};",
@@ -45,7 +52,8 @@ def arm_symbols(binary):
 def main():
     binary = sys.argv[1]
     src = sys.argv[2] if len(sys.argv) > 2 else \
-        "/mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/wined3d"
+        str(repo_env.workspace_path(
+            "WINE_SRC", "recovered-session/wine-11.0") / "dlls/wined3d")
 
     syms = arm_symbols(binary)
     import glob

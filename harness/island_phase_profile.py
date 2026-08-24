@@ -23,6 +23,10 @@ import struct
 import subprocess
 import sys
 
+import repo_env
+
+repo_env.load()
+
 HERE = pathlib.Path(__file__).resolve().parent
 FULL = HERE / "island/full"
 sys.path.insert(0, str(HERE))
@@ -125,8 +129,9 @@ def embedded_class_b(box86):
 
 
 def fde_ranges(dll):
-    objdump = pathlib.Path(
-        "/mnt/data/holden/mgs/recovered-session/mingw/bin/i686-w64-mingw32-objdump")
+    objdump = repo_env.workspace_path(
+        "MINGW_OBJDUMP",
+        "recovered-session/mingw/bin/i686-w64-mingw32-objdump")
     ranges = []
     for match in FDE.finditer(run(str(objdump), "--dwarf=frames", str(dll))):
         start, end = int(match.group(1), 16), int(match.group(2), 16)

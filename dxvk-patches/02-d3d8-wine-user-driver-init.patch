@@ -1,0 +1,49 @@
+diff --git a/src/d3d8/d3d8_interface.cpp b/src/d3d8/d3d8_interface.cpp
+index 5cf366d6..d52e03b4 100644
+--- a/src/d3d8/d3d8_interface.cpp
++++ b/src/d3d8/d3d8_interface.cpp
+@@ -7,8 +7,22 @@
+ 
+ namespace dxvk {
+ 
++  static d3d9::IDirect3D9* loadD3D9() {
++    HMODULE module = LoadLibraryW(L"d3d9.dll");
++    if (!module)
++      throw DxvkError("D3D8Interface: ERROR! Failed to load d3d9.dll");
++
++    using CreateD3D9Proc = d3d9::IDirect3D9* (WINAPI *)(UINT);
++    auto createD3D9 = reinterpret_cast<CreateD3D9Proc>(
++      GetProcAddress(module, "Direct3DCreate9"));
++    if (!createD3D9)
++      throw DxvkError("D3D8Interface: ERROR! Direct3DCreate9 not found");
++
++    return createD3D9(D3D_SDK_VERSION);
++  }
++
+   D3D8Interface::D3D8Interface()
+-    : m_d3d9(d3d9::Direct3DCreate9(D3D_SDK_VERSION)) {
++    : m_d3d9(loadD3D9()) {
+     // Get the bridge interface to D3D9.
+     if (FAILED(m_d3d9->QueryInterface(__uuidof(IDxvkD3D8InterfaceBridge), reinterpret_cast<void**>(&m_bridge)))) {
+       throw DxvkError("D3D8Interface: ERROR! Failed to get D3D9 Bridge. d3d9.dll might not be DXVK!");
+diff --git a/src/d3d8/d3d8_main.cpp b/src/d3d8/d3d8_main.cpp
+index e4c5213e..4ffb848f 100644
+--- a/src/d3d8/d3d8_main.cpp
++++ b/src/d3d8/d3d8_main.cpp
+@@ -115,6 +115,16 @@ extern "C" {
+   DLLEXPORT void __stdcall DebugSetMute() {}
+ 
+   DLLEXPORT IDirect3D8* __stdcall Direct3DCreate8(UINT nSDKVersion) {
++    // Some D3D8 games create the Direct3D interface before creating their
++    // first window. Wine's Vulkan WSI extensions are supplied by the active
++    // user driver, which is still the null driver at that point. Creating a
++    // hidden standard window forces the real user driver to load before DXVK
++    // enumerates instance extensions.
++    HWND driverWindow = CreateWindowExW(0, L"STATIC", L"", WS_POPUP,
++      0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
++    if (driverWindow)
++      DestroyWindow(driverWindow);
++
+     IDirect3D8* pDirect3D = nullptr;
+     dxvk::CreateD3D8(&pDirect3D);
+ 

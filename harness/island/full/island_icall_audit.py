@@ -47,14 +47,21 @@ usage: island_icall_audit.py <unstripped box86 with the island> [--entry 34]
 import argparse
 import collections
 import os
+import pathlib
 import re
 import sys
 
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import island_reach
 import island_gl_reach
 
-WINE_SRC = os.environ.get("WINE_SRC", "/mnt/data/holden/mgs/recovered-session/wine-11.0")
+WINE_SRC = str(repo_env.workspace_path("WINE_SRC", "recovered-session/wine-11.0"))
+BOX86_SRC = repo_env.workspace_path("BOX86_SRC", "box86-src")
 SRC_DIR = os.path.join(WINE_SRC, "dlls/wined3d")
 
 FUNC_PTR_FIELD = re.compile(r"\(\s*\*\s*(\w+)\s*\)\s*\(")
@@ -183,7 +190,7 @@ def main():
     ap.add_argument("binary")
     ap.add_argument("--entry", type=int, default=34)
     ap.add_argument("--entries",
-                    default="/mnt/data/holden/mgs/box86-src/src/mgs2_island_bridges.c")
+                    default=str(BOX86_SRC / "src/mgs2_island_bridges.c"))
     ap.add_argument("--all-hits", action="store_true",
                     help="print routed hits too, not just unrouted ones")
     args = ap.parse_args()

@@ -1,4 +1,3 @@
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dsound/buffer.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dsound/buffer.c
 --- a/dlls/dsound/buffer.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dsound/buffer.c	2026-08-03 16:36:00.392200713 +0300
 @@ -20,6 +20,8 @@
@@ -859,7 +858,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  	list_init(&dsb->buffer->buffers);
  	list_add_head(&dsb->buffer->buffers, &dsb->entry);
  	FillMemory(dsb->buffer->memory, dsb->buflen, dsbd->lpwfxFormat->wBitsPerSample == 8 ? 128 : 0);
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dsound/dsound.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dsound/dsound.c
 --- a/dlls/dsound/dsound.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dsound/dsound.c	2026-08-03 16:22:00.579932870 +0300
 @@ -281,13 +281,39 @@
@@ -962,7 +960,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
  }
  
  static HRESULT WINAPI IDirectSound8Impl_SetCooperativeLevel(IDirectSound8 *iface, HWND hwnd,
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dsound/dsound_private.h /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dsound/dsound_private.h
 --- a/dlls/dsound/dsound_private.h	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dsound/dsound_private.h	2026-08-03 16:19:43.779284458 +0300
 @@ -109,11 +109,33 @@
@@ -1041,7 +1038,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
 +void mgs_sfx_producer_note_create(IDirectSoundBufferImpl *dsb, void *caller);
 +void mgs_sfx_producer_note_duplicate(IDirectSoundBufferImpl *dsb,
 +        IDirectSoundBufferImpl *source, void *caller);
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/dsound/mixer.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/dsound/mixer.c
 --- a/dlls/dsound/mixer.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/dsound/mixer.c	2026-08-05 13:44:56.734018326 +0300
 @@ -450,6 +450,254 @@

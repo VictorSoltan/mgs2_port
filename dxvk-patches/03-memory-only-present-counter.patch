@@ -1,0 +1,49 @@
+diff --git a/src/d3d9/d3d9.def b/src/d3d9/d3d9.def
+index 4e3f9ae5..6fbbd4a4 100644
+--- a/src/d3d9/d3d9.def
++++ b/src/d3d9/d3d9.def
+@@ -25,3 +25,5 @@ EXPORTS
+   DXVK_UnRegisterAnnotation @ 28258 NONAME
+ 
+   Direct3D9ForceHybridEnumeration @16 NONAME PRIVATE
++
++  MGS2DxvkPresentCount DATA
+diff --git a/src/d3d9/d3d9_main.cpp b/src/d3d9/d3d9_main.cpp
+index e182b5fa..3d4566cd 100644
+--- a/src/d3d9/d3d9_main.cpp
++++ b/src/d3d9/d3d9_main.cpp
+@@ -26,6 +26,10 @@ namespace dxvk {
+ 
+ extern "C" {
+ 
++  // Research-only memory counter. An external reader samples this through
++  // /proc/<pid>/mem, so measuring frame rate never logs from the present path.
++  volatile uint32_t MGS2DxvkPresentCount = 0;
++
+   DLLEXPORT IDirect3D9* __stdcall Direct3DCreate9(UINT nSDKVersion) {
+     IDirect3D9Ex* pDirect3D = nullptr;
+     dxvk::CreateD3D9(false, &pDirect3D);
+diff --git a/src/d3d9/d3d9_swapchain.cpp b/src/d3d9/d3d9_swapchain.cpp
+index 944f6821..a72713f7 100644
+--- a/src/d3d9/d3d9_swapchain.cpp
++++ b/src/d3d9/d3d9_swapchain.cpp
+@@ -5,6 +5,8 @@
+ 
+ #include "d3d9_hud.h"
+ 
++extern "C" volatile uint32_t MGS2DxvkPresentCount;
++
+ namespace dxvk {
+ 
+ 
+@@ -818,6 +820,10 @@ namespace dxvk {
+   void D3D9SwapChainEx::PresentImage(UINT SyncInterval) {
+     m_parent->Flush();
+ 
++    // One write per D3D9 Present. The external research harness reads the
++    // counter; this thread never formats or writes a log line.
++    MGS2DxvkPresentCount += 1;
++
+     // Retrieve the image and image view to present
+     auto swapImage = m_backBuffers[0]->GetCommonTexture()->GetImage();
+     auto swapImageView = m_backBuffers[0]->GetImageView(false);

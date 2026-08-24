@@ -29,9 +29,18 @@
 # moved; nothing in this build reads an address any more.
 set -eu
 
-WINE_SRC="${WINE_SRC:-/mnt/data/holden/mgs/recovered-session/wine-11.0}"
-WINE_BUILD="${WINE_BUILD:-/mnt/data/holden/mgs/recovered-session/build-wine-i386}"
-BOX86_SRC="${BOX86_SRC:-/mnt/data/holden/mgs/box86-src}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/../../.." && pwd)
+if [ -r "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+WORKSPACE="${MGS2_WORKSPACE:-$(dirname "$REPO")}"
+WINE_SRC="${WINE_SRC:-$WORKSPACE/recovered-session/wine-11.0}"
+WINE_BUILD="${WINE_BUILD:-$WORKSPACE/recovered-session/build-wine-i386}"
+BOX86_SRC="${BOX86_SRC:-$WORKSPACE/box86-src}"
 SYSROOT="${SYSROOT:?set SYSROOT to the extracted armhf cross sysroot}"
 CC="${CC:-arm-linux-gnueabihf-gcc}"
 # EXTRA_CFLAGS exists for one reason: building the island with an ARM compiler
@@ -47,7 +56,6 @@ CC="${CC:-arm-linux-gnueabihf-gcc}"
 EXTRA_CFLAGS="${EXTRA_CFLAGS:-}"
 OUT="$BOX86_SRC/src/island"
 REG="$OUT/registry"
-HERE=$(cd "$(dirname "$0")" && pwd)
 
 # The i386 DLL supplies the guest RVAs. The opengl32 DLL must be the one MOUNTED
 # ON THE DEVICE: the reference wineprefix copy shares an ImageBase and has

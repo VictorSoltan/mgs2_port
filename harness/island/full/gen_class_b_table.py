@@ -65,9 +65,16 @@ import argparse
 import collections
 import glob
 import os
+import pathlib
 import re
 import subprocess
 import sys
+
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 
 IMAGE_BASE = 0x10000000
 OPENGL32_BASE = 0x7A800000
@@ -214,7 +221,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dll")
-    ap.add_argument("--objects", default="/mnt/data/holden/mgs/box86-src/src/island")
+    ap.add_argument("--objects", default=str(
+        repo_env.workspace_path("BOX86_SRC", "box86-src") / "src/island"))
     ap.add_argument("--opengl32", help="the guest opengl32.dll AS MOUNTED ON THE DEVICE")
     ap.add_argument("--preserve-class-c-from",
                     help="copy the verified class-C table from this generated header")

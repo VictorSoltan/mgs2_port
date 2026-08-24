@@ -42,6 +42,11 @@ import struct
 import subprocess
 import sys
 
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import island_gl_reach
 import island_icall_audit
@@ -49,6 +54,7 @@ import island_reach
 
 
 CLONE = island_icall_audit.CLONE
+BOX86_SRC = repo_env.workspace_path("BOX86_SRC", "box86-src")
 HEADER = re.compile(r"^([0-9a-f]+) <([^>]+)>:")
 INSN = re.compile(r"^\s*([0-9a-f]+):\s+((?:[0-9a-f]{4,8}\s+)+)\t?\s*(\S+)\s*(.*)$")
 LITERAL = re.compile(r"^(r\d+|ip|sl|fp|sb),\s*\[pc[^]]*\].*@\s*\(([0-9a-f]+)\b")
@@ -300,7 +306,8 @@ def main():
     ap.add_argument("binary", help="unstripped ARM Box86 linked with --emit-relocs")
     ap.add_argument("--entry", type=int, default=37)
     ap.add_argument("--root", help="audit this symbol directly instead of resolving --entry")
-    ap.add_argument("--entries", default="/mnt/data/holden/mgs/box86-src/src/mgs2_island_bridges.c")
+    ap.add_argument("--entries", default=str(
+        BOX86_SRC / "src/mgs2_island_bridges.c"))
     ap.add_argument("--from-objects", metavar="DIR",
                     help="read the island objects' relocations instead of decoding "
                          "literals; required for a PIC island build")

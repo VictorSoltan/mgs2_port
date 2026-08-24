@@ -1,44 +1,50 @@
-# Бинарники не версионируются, кроме одного каталога: binaries/ хранит ровно тот
-# набор, на котором игра проверена рабочей, чтобы устройство можно было вернуть в
-# играбельное состояние без тулчейна. Всё остальное пересобирается из
-# wine-patches/ по рецептам в README.
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.envrc
+.direnv/
+*.local
+.github-token.local
+
+# Runtime and research binaries. Keep hashes/manifests in Git; publish binary
+# bundles separately or rebuild them from the pinned sources and patches.
 *.dll
 *.so
 *.so.*
 *.o
 *.a
 *.exe
-!binaries/**
+/binaries/*
+!/binaries/README.md
+!/binaries/SHA256SUMS
+/release/
 
-# Сборочные каталоги и исходники Wine — они восстанавливаются из тарбола плюс патчи.
+# Source and build trees reconstructed from upstream tarballs plus patches
 build-wine-*/
 wine-11.0/
 *.tar.xz
 *.tar.gz
+/_work/
 
-# Логи и записи с устройства.
-*.log
-*.wav
-__pycache__/
-/handoff
-
-# Local owner-provided GitHub credentials for this checkout. Never stage.
-.github-token.local
-
-# Collector output: machine-specific, and a PC-run copy once got mistaken for
-# the console. Send the tarball, never commit it.
-mgs2-perf-context-*/
-mgs2-perf-context-*.tar.gz
-
-# Local captures / profiling output
+# Device captures and profiler output. Curated public evidence belongs in
+# docs/evidence/ and is explicitly allowed below.
 /logs/
+/handoff/
+*.log
+!docs/evidence/*.log
+*.wav
 *.perf
 *.prof
 *.trace
+perf.data*
 core
 core.*
+mgs2-perf-context-*/
+mgs2-perf-context-*.tar.gz
 
-# Python caches / local environments
+# Python and tool caches
+__pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
@@ -46,18 +52,13 @@ core.*
 .venv/
 venv/
 
-# Editor / local junk
+# Editors and operating-system junk
+.DS_Store
+Thumbs.db
 *.swp
 *.swo
 *~
+*.tmp
+*.bak
 .vscode/
 .idea/
-
-# release/ — вывод harness/make_release.sh: 28 МБ box86 и 26 МБ WineD3D на
-# выпуск. В историю git они не идут по той же причине, по которой сюда не идут
-# остальные бинарники: пересобираются точно, байт в байт, из закреплённых баз и
-# полных патчей (device/FINALPLAY.lock, harness/verify_rebuild.sh --build).
-# Манифест из каждого выпуска дублируется в device/FINALPLAY.manifest, и он
-# как раз версионируется.
-release/*/box86-*
-release/*/*.so

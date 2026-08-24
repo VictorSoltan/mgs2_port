@@ -25,8 +25,15 @@
 # usage: verify_patch_record.sh
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-WINE="${WINE_SRC:-/mnt/data/holden/mgs/recovered-session/wine-11.0}"
-BOX86="${BOX86_SRC:-/mnt/data/holden/mgs/box86-src}"
+if [ -r "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+WORKSPACE="${MGS2_WORKSPACE:-$(dirname "$REPO")}"
+WINE="${WINE_SRC:-$WORKSPACE/recovered-session/wine-11.0}"
+BOX86="${BOX86_SRC:-$WORKSPACE/box86-src}"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 fail=0

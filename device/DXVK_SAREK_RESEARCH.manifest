@@ -1,0 +1,32 @@
+# MGS2 research-only D3D8 -> DXVK-Sarek -> proprietary Mali arm.
+# Production FINALPLAY15 does not select any file below.
+source_tag      v1.11.1-mali-fix
+source_commit   617958fe1cf2b10e06fa751d3e40bd765dcf2cc6
+source_patch    dxvk-patches/01-mali-d3d9-pipeline-compat.patch
+patch_sha256    43cd0cc1790128a2674d8fda96d324bc86e86d3421d1217bafc754d78f69a77a
+d3d8_wsi_patch  dxvk-patches/02-d3d8-wine-user-driver-init.patch
+d3d8_wsi_sha256 8131048ac81e93911c678137bd44ef864c5fd21e0185ed4078a4fc62d015e4df
+counter_patch    dxvk-patches/03-memory-only-present-counter.patch
+counter_sha256   bd7e438b620651a60f133058c2b718aa35060331243c703a632df9630eef4815
+counter_rva      0x30f040
+wine_mode       direct32
+prefix_source   Devil-May-Cry-3/wineprefix11-x86-test
+prefix_system   3847b991e3a1c6d7a7dbc563bd857361b04f341b6dd7246f8965b0fe28e5afe2
+
+b1ef28e04a228a12058ee2a72638bd885f3ceeb0fb71563ea02bfffd9a4422f0  d3d8_dxvk_sarek_1.11.1_mali_nullfix1.dll
+d5d62347c50aa20b798bf0488850e7d038c11064c69b12e1927a55da59d1187b  d3d8_dxvk_sarek_1.11.1_mali_wsiinit1.dll
+e2ee1afdb73a854a73fa753238e5f6a709cbbf291db1209ac5748779784f4e8b  d3d8_dxvk_sarek_1.11.1_mali_wsiinit2.dll
+22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa  d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
+40ead250117c4a4517d389d7e6f09484c55a1e69ade725a115c8cbf2cb8a5352  d3d9_dxvk_sarek_1.11.1_mali_nullfix1.dll
+cf67ce743ebe4c4e0ce909811193b3a90b234d74feec4649d018c9b956fe6b92  d3d9_dxvk_sarek_1.11.1_mali_count1.dll
+d0a6177c5ccfe09fdfdbc660c5db22c4a2fe99d0edfeecde1bf6e0b2979889ea  box86_dxvk_wayland_fix1
+
+# ROCKNIX 20260822 system modules deliberately left unmounted in this arm.
+# The custom FINALPLAY15 OpenGL modules do not expose Wine's Vulkan driver.
+04f8472bd672d37cd77b45cc647b95f698904b610d630bcc6cf2abfc9a4eecd8  /usr/lib/wine/i386-unix/win32u.so
+f1aca90bc0d27ee49f5bbba6e654481b4a27d83408cb9d71cc0e24565b2f628b  /usr/lib/wine/i386-unix/winewayland.so
+749f1c4bcfad47690a9c7366069d99db2f4a0663365a46fa1fd5f4720e178387  /usr/lib/wine/i386-unix/opengl32.so
+65669750ec68415a6b2d4acd147f58bafa11f2a2f8aa07bc8b5f375af714a520  /usr/lib/wine/i386-windows/wined3d.dll
+755e5a870911815315ae724bdba876fb08794b580a843ff0a23729d019deafe0  /usr/lib/wine/i386-windows/d3d8.dll
+1635f4c6917dc54f6764e1fceddd39b4ce04692a93a88f473fa6cbcf03d83d84  /usr/lib/wine/i386-windows/user32.dll
+ab6bf7a9a9f4b3e66a75ca038d8d10289c88acbfe8d52c3b5a8a9a259cb26cd5  /storage/roms/ports/MGS2-Substance/game/bin/d3d8.dll

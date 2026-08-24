@@ -38,7 +38,7 @@
 кросс-компилятор лежит в репозитории и не прописан в PATH:
 
 ```bash
-export PATH="/mnt/data/holden/mgs/recovered-session/mingw/bin:$PATH"
+export PATH="$MINGW_BIN:$PATH"
 ```
 
 Release-сборка wined3d делается через `i386_CFLAGS`, это нигде не было записано:

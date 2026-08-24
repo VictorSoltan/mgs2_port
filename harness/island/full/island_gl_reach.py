@@ -53,12 +53,20 @@ import os
 import re
 import subprocess
 import sys
+import pathlib
 
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import island_reach
 
-WINE_SRC = os.environ.get("WINE_SRC", "/mnt/data/holden/mgs/recovered-session/wine-11.0")
-WINE_BUILD = os.environ.get("WINE_BUILD", "/mnt/data/holden/mgs/recovered-session/build-wine-i386")
+WINE_SRC = str(repo_env.workspace_path("WINE_SRC", "recovered-session/wine-11.0"))
+WINE_BUILD = str(repo_env.workspace_path(
+    "WINE_BUILD", "recovered-session/build-wine-i386"))
+BOX86_SRC = repo_env.workspace_path("BOX86_SRC", "box86-src")
 CC = os.environ.get("CC", "arm-linux-gnueabihf-gcc")
 SYSROOT = os.environ.get("SYSROOT", "")
 
@@ -257,7 +265,8 @@ def main():
     ap.add_argument("--resolved", help="device log carrying 'gl_ops: slot N unresolved'"
                                        " lines, to turn required into a verdict")
     ap.add_argument("--out", help="write the per-entry required-slot header here")
-    ap.add_argument("--entries", default="/mnt/data/holden/mgs/box86-src/src/mgs2_island_bridges.c",
+    ap.add_argument("--entries", default=str(
+        BOX86_SRC / "src/mgs2_island_bridges.c"),
                     help="the island entry table Box86 itself compiles")
     args = ap.parse_args()
 

@@ -7,9 +7,12 @@ learned by getting it wrong at least once.
 ## Access
 
 ```sh
-ssh root@192.168.0.28
+ssh "$MGS2_DEVICE"
 # ROCKNIX ships with the password "rocknix"
 ```
+
+Set `MGS2_DEVICE` in the repository's ignored `.env`, then load it with
+`set -a; . ./.env; set +a` before using these host-side examples.
 
 The game lives in `/storage/roms/ports/MGS2-Substance/`, the menu entry is
 `/storage/roms/ports/MGS2-Substance.sh`. `/storage` is the SD card, and `/` is a

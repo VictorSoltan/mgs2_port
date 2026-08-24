@@ -14,7 +14,7 @@
 #   build the island           which regenerates class-B FROM THAT WineD3D
 #   build Box86                deterministically
 #   collect into release/NAME/
-#   point launch-play.sh at the names just produced
+#   point the WineD3D production launcher at the names just produced
 #   generate FINALPLAY.manifest from the ELEVEN files that launcher mounts
 #   (--deploy) copy exactly those files, and the launcher, and nothing else
 #
@@ -44,15 +44,23 @@ set -eu
 NAME="${1:?usage: make_release.sh <name> [--deploy]}"
 DEPLOY="${2:-}"
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-WINE_SRC="${WINE_SRC:-/mnt/data/holden/mgs/recovered-session/wine-11.0}"
-WINE_BUILD="${WINE_BUILD:-/mnt/data/holden/mgs/recovered-session/build-wine-i386}"
-UNIX_BUILD="${UNIX_BUILD:-/mnt/data/holden/mgs/recovered-session/build-wine-unix32}"
-BOX86_BUILD="${BOX86_BUILD:-/mnt/data/holden/mgs/box86-src/build-timing}"
-MINGW="${MINGW_BIN:-/mnt/data/holden/mgs/recovered-session/mingw/bin}"
-DEV="${MGS2_DEVICE:-root@192.168.0.28}"
-GAMEDIR=/storage/roms/ports/MGS2-Substance
+if [ -r "$REPO/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env"
+    set +a
+fi
+WORKSPACE="${MGS2_WORKSPACE:-$(dirname "$REPO")}"
+WINE_SRC="${WINE_SRC:-$WORKSPACE/recovered-session/wine-11.0}"
+WINE_BUILD="${WINE_BUILD:-$WORKSPACE/recovered-session/build-wine-i386}"
+UNIX_BUILD="${WINE_UNIX_BUILD:-$WORKSPACE/recovered-session/build-wine-unix32}"
+BOX86_BUILD="${BOX86_BUILD:-$WORKSPACE/box86-src/build-timing}"
+MINGW="${MINGW_BIN:-$WORKSPACE/recovered-session/mingw/bin}"
+DEV="${MGS2_DEVICE:-root@rg353vs}"
+GAMEDIR="${MGS2_GAME_DIR:-/storage/roms/ports/MGS2-Substance}"
 OUT="$REPO/release/$NAME"
-LAUNCHER="$REPO/device/launch-play.sh"
+LAUNCHER="${MGS2_RELEASE_LAUNCHER:-$REPO/device/launch-play-wined3d-fp15.sh}"
+LAUNCHER_NAME=$(basename "$LAUNCHER")
 LOCK="$REPO/device/FINALPLAY.lock"
 TAB=$(printf '\t')
 
@@ -140,7 +148,7 @@ sed -i \
 if [ -n "$WLNAME" ]; then
     sed -i -e "s|\${MGS2_WAYLAND_SO:-[^}]*}|\${MGS2_WAYLAND_SO:-$WLNAME}|" "$LAUNCHER"
 fi
-echo "ok     launch-play.sh mounts box86-$NAME and wined3d_$NAME.dll"
+echo "ok     $LAUNCHER_NAME mounts box86-$NAME and wined3d_$NAME.dll"
 
 echo "== 8. manifest, over every file the launcher mounts =="
 mgs2_bundle_table > "$OUT/.bundle"
@@ -166,7 +174,7 @@ done < "$OUT/.bundle"
     echo "# The MOUNTED file is what the launcher hashes: what was asked for is"
     echo "# not evidence of what is in place, and a half-updated class-B pair"
     echo "# does not fail cleanly."
-    echo "# Every bind mount in device/launch-play.sh is here, generated from its"
+    echo "# Every bind mount in $LAUNCHER_NAME is here, generated from its"
     echo "# own mount_bind lines. It used to be three of eleven, and the launcher"
     echo "# asserts the count so the two cannot drift apart again."
     while IFS="$TAB" read -r file path; do
@@ -214,11 +222,11 @@ if [ "$DEPLOY" = "--deploy" ]; then
         echo "       $file copied"
     done < "$OUT/FINALPLAY.manifest"
     scp -q "$OUT/FINALPLAY.manifest" "$DEV:$GAMEDIR/FINALPLAY.manifest"
-    # Every launcher in device/, not just launch-play.sh.
+    # Every launcher in device/, not just $LAUNCHER_NAME.
     #
     # The launcher names the binaries and asserts the manifest covers all of them,
     # so it is part of the release rather than something the device happens to
-    # have. And the named experiments are now COUPLED to it: launch-play.sh
+    # have. And the named experiments are now COUPLED to it: the production path
     # refuses a binary override unless MGS2_RESEARCH_RUN is set, and the thing
     # that sets it is each launch-*.sh. Shipping the production launcher without
     # them would leave every experiment on the device exiting 1.
@@ -228,7 +236,7 @@ if [ "$DEPLOY" = "--deploy" ]; then
     scp -q "$REPO"/device/*.sh "$DEV:$GAMEDIR/"
     ssh -o BatchMode=yes "$DEV" "cd $GAMEDIR && chmod +x box86-$NAME *.sh"
     echo "       $(ls "$REPO"/device/*.sh | wc -l) launchers copied"
-    echo "ok     deployed; launch-play.sh on the device mounts $NAME"
+    echo "ok     deployed; $LAUNCHER_NAME on the device mounts $NAME"
 fi
 echo
 echo "release $NAME is in $OUT"

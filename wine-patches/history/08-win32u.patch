@@ -1,4 +1,3 @@
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/win32u/message.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/win32u/message.c
 --- a/dlls/win32u/message.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/win32u/message.c	2026-08-02 15:35:59.466060506 +0300
 @@ -25,6 +25,7 @@
@@ -119,7 +118,6 @@ diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps
              KeUserDispatchCallback( &params.dispatch, sizeof(params), &ret_ptr, &ret_len );
          }
          return FALSE;
-diff -urN -x '*.o' -x '*.so' -x '*.dll' -x '*.a' -x '*.res' -x '*.fake' -x .deps -x Makefile wine-11.0/dlls/win32u/opengl.c /mnt/data/holden/mgs/recovered-session/wine-11.0/dlls/win32u/opengl.c
 --- a/dlls/win32u/opengl.c	2026-01-13 17:56:07.000000000 +0200
 +++ b/dlls/win32u/opengl.c	2026-08-01 01:54:19.535575691 +0300
 @@ -2479,6 +2479,18 @@

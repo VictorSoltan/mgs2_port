@@ -44,18 +44,21 @@ import re
 import subprocess
 import sys
 
+HARNESS = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS))
+import repo_env
+
+repo_env.load()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import island_icall_audit
 import island_draw_phases
 import island_mutable_state_audit
 
 
-WINE_SRC = pathlib.Path(os.environ.get(
-    "WINE_SRC", "/mnt/data/holden/mgs/recovered-session/wine-11.0"))
-WINE_BUILD = pathlib.Path(os.environ.get(
-    "WINE_BUILD", "/mnt/data/holden/mgs/recovered-session/build-wine-i386"))
-BOX86_SRC = pathlib.Path(os.environ.get(
-    "BOX86_SRC", "/mnt/data/holden/mgs/box86-src"))
+WINE_SRC = repo_env.workspace_path("WINE_SRC", "recovered-session/wine-11.0")
+WINE_BUILD = repo_env.workspace_path(
+    "WINE_BUILD", "recovered-session/build-wine-i386")
+BOX86_SRC = repo_env.workspace_path("BOX86_SRC", "box86-src")
 
 # These objects are allocated or initialised by guest WineD3D and subsequently
 # dereferenced by the native p69 closure.
