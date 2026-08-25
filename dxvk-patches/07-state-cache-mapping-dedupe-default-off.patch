@@ -1,0 +1,40 @@
+diff --git a/src/dxvk/dxvk_state_cache.cpp b/src/dxvk/dxvk_state_cache.cpp
+index 70db4277..3bae4fe4 100644
+--- a/src/dxvk/dxvk_state_cache.cpp
++++ b/src/dxvk/dxvk_state_cache.cpp
+@@ -8,7 +8,12 @@ namespace dxvk {
+   static const Sha1Hash       g_nullHash      = Sha1Hash::compute(nullptr, 0);
+   static const DxvkShaderKey  g_nullShaderKey = DxvkShaderKey();
+ 
++  static bool mgs2DxvkStateCacheDedupeEnabled() {
++    static const bool enabled =
++      env::getEnvVar("MGS2_DXVK_STATE_CACHE_DEDUPE") == "1";
++    return enabled;
++  }
++
+-
+   /**
+    * \brief Packed entry header
+    */
+@@ -344,8 +350,19 @@ namespace dxvk {
+   void DxvkStateCache::mapShaderToPipeline(
+     const DxvkShaderKey&            shader,
+     const DxvkStateCacheKey&        key) {
+-    if (!shader.eq(g_nullShaderKey))
+-      m_pipelineMap.insert({ shader, key });
++    if (shader.eq(g_nullShaderKey))
++      return;
++
++    if (mgs2DxvkStateCacheDedupeEnabled()) {
++      auto pipelines = m_pipelineMap.equal_range(shader);
++
++      for (auto p = pipelines.first; p != pipelines.second; p++) {
++        if (p->second.eq(key))
++          return;
++      }
++    }
++
++    m_pipelineMap.insert({ shader, key });
+   }
+ 
+ 

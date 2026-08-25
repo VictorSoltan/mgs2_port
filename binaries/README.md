@@ -6,7 +6,8 @@ shared objects and Box86 executables are intentionally ignored by Git.
 The public, reproducible record consists of:
 
 - `SHA256SUMS`, the historical artifact hash catalogue;
-- `device/FINALPLAY16_DXVK.manifest`, the current live identity gate;
+- `device/FINALPLAY17_DXVK_FREEZE.manifest`, the current live identity gate;
+- `device/FINALPLAY16_DXVK.manifest`, the previous DXVK rollback gate;
 - `device/FINALPLAY.manifest`, the FINALPLAY15 rollback identity gate;
 - `wine-patches/`, `box86-patches/` and `dxvk-patches/`, the source changes;
 - the pinned bases and build instructions in `device/FINALPLAY.lock` and the

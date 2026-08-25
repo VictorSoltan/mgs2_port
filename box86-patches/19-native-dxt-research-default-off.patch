@@ -1,3 +1,5 @@
+diff --git a/src/box86context.c b/src/box86context.c
+index fc69d23e..c5eb8ec5 100755
 --- a/src/box86context.c
 +++ b/src/box86context.c
 @@ -5,6 +5,7 @@
@@ -5,13 +7,14 @@
  #include <math.h>
  #include <signal.h>
 +#include <pthread.h>
-
+ 
  #include "box86context.h"
  #include "elfloader.h"
-@@ -391,6 +392,428 @@
-
-
- /* ---------------------------------------------------------------------------
+@@ -390,6 +391,428 @@ static void mgs2_native_dsound_fir_wrapper(x86emu_t *emu, uintptr_t fnc)
+ }
+ 
+ 
++/* ---------------------------------------------------------------------------
 + * MGS2 native DXT block decoders -- default-off research candidate.
 + *
 + * A correct-save, all-thread perf capture found the texture worker active for
@@ -433,11 +436,10 @@
 +}
 +
 +
-+/* ---------------------------------------------------------------------------
+ /* ---------------------------------------------------------------------------
   * MGS2 native RGBA dither pack -- the long load freeze.
   *
-  * Four unattended captures agree: while the game freezes for 4-7 s after a save
-@@ -1020,6 +1443,35 @@
+@@ -1020,6 +1443,35 @@ box86context_t *NewBox86Context(int argc)
                      (void *)bridge, mgs2_dither_verify ? " (VERIFY mode)" : "");
          }
      }
@@ -473,10 +475,10 @@
      const char *mgs2_native_dsound_fir_env = getenv("MGS2_BOX86_NATIVE_DSOUND_FIR");
      if (mgs2_native_dsound_fir_env && atoi(mgs2_native_dsound_fir_env))
      {
-@@ -1079,6 +1531,10 @@
-
+@@ -1079,6 +1531,10 @@ void FreeBox86Context(box86context_t** context)
+ 
      box86context_t* ctx = *context;   // local copy to do the cleanning
-
+ 
 +    /* Counters are updated on the texture worker but reported here, after the
 +     * guest has stopped, so the instrument cannot create the hitch it measures. */
 +    mgs2_native_dxt_report();
@@ -484,9 +486,24 @@
      //clean_current_emuthread();    // cleaning main thread seems a bad idea
      if(ctx->local_maplib)
          FreeLibrarian(&ctx->local_maplib, NULL);
+diff --git a/src/include/bridge.h b/src/include/bridge.h
+index cb5be2f9..9c38ba6c 100755
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -31,6 +31,8 @@ void SetMGS2IslandBridge(unsigned int id, uintptr_t bridge);
+ void SetMGS2NativeDsoundFir(uintptr_t alt);
+ void SetMGS2NativeDither(uintptr_t alt);
+ uintptr_t mgs2_dither_guest_addr(void);
++void SetMGS2NativeDxt(unsigned int id, uintptr_t alt);
++uintptr_t mgs2_dxt_guest_addr(unsigned int id);
+ void* mgs2_indirect_alternate(void* addr);
+ extern __thread int mgs2_dither_bypass;
+ 
+diff --git a/src/tools/bridge.c b/src/tools/bridge.c
+index ee9d3957..9d7da96a 100755
 --- a/src/tools/bridge.c
 +++ b/src/tools/bridge.c
-@@ -261,6 +261,9 @@
+@@ -261,6 +261,9 @@ static uintptr_t mgs2_native_dsound_fir;
  static uintptr_t mgs2_dsound_fir_guest;
  static uintptr_t mgs2_native_dither;
  static uintptr_t mgs2_dither_guest;
@@ -496,10 +513,10 @@
  static uintptr_t mgs2_native_island_ffp;
  static uintptr_t mgs2_island_ffp_guest;
  static uintptr_t mgs2_native_island_gl;
-@@ -318,6 +321,18 @@
+@@ -318,6 +321,18 @@ void SetMGS2NativeDither(uintptr_t alt)
      mgs2_native_dither = alt;
  }
-
+ 
 +void SetMGS2NativeDxt(unsigned int id, uintptr_t alt)
 +{
 +    if (id < MGS2_DXT_COUNT)
@@ -515,10 +532,10 @@
  /* The converter's own guest address, published so the native implementation can
   * derive the module base and reach the pre-transform it sometimes calls. The
   * exe loads at its preferred base today, but deriving beats assuming. */
-@@ -399,6 +414,37 @@
+@@ -399,6 +414,37 @@ static const unsigned char mgs2_dither_signature[] = {
      0x08, 0x56, 0x0f, 0xaf, 0xd0, 0x8b, 0x75, 0x0c,
  };
-
+ 
 +/* Exact, unique first 48 bytes of the game's DXT1, DXT3 and DXT5 decoders.
 + * They are called through a texture-format function pointer, so they need the
 + * same LinkNext path as the virtual dither converter.  The rel32 call bytes are
@@ -553,12 +570,12 @@
  /* getAlternate() is consulted only for DIRECT rel32 branches. Anything reached
   * through a C++ vtable arrives at LinkNext() instead, which looks the target up
   * in the alternates hash and nowhere else -- so a signature matcher for a
-@@ -418,19 +464,59 @@
+@@ -418,19 +464,59 @@ __thread int mgs2_dither_bypass;
  void* mgs2_indirect_alternate(void* addr)
  {
      uintptr_t guest;
 +    unsigned int i;
-
+ 
 -    if (!mgs2_native_dither || mgs2_dither_bypass)
 +    if (mgs2_dither_bypass)
          return addr;
@@ -567,11 +584,6 @@
 -        return ((uintptr_t)addr == guest) ? (void *)mgs2_native_dither : addr;
 -    if (mgs2_signature_readable((uintptr_t)addr, sizeof(mgs2_dither_signature))
 -            && !memcmp(addr, mgs2_dither_signature, sizeof(mgs2_dither_signature)))
--    {
--        __atomic_store_n(&mgs2_dither_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
--        printf_log(LOG_NONE, "MGS2 native dither: matched guest %p -> bridge %p\n",
--                addr, (void *)mgs2_native_dither);
--        return (void *)mgs2_native_dither;
 +    if (mgs2_native_dither)
 +    {
 +        guest = __atomic_load_n(&mgs2_dither_guest, __ATOMIC_ACQUIRE);
@@ -603,7 +615,11 @@
 +    }
 +    /* Cold discovery only after no cached target matched. */
 +    for (i = 0; i < MGS2_DXT_COUNT; ++i)
-+    {
+     {
+-        __atomic_store_n(&mgs2_dither_guest, (uintptr_t)addr, __ATOMIC_RELEASE);
+-        printf_log(LOG_NONE, "MGS2 native dither: matched guest %p -> bridge %p\n",
+-                addr, (void *)mgs2_native_dither);
+-        return (void *)mgs2_native_dither;
 +        if (!mgs2_native_dxt[i])
 +            continue;
 +        guest = __atomic_load_n(&mgs2_dxt_guest[i], __ATOMIC_ACQUIRE);
@@ -624,7 +640,7 @@
      }
      return addr;
  }
-@@ -531,7 +617,8 @@
+@@ -531,7 +617,8 @@ mgs2_memmove:
              return (void *)mgs2_native_dsound_fir;
          }
      }
@@ -633,14 +649,4 @@
 +            || mgs2_native_dxt[1] || mgs2_native_dxt[2])
      {
          void *alt = mgs2_indirect_alternate(addr);
-
---- a/src/include/bridge.h
-+++ b/src/include/bridge.h
-@@ -31,6 +31,8 @@
- void SetMGS2NativeDsoundFir(uintptr_t alt);
- void SetMGS2NativeDither(uintptr_t alt);
- uintptr_t mgs2_dither_guest_addr(void);
-+void SetMGS2NativeDxt(unsigned int id, uintptr_t alt);
-+uintptr_t mgs2_dxt_guest_addr(unsigned int id);
- void* mgs2_indirect_alternate(void* addr);
- extern __thread int mgs2_dither_bypass;
+ 

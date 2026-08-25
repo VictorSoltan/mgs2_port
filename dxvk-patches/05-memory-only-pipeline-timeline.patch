@@ -1,0 +1,277 @@
+diff --git a/src/d3d9/d3d9.def b/src/d3d9/d3d9.def
+index 6fbbd4a..f614bcf 100644
+--- a/src/d3d9/d3d9.def
++++ b/src/d3d9/d3d9.def
+@@ -27,3 +27,6 @@ EXPORTS
+   Direct3D9ForceHybridEnumeration @16 NONAME PRIVATE
+ 
+   MGS2DxvkPresentCount DATA
++  MGS2DxvkPipelineTraceWriteCount DATA
++  MGS2DxvkPipelineTraceDropped DATA
++  MGS2DxvkPipelineTraceEvents DATA
+diff --git a/src/dxvk/dxvk_graphics.cpp b/src/dxvk/dxvk_graphics.cpp
+index 66c4131..4e28d85 100644
+--- a/src/dxvk/dxvk_graphics.cpp
++++ b/src/dxvk/dxvk_graphics.cpp
+@@ -3,11 +3,73 @@
+ #include "dxvk_device.h"
+ #include "dxvk_graphics.h"
+ #include "dxvk_pipemanager.h"
++#include "dxvk_pipeline_trace.h"
+ #include "dxvk_spec_const.h"
+ #include "dxvk_state_cache.h"
+ 
++#include "../util/util_env.h"
++
++extern "C" {
++  volatile uint32_t MGS2DxvkPipelineTraceWriteCount = 0;
++  volatile uint32_t MGS2DxvkPipelineTraceDropped = 0;
++  MGS2DxvkPipelineTraceEvent
++    MGS2DxvkPipelineTraceEvents[MGS2DxvkPipelineTraceCapacity] = { };
++}
++
+ namespace dxvk {
+ 
++  bool mgs2DxvkPipelineTraceEnabled() {
++    static const bool enabled =
++      env::getEnvVar("MGS2_DXVK_PIPELINE_TRACE") == "1";
++    return enabled;
++  }
++
++
++  void mgs2DxvkPipelineTraceRecord(
++          MGS2DxvkPipelineTraceKind kind,
++          uint32_t                  sequence,
++          uintptr_t                 pipeline,
++    const void*                     state,
++          size_t                    stateSize,
++          uint32_t                  shaderHash,
++          uintptr_t                 auxiliary) {
++    if (!mgs2DxvkPipelineTraceEnabled())
++      return;
++
++    uint32_t index = __atomic_fetch_add(
++      &MGS2DxvkPipelineTraceWriteCount, 1u, __ATOMIC_RELAXED);
++
++    if (index >= MGS2DxvkPipelineTraceCapacity) {
++      __atomic_fetch_add(&MGS2DxvkPipelineTraceDropped, 1u, __ATOMIC_RELAXED);
++      return;
++    }
++
++    uint32_t stateHash = 2166136261u;
++    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(state);
++
++    for (size_t i = 0; i < stateSize; i++) {
++      stateHash ^= bytes[i];
++      stateHash *= 16777619u;
++    }
++
++    auto& event = MGS2DxvkPipelineTraceEvents[index];
++#ifdef _WIN32
++    event.tickMs = GetTickCount64();
++    event.threadId = GetCurrentThreadId();
++#else
++    event.tickMs = std::chrono::duration_cast<std::chrono::milliseconds>(
++      dxvk::high_resolution_clock::now().time_since_epoch()).count();
++    event.threadId = 0;
++#endif
++    event.sequence = sequence;
++    event.pipeline = static_cast<uint32_t>(pipeline);
++    event.stateHash = stateSize ? stateHash : 0;
++    event.shaderHash = shaderHash;
++    event.auxiliary = static_cast<uint32_t>(auxiliary);
++    event.reserved = 0;
++    __atomic_store_n(&event.kind, uint32_t(kind), __ATOMIC_RELEASE);
++  }
++
+   DxvkGraphicsPipeline::DxvkGraphicsPipeline(
+           DxvkPipelineManager*        pipeMgr,
+           DxvkGraphicsPipelineShaders shaders)
+@@ -64,12 +126,17 @@ namespace dxvk {
+     const DxvkGraphicsPipelineStateInfo& state,
+     const DxvkRenderPass*                renderPass) {
+     DxvkGraphicsPipelineInstance* instance = this->findInstance(state, renderPass);
++    bool initialMiss = unlikely(!instance);
+ 
+-    if (unlikely(!instance)) {
++    if (initialMiss) {
+       // Exit early if the state vector is invalid
+       if (!this->validatePipelineState(state, true))
+         return VK_NULL_HANDLE;
+ 
++      mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceDrawMiss, 0,
++        reinterpret_cast<uintptr_t>(this), &state, sizeof(state), 0,
++        reinterpret_cast<uintptr_t>(renderPass));
++
+       // Prevent other threads from adding new instances and check again
+       std::lock_guard<dxvk::mutex> lock(m_mutex);
+       instance = this->findInstance(state, renderPass);
+@@ -82,6 +149,12 @@ namespace dxvk {
+       }
+     }
+ 
++    if (initialMiss) {
++      mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceDrawReady, 0,
++        reinterpret_cast<uintptr_t>(this), &state, sizeof(state), 0,
++        reinterpret_cast<uintptr_t>(renderPass));
++    }
++
+     return instance->pipeline();
+   }
+ 
+@@ -422,9 +495,19 @@ namespace dxvk {
+     if (Logger::logLevel() <= LogLevel::Debug)
+       t0 = dxvk::high_resolution_clock::now();
+     
++    mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceDriverBegin, 0,
++      reinterpret_cast<uintptr_t>(this), &state, sizeof(state), 0,
++      reinterpret_cast<uintptr_t>(renderPass));
++
+     VkPipeline pipeline = VK_NULL_HANDLE;
+-    if (m_vkd->vkCreateGraphicsPipelines(m_vkd->device(),
+-          m_pipeMgr->m_cache->handle(), 1, &info, nullptr, &pipeline) != VK_SUCCESS) {
++    VkResult status = m_vkd->vkCreateGraphicsPipelines(m_vkd->device(),
++      m_pipeMgr->m_cache->handle(), 1, &info, nullptr, &pipeline);
++
++    mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceDriverEnd, 0,
++      reinterpret_cast<uintptr_t>(this), &state, sizeof(state), 0,
++      reinterpret_cast<uintptr_t>(renderPass));
++
++    if (status != VK_SUCCESS) {
+       Logger::err("DxvkGraphicsPipeline: Failed to compile pipeline");
+       this->logPipelineState(LogLevel::Error, state);
+       return VK_NULL_HANDLE;
+diff --git a/src/dxvk/dxvk_pipeline_trace.h b/src/dxvk/dxvk_pipeline_trace.h
+new file mode 100644
+index 0000000..fbb3c37
+--- /dev/null
++++ b/src/dxvk/dxvk_pipeline_trace.h
+@@ -0,0 +1,51 @@
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++
++enum MGS2DxvkPipelineTraceKind : uint32_t {
++  MGS2DxvkTraceQueue       = 1,
++  MGS2DxvkTraceWorkerBegin = 2,
++  MGS2DxvkTraceCacheEntry  = 3,
++  MGS2DxvkTraceDriverBegin = 4,
++  MGS2DxvkTraceDriverEnd   = 5,
++  MGS2DxvkTraceDrawMiss    = 6,
++  MGS2DxvkTraceDrawReady   = 7,
++  MGS2DxvkTraceWorkerEnd   = 8,
++};
++
++struct MGS2DxvkPipelineTraceEvent {
++  uint64_t tickMs;
++  uint32_t threadId;
++  uint32_t kind;
++  uint32_t sequence;
++  uint32_t pipeline;
++  uint32_t stateHash;
++  uint32_t shaderHash;
++  uint32_t auxiliary;
++  uint32_t reserved;
++};
++
++constexpr uint32_t MGS2DxvkPipelineTraceCapacity = 4096;
++
++extern "C" {
++  extern volatile uint32_t MGS2DxvkPipelineTraceWriteCount;
++  extern volatile uint32_t MGS2DxvkPipelineTraceDropped;
++  extern MGS2DxvkPipelineTraceEvent
++    MGS2DxvkPipelineTraceEvents[MGS2DxvkPipelineTraceCapacity];
++}
++
++namespace dxvk {
++
++  bool mgs2DxvkPipelineTraceEnabled();
++
++  void mgs2DxvkPipelineTraceRecord(
++          MGS2DxvkPipelineTraceKind kind,
++          uint32_t                  sequence,
++          uintptr_t                 pipeline,
++    const void*                     state,
++          size_t                    stateSize,
++          uint32_t                  shaderHash,
++          uintptr_t                 auxiliary);
++
++}
+diff --git a/src/dxvk/dxvk_state_cache.cpp b/src/dxvk/dxvk_state_cache.cpp
+index 754803a..a564da8 100644
+--- a/src/dxvk/dxvk_state_cache.cpp
++++ b/src/dxvk/dxvk_state_cache.cpp
+@@ -1,5 +1,6 @@
+ #include "dxvk_device.h"
+ #include "dxvk_pipemanager.h"
++#include "dxvk_pipeline_trace.h"
+ #include "dxvk_state_cache.h"
+ 
+ namespace dxvk {
+@@ -276,6 +277,13 @@ namespace dxvk {
+       
+       if (!workerLock)
+         workerLock = std::unique_lock<dxvk::mutex>(m_workerLock);
++
++      if (mgs2DxvkPipelineTraceEnabled()) {
++        item.mgs2TraceId = m_mgs2TraceSequence.fetch_add(1) + 1;
++        mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceQueue,
++          item.mgs2TraceId, 0, nullptr, 0,
++          static_cast<uint32_t>(item.gp.hash()), 0);
++      }
+       
+       m_workerQueue.push(item);
+     }
+@@ -359,6 +367,13 @@ namespace dxvk {
+ 
+         if (m_passManager->validateRenderPassFormat(entry.format)) {
+           auto rp = m_passManager->getRenderPass(entry.format);
++          if (mgs2DxvkPipelineTraceEnabled()) {
++            mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceCacheEntry,
++              item.mgs2TraceId, reinterpret_cast<uintptr_t>(pipeline),
++              &entry.gpState, sizeof(entry.gpState),
++              static_cast<uint32_t>(item.gp.hash()),
++              reinterpret_cast<uintptr_t>(rp));
++          }
+           pipeline->compilePipeline(entry.gpState, rp);
+         }
+       }
+@@ -935,7 +950,17 @@ namespace dxvk {
+         m_workerQueue.pop();
+       }
+ 
++      if (mgs2DxvkPipelineTraceEnabled()) {
++        mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceWorkerBegin,
++          item.mgs2TraceId, 0, nullptr, 0,
++          static_cast<uint32_t>(item.gp.hash()), 0);
++      }
+       compilePipelines(item);
++      if (mgs2DxvkPipelineTraceEnabled()) {
++        mgs2DxvkPipelineTraceRecord(MGS2DxvkTraceWorkerEnd,
++          item.mgs2TraceId, 0, nullptr, 0,
++          static_cast<uint32_t>(item.gp.hash()), 0);
++      }
+     }
+   }
+ 
+diff --git a/src/dxvk/dxvk_state_cache.h b/src/dxvk/dxvk_state_cache.h
+index f23c85f..5d9d058 100644
+--- a/src/dxvk/dxvk_state_cache.h
++++ b/src/dxvk/dxvk_state_cache.h
+@@ -91,6 +91,7 @@ namespace dxvk {
+     struct WorkerItem {
+       DxvkGraphicsPipelineShaders gp;
+       DxvkComputePipelineShaders  cp;
++      uint32_t                    mgs2TraceId = 0;
+     };
+ 
+     DxvkDevice*                       m_device;
+@@ -118,6 +119,7 @@ namespace dxvk {
+     dxvk::condition_variable          m_workerCond;
+     std::queue<WorkerItem>            m_workerQueue;
+     std::atomic<uint32_t>             m_workerBusy;
++    std::atomic<uint32_t>             m_mgs2TraceSequence = { 0 };
+     std::vector<dxvk::thread>         m_workerThreads;
+ 
+     dxvk::mutex                       m_writerLock;

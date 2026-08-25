@@ -1,7 +1,8 @@
 # Where the production sources come from, and what they build to.
 #
 # Neither source tree is in this repository and one is in no repository at all,
-# so these two bases plus the two complete patches beside them ARE the record.
+# so the pinned bases plus the complete and explicitly listed incremental
+# patches beside them are the record.
 # harness/verify_rebuild.sh checks they still reconstruct the live trees;
 # harness/make_release.sh is the only thing that should produce a release, and
 # it generates the manifest from the bytes it just built.
@@ -10,19 +11,37 @@ wine_base_tarball    wine-11.0.tar.xz
 wine_base_sha256     c07a6857933c1fc60dff5448d79f39c92481c1e9db5aa628db9d0358446e0701
 wine_complete_patch  wine-patches/FINALPLAY15-wine-complete.patch
 wine_files_changed   53 modified, 1 deleted
+wine_research_patch_01 wine-patches/01-wait-census-research-default-off.patch
+wine_research_patch_02 wine-patches/02-sleep0-wait-research-default-off.patch
 
 box86_base_remote    https://github.com/ptitSeb/box86.git
 box86_base_commit    0579f8b9
 box86_complete_patch box86-patches/FINALPLAY15-box86-complete.patch
 box86_files_changed  21 tracked, 14 previously untracked and recorded nowhere else
+box86_production_patch_17 box86-patches/17-native-wayland-vulkan-bridge.patch
+box86_production_patch_18 box86-patches/18-vulkan-diagnostics-default-off.patch
+box86_production_patch_19 box86-patches/19-native-dxt-research-default-off.patch
+box86_production_patch_20 box86-patches/20-native-dxt-surface-research-default-off.patch
+box86_production_patch_21 box86-patches/21-native-dxt-surface-production-no-hot-counters.patch
+finalplay17_box86_sha256 51dfcc130b9760970189a67edd8cd78c777c5d69c8b9ec07cfbc5657821d9be9
 
-# Builds are byte-reproducible, so the manifest carries exact hashes. Two things
-# had to be pinned to get there, each found by building the same source twice:
+dxvk_base_remote     https://github.com/zeyadadev/DXVK-Sarek.git
+dxvk_base_tag        v1.11.1-mali-fix
+dxvk_base_commit     617958fe1cf2b10e06fa751d3e40bd765dcf2cc6
+dxvk_production_patch_01 dxvk-patches/01-mali-d3d9-pipeline-compat.patch
+dxvk_production_patch_02 dxvk-patches/02-d3d8-wine-user-driver-init.patch
+dxvk_production_patch_08 dxvk-patches/08-state-cache-mapping-dedupe-production.patch
+dxvk_source_date_epoch 1787659200
+finalplay17_d3d9_sha256 4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f334c690650
+
+# Builds are byte-reproducible, so the manifest carries exact hashes. These
+# timestamp sources were pinned after building the same source twice:
 #   WineD3D  -Wl,--no-insert-timestamp   three bytes differed, the PE
 #                                        TimeDateStamp and the header checksum
 #   Box86    SOURCE_DATE_EPOCH           twenty-three, because src/build_info.c
 #                                        prints __DATE__/__TIME__ and the GNU
 #                                        build-id followed the change
+#   DXVK     dxvk_source_date_epoch      PE TimeDateStamp/checksum bytes
 # harness/pe_normalised_sha.py is kept for investigating binaries built before
 # this, but production provenance no longer depends on normalisation.
 source_date_epoch    1756000000

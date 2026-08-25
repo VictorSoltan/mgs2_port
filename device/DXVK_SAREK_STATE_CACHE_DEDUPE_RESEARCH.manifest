@@ -1,0 +1,26 @@
+# MGS2 research-only exact-pair state-cache mapping dedupe.
+source_tag       v1.11.1-mali-fix
+source_commit    617958fe1cf2b10e06fa751d3e40bd765dcf2cc6
+source_patch     dxvk-patches/01-mali-d3d9-pipeline-compat.patch
+patch_sha256     43cd0cc1790128a2674d8fda96d324bc86e86d3421d1217bafc754d78f69a77a
+d3d8_wsi_patch   dxvk-patches/02-d3d8-wine-user-driver-init.patch
+d3d8_wsi_sha256  8131048ac81e93911c678137bd44ef864c5fd21e0185ed4078a4fc62d015e4df
+counter_patch    dxvk-patches/03-memory-only-present-counter.patch
+counter_sha256   bd7e438b620651a60f133058c2b718aa35060331243c703a632df9630eef4815
+pipeline_patch   dxvk-patches/05-memory-only-pipeline-timeline.patch
+pipeline_sha256  f76a6e1e07da4ebb738e3383a5ea143551a00d58ccb3e422edcb9bc6dbedad2d
+dedupe_patch     dxvk-patches/07-state-cache-mapping-dedupe-default-off.patch
+dedupe_sha256    8b6cc9c42ebc5123d338797f8b981e371ad14cce7aec8d4fa14e8ff0130afd53
+dedupe_env       MGS2_DXVK_STATE_CACHE_DEDUPE=1
+trace_capacity   4096x40-bytes
+counter_rva      0x311040
+trace_events_rva 0x311740
+trace_dropped_rva 0x339740
+trace_write_rva  0x339744
+box86_patch      box86-patches/20-native-dxt-surface-research-default-off.patch
+box86_sha256     bf0daac76f0af4e77bf0fdf668947bb12e0b44ace85ad91e85f6fc30bf53a40e
+wine_mode        direct32
+
+22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa  d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
+5a24bb386d5dd874791174b22addfb901b1b6301c950bd27e58a75404d08d677  d3d9_dxvk_sarek_1.11.1_mali_state_cache_dedupe1.dll
+bf0daac76f0af4e77bf0fdf668947bb12e0b44ace85ad91e85f6fc30bf53a40e  box86-fp19-dxvk-native-dxt-surface

@@ -16,22 +16,25 @@ endorsed by Konami, Anbernic, WineHQ, Box86 or DXVK.
 
 Picture, music, menu sounds, gameplay sound effects, input and saves work.
 
-The current production configuration is **FINALPLAY16**:
+The current production configuration is **FINALPLAY17**:
 
 ```text
-MGS2 D3D8
-  -> DXVK-Sarek 1.11.1 (x86 D3D8/D3D9)
+MGS2 D3D8 / Box86 native fused DXT5 surface decode
+  -> DXVK-Sarek 1.11.1 (warm cache, one compiler worker)
   -> WineVulkan/Wayland
   -> proprietary Mali Vulkan (armhf)
 ```
 
-Promotion was based on correct gameplay observed on the device. It was **not** a
-matched FINALPLAY15/FINALPLAY16 FPS result, and no such gain is claimed.
+Against exact FINALPLAY16, a corrected symmetric A-B-A-B reduced the four
+controlled load/location gaps by **20.1%** and the two pipeline-gap clusters by
+**32.3%**. Promotion also passed the correct LOAD GAME route and 18/18 live
+identity on the device. These are first-use-stall measurements, not a global FPS
+claim; independent game/read stalls remain.
 
 Open problems:
 
 - intermittent gameplay-SFX loss across some encounter/map transitions;
-- occasional runtime freezes with separately captured causes;
+- residual game/read stalls, including pressure/I/O-correlated cases;
 - frame rate in dense reinforcement scenes.
 
 The exact production identity, source provenance and rollback are in
@@ -86,13 +89,20 @@ One-launch rollback to the byte-exact FINALPLAY15 WineD3D path:
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
+One-launch rollback to the previous byte-exact FINALPLAY16 DXVK path:
+
+```sh
+MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
+```
+
 `device/launch-play.sh` is only the selector. The complete launchers are:
 
-- `device/launch-play-dxvk-fp16.sh` — current production;
+- `device/launch-play-dxvk-fp17.sh` — current production;
+- `device/launch-play-dxvk-fp16.sh` — previous DXVK rollback;
 - `device/launch-play-wined3d-fp15.sh` — immediate rollback;
 - `device/launch.sh` — archival laboratory harness, not production.
 
-Both production paths fail closed when live file hashes differ from their
+All three fixed runtime paths fail closed when live file hashes differ from their
 manifests. A filename is never accepted as proof of what is loaded.
 
 ## Rebuilding
@@ -106,9 +116,11 @@ Pinned inputs:
   `617958fe1cf2b10e06fa751d3e40bd765dcf2cc6`.
 
 The complete FINALPLAY15 Wine/Box86 patches are the reconstruction boundary.
-FINALPLAY16 adds `box86-patches/17-native-wayland-vulkan-bridge.patch` and the
-production DXVK patches. The memory-only present counter is diagnostic and is
-not part of the production D3D9 DLL.
+FINALPLAY16 added `box86-patches/17-native-wayland-vulkan-bridge.patch`.
+FINALPLAY17 additionally records the verified fused-DXT path in Box86 patches
+18--21 and exact state-cache mapping dedupe in DXVK patch 08. The memory-only
+present counter and pipeline timeline are diagnostic and are not part of the
+production D3D9 DLL.
 
 After configuring `.env`, verify the pinned reconstruction:
 
@@ -151,7 +163,7 @@ Historical WineD3D work established, among other results:
 - the dmabuf presenter measured -9.45 ms/frame on its valid route.
 
 These numbers belong to their recorded scenes and runtime versions. They must
-not be added together or presented as a FINALPLAY16 FPS claim.
+not be added together or presented as a FINALPLAY17 FPS claim.
 
 ## Contributing
 

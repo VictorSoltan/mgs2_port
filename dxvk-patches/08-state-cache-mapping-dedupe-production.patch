@@ -1,0 +1,24 @@
+diff --git a/src/dxvk/dxvk_state_cache.cpp b/src/dxvk/dxvk_state_cache.cpp
+index 70db4277..157fa082 100644
+--- a/src/dxvk/dxvk_state_cache.cpp
++++ b/src/dxvk/dxvk_state_cache.cpp
+@@ -336,8 +336,17 @@ namespace dxvk {
+   void DxvkStateCache::mapShaderToPipeline(
+     const DxvkShaderKey&            shader,
+     const DxvkStateCacheKey&        key) {
+-    if (!shader.eq(g_nullShaderKey))
+-      m_pipelineMap.insert({ shader, key });
++    if (shader.eq(g_nullShaderKey))
++      return;
++
++    auto pipelines = m_pipelineMap.equal_range(shader);
++
++    for (auto p = pipelines.first; p != pipelines.second; p++) {
++      if (p->second.eq(key))
++        return;
++    }
++
++    m_pipelineMap.insert({ shader, key });
+   }
+ 
+ 

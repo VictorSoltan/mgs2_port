@@ -21,6 +21,9 @@ import dxvk_present_count as present_count
 STOP = False
 NTSYNC_WAIT_ANY = 0xC0284E82
 NTSYNC_WAIT_ALL = 0xC0284E83
+COMPAT_READ = 3
+COMPAT_READV = 145
+COMPAT_PREAD64 = 180
 
 
 def stop(unused_signum, unused_frame):
@@ -58,6 +61,11 @@ def task_stats(pid):
                 "majflt": int(fields[9]),
                 "utime": int(fields[11]),
                 "stime": int(fields[12]),
+                "priority": int(fields[15]),
+                "nice": int(fields[16]),
+                "processor": int(fields[36]),
+                "rt_priority": int(fields[37]),
+                "policy": int(fields[38]),
             }
         except (IndexError, ValueError):
             continue
@@ -68,6 +76,66 @@ def stat_delta(current, previous, tid, key):
     if tid not in current or tid not in previous:
         return 0
     return current[tid][key] - previous[tid][key]
+
+
+def task_io(pid, tid):
+    result = {}
+    raw = read_text(f"/proc/{pid}/task/{tid}/io")
+    if raw.startswith("<"):
+        return {"error": raw}
+    for line in raw.splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        try:
+            result[key] = int(value.strip())
+        except ValueError:
+            continue
+    return result
+
+
+def fd_observation(pid, fd):
+    try:
+        target = os.readlink(f"/proc/{pid}/fd/{fd}")
+    except OSError as error:
+        target = f"<{type(error).__name__}:{error.errno}>"
+    raw = read_text(f"/proc/{pid}/fdinfo/{fd}")
+    fields = {}
+    if not raw.startswith("<"):
+        for line in raw.splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key in ("pos", "flags", "mnt_id", "ino"):
+                fields[key] = value.strip()
+    details = ",".join(f"{key}={fields[key]}" for key in
+                       ("pos", "flags", "mnt_id", "ino") if key in fields)
+    return f"fd={fd},path={target}" + (f",{details}" if details else "")
+
+
+def decode_io_syscall(pid, syscall_text):
+    """Decode only compat read calls already exposed by /proc/TID/syscall."""
+    try:
+        fields = syscall_text.split()
+        if len(fields) < 4:
+            return "not-read-syscall"
+        number = int(fields[0], 0)
+        if number not in (COMPAT_READ, COMPAT_READV, COMPAT_PREAD64):
+            return "not-read-syscall"
+        fd = int(fields[1], 0)
+        if number == COMPAT_READ:
+            operation = f"compat_read,count={int(fields[3], 0)}"
+        elif number == COMPAT_READV:
+            operation = f"compat_readv,iovcnt={int(fields[3], 0)}"
+        else:
+            # ARM EABI aligns the 64-bit pread offset to r4/r5, leaving r3
+            # unused after fd, buffer and count.
+            if len(fields) < 7:
+                return "compat_pread64:short-register-set"
+            offset = int(fields[5], 0) | (int(fields[6], 0) << 32)
+            operation = (f"compat_pread64,count={int(fields[3], 0)},"
+                         f"offset={offset}")
+        return operation + "," + fd_observation(pid, fd)
+    except (OSError, ValueError, IndexError) as error:
+        return f"read-decode-error:{type(error).__name__}:{getattr(error, 'errno', '')}"
 
 
 def ntsync_fds(pid):
@@ -138,7 +206,14 @@ def task_observation(pid, tid, current, previous):
         "stime_delta": stat_delta(current, previous, tid, "stime"),
         "minflt_delta": stat_delta(current, previous, tid, "minflt"),
         "majflt_delta": stat_delta(current, previous, tid, "majflt"),
+        "priority": item.get("priority", "?"),
+        "nice": item.get("nice", "?"),
+        "processor": item.get("processor", "?"),
+        "rt_priority": item.get("rt_priority", "?"),
+        "policy": item.get("policy", "?"),
         "syscall": syscall_text,
+        "io": task_io(pid, tid),
+        "read_call": decode_io_syscall(pid, syscall_text),
         "wchan": read_text(f"/proc/{pid}/task/{tid}/wchan"),
         "ntsync": decode_ntsync_wait(pid, syscall_text),
     }
@@ -180,6 +255,12 @@ def print_results(metadata, fd_snapshot, gaps):
               f"end_tick_ms={gap['end_tick_ms']} "
               f"lower_bound_ms={gap['duration_ms']:.3f} "
               f"present_delta={gap['present_delta']} probes={len(gap['probes'])}")
+        for event in gap.get("follow_events", []):
+            print(f" FOLLOW tick_ms={event['tick_ms']} tid={event['tid']} "
+                  f"reason={event['reason']}")
+        for event in gap.get("read_events", []):
+            print(f" READ tick_ms={event['tick_ms']} tid={event['tid']} "
+                  f"{event['decoded']}")
         for probe in gap["probes"]:
             print(f" PROBE tick_ms={probe['tick_ms']} idle_ms={probe['idle_ms']:.3f} "
                   f"threshold_ms={probe['threshold_ms']:.3f} "
@@ -188,8 +269,20 @@ def print_results(metadata, fd_snapshot, gaps):
                 print(f"  TASK tid={task['tid']} comm={task['comm']} state={task['state']} "
                       f"cpu_ticks={task['utime_delta']}+{task['stime_delta']} "
                       f"faults={task['minflt_delta']}+{task['majflt_delta']} "
+                      f"priority={task['priority']} nice={task['nice']} "
+                      f"cpu={task['processor']} rt_priority={task['rt_priority']} "
+                      f"policy={task['policy']} "
                       f"wchan={task['wchan']}")
                 print(f"   syscall={task['syscall']}")
+                task_io_fields = task["io"]
+                if "error" in task_io_fields:
+                    io_text = task_io_fields["error"]
+                else:
+                    io_text = ",".join(
+                        f"{key}={task_io_fields.get(key, 0)}" for key in
+                        ("rchar", "syscr", "read_bytes", "wchar", "syscw", "write_bytes"))
+                print(f"   task_io={io_text}")
+                print(f"   read_call={task['read_call']}")
                 print(f"   ntsync={task['ntsync']}")
 
 
@@ -202,11 +295,14 @@ def main():
     parser.add_argument("--probe-ms", type=float, default=25.0)
     parser.add_argument("--top-threads", type=int, default=5)
     parser.add_argument("--max-gaps", type=int, default=12)
+    parser.add_argument("--read-follow-ms", type=float, default=20.0)
+    parser.add_argument("--max-read-events", type=int, default=64)
     args = parser.parse_args()
     if args.interval <= 0 or args.windows <= 0 or args.probe_ms <= 0:
         parser.error("interval, windows and probe-ms must be positive")
-    if args.top_threads <= 0 or args.max_gaps <= 0:
-        parser.error("top-threads and max-gaps must be positive")
+    if (args.top_threads <= 0 or args.max_gaps <= 0
+            or args.read_follow_ms <= 0 or args.max_read_events <= 0):
+        parser.error("thread, gap and read-follow bounds must be positive")
     try:
         thresholds = sorted({float(value) for value in args.thresholds_ms.split(",")})
     except ValueError as error:
@@ -222,11 +318,14 @@ def main():
     memory = os.open(f"/proc/{args.pid}/mem", os.O_RDONLY)
     gaps = []
     active_gap = None
+    next_read_follow_ns = 0
     fd_snapshot = ntsync_fds(args.pid)
     start_ns = time.monotonic_ns()
     metadata = (f"pid={args.pid} module={module} base={base:#x} rva={rva:#x} "
                 f"interval={args.interval} thresholds_ms={args.thresholds_ms} "
-                f"probe_ms={args.probe_ms} start_tick_ms={start_ns // 1_000_000}")
+                f"probe_ms={args.probe_ms} read_follow_ms={args.read_follow_ms} "
+                f"max_read_events={args.max_read_events} "
+                f"start_tick_ms={start_ns // 1_000_000}")
     try:
         previous = present_count.read_count(memory, address)
         last_present_ns = start_ns
@@ -255,6 +354,23 @@ def main():
                 last_present_ns = now_ns
                 continue
             idle_ms = (now_ns - last_present_ns) / 1_000_000
+            if (active_gap is not None and active_gap["follow_tid"] is not None
+                    and now_ns >= next_read_follow_ns
+                    and len(active_gap["read_events"]) < args.max_read_events):
+                read_tid = active_gap["follow_tid"]
+                syscall_text = read_text(
+                    f"/proc/{args.pid}/task/{read_tid}/syscall")
+                decoded = decode_io_syscall(args.pid, syscall_text)
+                if (decoded.startswith("compat_")
+                        and decoded != active_gap["last_read_signature"]):
+                    active_gap["read_events"].append({
+                        "tick_ms": now_ns // 1_000_000,
+                        "tid": read_tid,
+                        "decoded": decoded,
+                    })
+                    active_gap["last_read_signature"] = decoded
+                next_read_follow_ns = now_ns + int(
+                    args.read_follow_ms * 1_000_000)
             next_threshold = thresholds[0] if active_gap is None else active_gap["next_threshold"]
             if idle_ms < next_threshold or len(gaps) >= args.max_gaps:
                 continue
@@ -265,12 +381,57 @@ def main():
                     "probes": [],
                     "threshold_index": 0,
                     "next_threshold": thresholds[0],
+                    "read_events": [],
+                    "last_read_signature": None,
+                    "follow_tid": None,
+                    "follow_events": [],
                 }
             while (active_gap["threshold_index"] < len(thresholds)
                    and idle_ms >= thresholds[active_gap["threshold_index"]]):
                 threshold = thresholds[active_gap["threshold_index"]]
-                active_gap["probes"].append(probe_gap(
-                    args.pid, idle_ms, threshold, args.probe_ms, args.top_threads))
+                probe = probe_gap(
+                    args.pid, idle_ms, threshold, args.probe_ms, args.top_threads)
+                active_gap["probes"].append(probe)
+                direct_read_tid = None
+                for task in probe["tasks"]:
+                    if task["read_call"].startswith("compat_"):
+                        direct_read_tid = task["tid"]
+                        if direct_read_tid != active_gap["follow_tid"]:
+                            active_gap["follow_tid"] = direct_read_tid
+                            active_gap["follow_events"].append({
+                                "tick_ms": probe["tick_ms"],
+                                "tid": direct_read_tid,
+                                "reason": "direct-read",
+                            })
+                        signature = task["read_call"]
+                        if (signature != active_gap["last_read_signature"]
+                                and len(active_gap["read_events"])
+                                < args.max_read_events):
+                            active_gap["read_events"].append({
+                                "tick_ms": probe["tick_ms"],
+                                "tid": direct_read_tid,
+                                "decoded": signature,
+                            })
+                            active_gap["last_read_signature"] = signature
+                if (direct_read_tid is None
+                        and active_gap["follow_tid"] is None):
+                    # The first probe often catches the Box86 resource worker
+                    # between syscalls.  Follow only the most active normal-
+                    # priority game task; do not broaden syscall/wchan polling.
+                    for task in probe["tasks"]:
+                        cpu_ticks = task["utime_delta"] + task["stime_delta"]
+                        if (task["tid"] != args.pid
+                                and task["comm"] == "mgs2_sse_rg353v"
+                                and task["nice"] == 0
+                                and task["state"] in ("R", "D")
+                                and cpu_ticks > 0):
+                            active_gap["follow_tid"] = task["tid"]
+                            active_gap["follow_events"].append({
+                                "tick_ms": probe["tick_ms"],
+                                "tid": task["tid"],
+                                "reason": "top-active-game-worker",
+                            })
+                            break
                 active_gap["threshold_index"] += 1
             if active_gap["threshold_index"] < len(thresholds):
                 active_gap["next_threshold"] = thresholds[active_gap["threshold_index"]]

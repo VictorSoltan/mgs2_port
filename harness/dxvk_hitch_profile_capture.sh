@@ -22,6 +22,7 @@ PRESENT_PID=
 WAIT_PID=
 PRESSURE_PID=
 GAP_TRIGGER_PID=
+PAGE_CACHE_PID=
 ASYNC_SKIP_PID=
 PERF_PID=
 snapshot_processes() {
@@ -63,6 +64,7 @@ cleanup() {
     [ -n "$PERF_PID" ] && kill -INT "$PERF_PID" 2>/dev/null || true
     [ -n "$ASYNC_SKIP_PID" ] && kill "$ASYNC_SKIP_PID" 2>/dev/null || true
     [ -n "$GAP_TRIGGER_PID" ] && kill "$GAP_TRIGGER_PID" 2>/dev/null || true
+    [ -n "$PAGE_CACHE_PID" ] && kill "$PAGE_CACHE_PID" 2>/dev/null || true
     [ -n "$PRESSURE_PID" ] && kill "$PRESSURE_PID" 2>/dev/null || true
     [ -n "$WAIT_PID" ] && kill "$WAIT_PID" 2>/dev/null || true
     [ -n "$PRESENT_PID" ] && kill "$PRESENT_PID" 2>/dev/null || true
@@ -131,7 +133,7 @@ echo "pid=$PID renderer_ready_after=${n}s" | tee "$OUT/identity.txt"
 readlink -f "/proc/$PID/exe" | tee -a "$OUT/identity.txt"
 sha256sum "/proc/$PID/exe" | tee -a "$OUT/identity.txt"
 tr '\0' '\n' <"/proc/$PID/environ" | \
-    grep -E '^(MGS2_(PEEK_(HOT|WAIT|WAIT_MS)|WAIT_CENSUS|SLEEP0_WAIT_MS)|DXVK_(ASYNC|STATE_CACHE|STATE_CACHE_PATH|ALL_CORES|CONFIG|HUD)|ASYNC_DRAW_CALL_THRESHOLD)=' | sort | \
+    grep -E '^(MGS2_(PEEK_(HOT|WAIT|WAIT_MS)|WAIT_CENSUS|SLEEP0_WAIT_MS|DXVK_(PIPELINE_TRACE|STATE_CACHE_DEDUPE)|BOX86_NATIVE_DXT(_SURFACE)?|RESEARCH_RUN|PREWARM_(MLOCK|MAX_BYTES|MAX_FILES))|DXVK_(ASYNC|STATE_CACHE|STATE_CACHE_PATH|ALL_CORES|CONFIG|HUD)|ASYNC_DRAW_CALL_THRESHOLD)=' | sort | \
     tee -a "$OUT/identity.txt"
 d3d9_path=$(awk '$NF ~ /\/d3d9\.dll$/ { print $NF; exit }' "/proc/$PID/maps")
 if [ -n "$d3d9_path" ]; then
@@ -179,6 +181,15 @@ if [ "${MGS2_PROFILE_GAP_TRIGGER:-0}" = 1 ]; then
     GAP_TRIGGER_PID=$!
 fi
 
+if [ -n "${MGS2_PROFILE_PAGE_CACHE_PATHS:-}" ]; then
+    python3 "$G/page_cache_residency.py" \
+        --paths "$MGS2_PROFILE_PAGE_CACHE_PATHS" --interval 0.05 --windows 4800 \
+        --max-bytes "${MGS2_PROFILE_PAGE_CACHE_MAX_BYTES:-16777216}" \
+        --max-files "${MGS2_PROFILE_PAGE_CACHE_MAX_FILES:-8}" \
+        >"$OUT/page-cache-residency.tsv" 2>&1 &
+    PAGE_CACHE_PID=$!
+fi
+
 if [ "${MGS2_PROFILE_ASYNC_SKIP:-0}" = 1 ]; then
     python3 "$G/dxvk_async_skip_capture.py" "$PID" --interval 0.01 \
         --windows 24000 --max-events "${MGS2_ASYNC_SKIP_MAX_EVENTS:-4096}" \
@@ -188,7 +199,10 @@ fi
 
 if [ "${MGS2_PROFILE_PERF:-1}" = 1 ]; then
     echo -1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true
-    perf record -k mono -F 199 -e cycles -p "$PID" \
+    # Symbol provenance comes from the matching live maps/guest-map snapshots.
+    # Skipping build-id post-processing makes finalisation smaller and avoids
+    # losing an otherwise complete bounded capture under device memory pressure.
+    perf record -k mono -F 199 -e cycles -B -N -p "$PID" \
         --proc-map-timeout 10000 -o "$OUT/perf.data" -- sleep 240 \
         >"$OUT/perf-record.log" 2>&1 &
     PERF_PID=$!
@@ -219,6 +233,11 @@ if [ -n "$GAP_TRIGGER_PID" ]; then
     wait "$GAP_TRIGGER_PID" 2>/dev/null || true
     GAP_TRIGGER_PID=
 fi
+if [ -n "$PAGE_CACHE_PID" ]; then
+    kill "$PAGE_CACHE_PID" 2>/dev/null || true
+    wait "$PAGE_CACHE_PID" 2>/dev/null || true
+    PAGE_CACHE_PID=
+fi
 if [ -n "$ASYNC_SKIP_PID" ]; then
     kill "$ASYNC_SKIP_PID" 2>/dev/null || true
     wait "$ASYNC_SKIP_PID" 2>/dev/null || true
@@ -238,6 +257,10 @@ python3 "$G/box86_guest_snapshot.py" --pid "$PID" --box86 "/proc/$PID/exe" \
 # their read failure is retained in the artifact rather than changing the run.
 python3 "$G/box86_dxt_stats.py" --pid "$PID" --box86 "/proc/$PID/exe" \
     >"$OUT/dxt-stats.txt" 2>&1 || true
+if [ "${MGS2_PROFILE_PIPELINE_TRACE:-0}" = 1 ]; then
+    python3 "$G/dxvk_pipeline_trace.py" "$PID" \
+        >"$OUT/pipeline-trace.txt" 2>&1 || true
+fi
 python3 "$G/dxvk_present_trace_analyze.py" "$OUT/present.tsv" \
     --markers "$OUT/autoload.log" --top 20 >"$OUT/present-summary.txt"
 python3 "$G/dxvk_device_gap_analyze.py" "$OUT/present.tsv" \
@@ -256,7 +279,7 @@ if [ -r "$OUT/perf.data" ]; then
 fi
 
 printf 'autoload_rc=%d\n' "$AUTO_RC" | tee -a "$OUT/identity.txt"
-grep -E 'menu-marker|save-marker|yes-no saturation|screen-gray-mean|RuntimeError' \
+grep -E 'menu-marker|save-marker|yes-no saturation|screen-gray-mean|RuntimeError|Traceback|FileNotFoundError' \
     "$OUT/autoload.log" | tee "$OUT/route-gates.txt"
 cat /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq \
     >"$OUT/cpu-frequency-end.txt"

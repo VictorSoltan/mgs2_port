@@ -1,0 +1,43 @@
+diff --git a/src/box86context.c b/src/box86context.c
+index 69f07031..987df860 100755
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -1155,7 +1155,19 @@ skipped:
+     return 0;
+ }
+ 
+-static void mgs2_native_dxt_surface_impl(uint32_t self, uint32_t x,
++/* Production uses the same verified conversion and conservative guest
++ * fallbacks without updating the research counters on the texture worker. */
++static void mgs2_native_dxt_surface_production_impl(uint32_t self, uint32_t x,
++        uint32_t y, uint32_t dst)
++{
++    unsigned int reason = MGS2_DXT_SURFACE_FALLBACK_GUEST;
++
++    if (mgs2_dxt_surface_native_run(self, x, y, dst, 0, &reason))
++        return;
++    mgs2_dxt_surface_guest_call(self, x, y, dst);
++}
++
++static void mgs2_native_dxt_surface_verify_impl(uint32_t self, uint32_t x,
+         uint32_t y, uint32_t dst)
+ {
+     unsigned int reason = MGS2_DXT_SURFACE_FALLBACK_GUEST;
+@@ -1897,13 +1909,14 @@ box86context_t *NewBox86Context(int argc)
+                     "bridge disabled\n");
+         else
+         {
++            int verify = atoi(mgs2_native_dxt_surface_env) >= 2;
+             uintptr_t bridge = AddBridge(context->system,
+                     mgs2_native_dxt_surface_wrapper,
+-                    mgs2_native_dxt_surface_impl, 12,
++                    verify ? mgs2_native_dxt_surface_verify_impl
++                           : mgs2_native_dxt_surface_production_impl, 12,
+                     "MGS2 native DXT5 surface row");
+             SetMGS2NativeDxtSurface(bridge);
+-            mgs2_dxt_surface_verify =
+-                    atoi(mgs2_native_dxt_surface_env) >= 2;
++            mgs2_dxt_surface_verify = verify;
+             mgs2_dxt_surface_armed = 1;
+             printf_log(LOG_NONE, "MGS2 native DXT surface: self-test passed, "
+                     "bridge %p armed%s\n", (void *)bridge,

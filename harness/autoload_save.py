@@ -23,7 +23,10 @@ Route, as described by the player and confirmed by the screenshots:
     yes/no     z            -> the save loads
 """
 import os
+import ctypes
 import json
+import mmap
+import stat
 import subprocess
 import sys
 import time
@@ -50,6 +53,23 @@ MENU_LOAD_GAME_MARKER = "18x10+37+92"
 SAVE_MARKER_X = 37
 SAVE_MARKER_FIRST_Y = 153
 SAVE_MARKER_STEP_Y = 26
+
+
+class LockedFileMapping:
+    """One shared, read-only libc mapping kept alive until route completion."""
+    def __init__(self, libc, address, size):
+        self.libc = libc
+        self.address = address
+        self.size = size
+
+    def close(self):
+        if self.address is None:
+            return
+        if self.libc.munmap(ctypes.c_void_p(self.address),
+                           ctypes.c_size_t(self.size)) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        self.address = None
 
 
 def shot(name):
@@ -129,6 +149,128 @@ def screen_gray_mean(path):
     value = image_metric(path, "640x480+0+0")
     print("  screen-gray-mean=%.3f" % value, flush=True)
     return value
+
+
+def prewarm_paths():
+    """Synchronously page in an explicitly bounded, default-off file set.
+
+    MGS2_PREWARM_MLOCK=1 keeps the private file mappings alive for the route.
+    This is a diagnostic arm only: successful mlock both faults the file pages
+    in and makes them unevictable until the mappings are closed.
+    """
+    raw = os.environ.get("MGS2_PREWARM_PATHS", "").strip()
+    if not raw:
+        return []
+    paths = [path for path in raw.split(os.pathsep) if path]
+    limit = int(os.environ.get("MGS2_PREWARM_MAX_BYTES", str(16 * 1024 * 1024)))
+    max_files = int(os.environ.get("MGS2_PREWARM_MAX_FILES", "16"))
+    lock_value = os.environ.get("MGS2_PREWARM_MLOCK", "0")
+    if lock_value not in ("0", "1"):
+        raise RuntimeError("MGS2_PREWARM_MLOCK must be 0 or 1")
+    lock_pages = lock_value == "1"
+    if (not paths or len(paths) > max_files or len(paths) != len(set(paths))
+            or limit <= 0 or max_files <= 0):
+        raise RuntimeError("invalid prewarm path list or byte limit")
+    entries = []
+    total_size = 0
+    for path in paths:
+        if not os.path.isabs(path):
+            raise RuntimeError("prewarm path must be absolute: %s" % path)
+        info = os.stat(path, follow_symlinks=True)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("prewarm path is not a regular file: %s" % path)
+        total_size += info.st_size
+        if total_size > limit:
+            raise RuntimeError("prewarm files exceed bounded limit %d" % limit)
+        entries.append((path, info.st_size))
+
+    libc = None
+    map_file = None
+    unmap_file = None
+    mlock = None
+    if lock_pages:
+        libc = ctypes.CDLL(None, use_errno=True)
+        map_file = libc.mmap
+        map_file.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,
+                             ctypes.c_int, ctypes.c_int, ctypes.c_long]
+        map_file.restype = ctypes.c_void_p
+        unmap_file = libc.munmap
+        unmap_file.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        unmap_file.restype = ctypes.c_int
+        mlock = libc.mlock
+        mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        mlock.restype = ctypes.c_int
+
+    started = time.monotonic_ns()
+    held_mappings = []
+    try:
+        for path, expected_size in entries:
+            file_started = time.monotonic_ns()
+            if lock_pages:
+                file_fd = os.open(path, os.O_RDONLY)
+                try:
+                    address = map_file(
+                        None, expected_size, mmap.PROT_READ, mmap.MAP_SHARED,
+                        file_fd, 0)
+                finally:
+                    os.close(file_fd)
+                if address == ctypes.c_void_p(-1).value:
+                    error = ctypes.get_errno()
+                    raise OSError(error, os.strerror(error), path)
+                ctypes.set_errno(0)
+                if mlock(ctypes.c_void_p(address),
+                         ctypes.c_size_t(expected_size)) != 0:
+                    error = ctypes.get_errno()
+                    unmap_file(ctypes.c_void_p(address),
+                               ctypes.c_size_t(expected_size))
+                    raise OSError(error, os.strerror(error), path)
+                held_mappings.append(
+                    LockedFileMapping(libc, address, expected_size))
+                count = expected_size
+            else:
+                count = 0
+                file_fd = os.open(path, os.O_RDONLY)
+                try:
+                    if hasattr(os, "posix_fadvise"):
+                        os.posix_fadvise(file_fd, 0, expected_size,
+                                         os.POSIX_FADV_SEQUENTIAL)
+                    while True:
+                        chunk = os.read(file_fd, 1024 * 1024)
+                        if not chunk:
+                            break
+                        count += len(chunk)
+                finally:
+                    os.close(file_fd)
+            if count != expected_size:
+                raise RuntimeError("short prewarm read for %s: %d/%d" %
+                                   (path, count, expected_size))
+            print("  prewarm mode=%s mapping=%s path=%s bytes=%d elapsed_ms=%.3f" %
+                  ("mlock" if lock_pages else "read",
+                   "shared-readonly" if lock_pages else "none", path, count,
+                   (time.monotonic_ns() - file_started) / 1_000_000),
+                  flush=True)
+    except Exception:
+        for mapping in reversed(held_mappings):
+            mapping.close()
+        raise
+
+    locked_kib = 0
+    if lock_pages:
+        with open("/proc/self/status", encoding="ascii") as stream:
+            for line in stream:
+                if line.startswith("VmLck:"):
+                    locked_kib = int(line.split()[1])
+                    break
+        if locked_kib * 1024 < total_size:
+            for mapping in reversed(held_mappings):
+                mapping.close()
+            raise RuntimeError("VmLck did not cover the requested file set")
+    print("  prewarm-complete mode=%s files=%d bytes=%d vmlck_kib=%d "
+          "elapsed_ms=%.3f tick=%d" %
+          ("mlock" if lock_pages else "read", len(entries), total_size,
+           locked_kib, (time.monotonic_ns() - started) / 1_000_000,
+           int(time.monotonic() * 1000)), flush=True)
+    return held_mappings
 
 
 def game_pid():
@@ -336,6 +478,7 @@ def main():
     else:
         raise RuntimeError("YES was not selected")
 
+    locked_prewarm = prewarm_paths()
     loaded_path = route_step("6-loaded", CONFIRM, 50)
     if screen_gray_mean(loaded_path) < 0.15:
         if yes_no_selection(loaded_path) == "yes":
@@ -446,6 +589,11 @@ def main():
     if action_count:
         shot("8-actions-done")
 
+    for mapping in reversed(locked_prewarm):
+        mapping.close()
+    if locked_prewarm:
+        print("  prewarm-unlocked files=%d tick=%d" %
+              (len(locked_prewarm), int(time.monotonic() * 1000)), flush=True)
     time.sleep(0.5)
     fcntl.ioctl(fd, send_key.UI_DEV_DESTROY)
     os.close(fd)

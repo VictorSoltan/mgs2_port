@@ -29,7 +29,7 @@ RECORD = struct.Struct("<4I")
 # reader independent of perf's presentation format.
 SAMPLE = re.compile(
     r"^\s*(?P<comm>.*?)\s+(?:(?P<pid>\d+)/)?(?P<tid>\d+)\s+"
-    r"(?:[0-9.]+:\s+\d+\s+cycles:u:\s+)?"
+    r"(?:(?P<time>[0-9.]+):\s+(?:\d+\s+cycles:u:\s+)?)?"
     r"(?P<ip>[0-9a-fA-F]+)\s+.*\(/tmp/perf-[0-9]+\.map\)\s*$"
 )
 
@@ -120,6 +120,9 @@ def main():
     parser.add_argument("--script", required=True)
     parser.add_argument("--maps", required=True)
     parser.add_argument("--limit", type=int, default=40)
+    parser.add_argument("--tid", type=int)
+    parser.add_argument("--start-ms", type=float)
+    parser.add_argument("--end-ms", type=float)
     args = parser.parse_args()
 
     try:
@@ -142,6 +145,16 @@ def main():
         match = SAMPLE.match(line)
         if not match:
             continue
+        if args.tid is not None and int(match.group("tid")) != args.tid:
+            continue
+        if args.start_ms is not None or args.end_ms is not None:
+            if match.group("time") is None:
+                continue
+            tick_ms = float(match.group("time")) * 1000.0
+            if args.start_ms is not None and tick_ms <= args.start_ms:
+                continue
+            if args.end_ms is not None and tick_ms > args.end_ms:
+                continue
         native_ip = int(match.group("ip"), 16)
         record = containing(records, native_starts, native_ip)
         if record is None:

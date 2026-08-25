@@ -9,14 +9,14 @@
 # files still differed afterwards. On the Box86 side, eight hand-written island
 # sources existed in exactly one directory on one disk and in no patch.
 #
-# So this asks the question that matters: pinned base + one complete patch,
-# reconstructed from scratch, compared against the live tree.
+# So this asks the question that matters: pinned base + the recorded production
+# patch chain, reconstructed from scratch, compared against the live tree.
 #
 #   ./verify_rebuild.sh            reconstruct both trees and diff  (~1 min)
 #   ./verify_rebuild.sh --build    also rebuild WineD3D and compare its
 #                                  normalised hash against the lock
-#   ./verify_rebuild.sh --refresh  regenerate both complete patches from the
-#                                  live trees, then verify
+#   ./verify_rebuild.sh --refresh  regenerate complete patches only when no
+#                                  explicit incremental chain is recorded
 #
 # --refresh exists because the record drifts the moment anything is built, and
 # three times in one afternoon this check went red for exactly that reason. The
@@ -85,6 +85,12 @@ refresh_box86() {
 }
 
 if [ "${1:-}" = "--refresh" ]; then
+    if awk '$1 ~ /^(wine_research_patch_|box86_production_patch_)/ {found=1}
+            END {exit !found}' "$LOCK"; then
+        echo "refusing --refresh: the lock has explicit incremental patches" >&2
+        echo "squashing them into immutable complete patches would apply them twice" >&2
+        exit 1
+    fi
     echo "== regenerating the complete patches from the live trees =="
     mkdir -p "$WORK"
     refresh_wine
@@ -109,7 +115,11 @@ echo "== wine: pristine + complete patch == live tree? =="
 rm -rf "$WORK/wine-11.0"
 mkdir -p "$WORK" && ( cd "$WORK" && tar xf "$TARBALL" )
 awk '/^--- a\//{p=1} p' "$REPO/$(lock wine_complete_patch)" > "$WORK/wine.diff"
-if ( cd "$WORK/wine-11.0" && patch -p1 -E --silent < "$WORK/wine.diff" >/dev/null 2>&1 ); then
+if ( cd "$WORK/wine-11.0" \
+        && patch -p1 -E --silent < "$WORK/wine.diff" >/dev/null 2>&1 \
+        && for rel in $(awk '$1 ~ /^wine_research_patch_/ {print $2}' "$LOCK"); do \
+               patch -p1 -E --silent < "$REPO/$rel" >/dev/null 2>&1 || exit 1; \
+           done ); then
     n=$(diff -rq -x '*.orig' "$WORK/wine-11.0" "$WINE_LIVE" 2>/dev/null | wc -l)
     if [ "$n" = 0 ]; then echo "ok     reconstructed byte for byte, 0 differences"
     else echo "FAIL   $n differences after reconstruction"; fail=1
@@ -121,7 +131,11 @@ echo "== box86: pinned commit + complete patch == live tree? =="
 rm -rf "$WORK/box86"
 ( cd "$BOX86_LIVE" && git worktree prune && git worktree add -q --detach "$WORK/box86" "$base" )
 awk '/^diff --git|^--- a\//{p=1} p' "$REPO/$(lock box86_complete_patch)" > "$WORK/box86.diff"
-if ( cd "$WORK/box86" && patch -p1 -E --silent < "$WORK/box86.diff" >/dev/null 2>&1 ); then
+if ( cd "$WORK/box86" \
+        && patch -p1 -E --silent < "$WORK/box86.diff" >/dev/null 2>&1 \
+        && for rel in $(awk '$1 ~ /^box86_production_patch_/ {print $2}' "$LOCK"); do \
+               patch -p1 -E --silent < "$REPO/$rel" >/dev/null 2>&1 || exit 1; \
+           done ); then
     # island/ and island-gcc.bak/ are build products of build_island_objects.sh,
     # and so are mgs2_island_class_b.h and mgs2_island_entry_identity.h: the
     # generators write them straight into the source tree from the exact

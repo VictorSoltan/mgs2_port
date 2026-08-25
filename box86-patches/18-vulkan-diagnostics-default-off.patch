@@ -10,11 +10,13 @@ knobs.  The ordinary path retains the same structure alignment and native
 Vulkan calls and performs only one cached atomic flag read per intercepted
 creation call.
 
+diff --git a/src/wrapped/wrappedvulkan.c b/src/wrapped/wrappedvulkan.c
+index 9333c0d7..099a1d60 100755
 --- a/src/wrapped/wrappedvulkan.c
 +++ b/src/wrapped/wrappedvulkan.c
-@@ -509,6 +509,18 @@
+@@ -509,6 +509,18 @@ EXPORT int my_vkCreateComputePipelines(x86emu_t* emu, void* device, uint64_t pip
  }
-
+ 
  CREATE(vkCreateDescriptorPool)
 +static int dmc3_vk_diag_enabled(void)
 +{
@@ -31,7 +33,7 @@ creation call.
  static void dmc3_dump_words(const char *name, const void *data, uint32_t word_count);
  EXPORT int my_vkCreateDescriptorSetLayout(x86emu_t* emu, void* device, void* pCreateInfo, my_VkAllocationCallbacks_t* pAllocator, void* pSetLayout)
  {
-@@ -517,14 +529,16 @@
+@@ -517,14 +529,16 @@ EXPORT int my_vkCreateDescriptorSetLayout(x86emu_t* emu, void* device, void* pCr
      my_VkAllocationCallbacks_t my_alloc;
      int ret = my->vkCreateDescriptorSetLayout(device, pCreateInfo,
              find_VkAllocationCallbacks(&my_alloc, pAllocator), pSetLayout);
@@ -56,7 +58,7 @@ creation call.
      return ret;
  }
  CREATE(vkCreateDescriptorUpdateTemplate)
-@@ -714,9 +728,10 @@
+@@ -714,9 +728,10 @@ EXPORT int my_vkCreateGraphicsPipelines(x86emu_t* emu, void* device, uint64_t pi
      void* aligned;
      const char* desc="upiuppppppppppUUuUi"; //TODO: check if any substruct need alignement!
      aligned = vkalignStruct(pCreateInfos, desc, count);
@@ -69,7 +71,7 @@ creation call.
          fprintf(stderr, "DMC3VK enter call=%u device=%p cache=%016llx count=%u infos=%p aligned=%p allocator=%p pipelines=%p\n",
                  this_call, device, (unsigned long long)pipelineCache, count,
                  pCreateInfos, aligned, pAllocator, pPipelines);
-@@ -726,7 +741,7 @@
+@@ -726,7 +741,7 @@ EXPORT int my_vkCreateGraphicsPipelines(x86emu_t* emu, void* device, uint64_t pi
          fflush(stderr);
      }
      void *no_spec_stages = NULL;
@@ -78,7 +80,7 @@ creation call.
      if (no_spec_call && (uint32_t)strtoul(no_spec_call, NULL, 10) == this_call && count == 1) {
          dmc3_vk_graphics_pipeline_arm_t *a = aligned;
          const size_t stage_size = 8 * sizeof(uint32_t);
-@@ -741,14 +756,14 @@
+@@ -741,14 +756,14 @@ EXPORT int my_vkCreateGraphicsPipelines(x86emu_t* emu, void* device, uint64_t pi
          }
      }
      static pthread_mutex_t dmc3_pipeline_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -95,7 +97,7 @@ creation call.
          fprintf(stderr, "DMC3VK leave call=%u result=%d\n", this_call, ret);
          fflush(stderr);
      }
-@@ -810,16 +825,18 @@
+@@ -810,16 +825,18 @@ EXPORT int my_vkCreatePipelineLayout(x86emu_t* emu, void* device, void* pCreateI
      my_VkAllocationCallbacks_t my_alloc;
      int ret = my->vkCreatePipelineLayout(device, pCreateInfo,
              find_VkAllocationCallbacks(&my_alloc, pAllocator), pPipelineLayout);
@@ -123,7 +125,7 @@ creation call.
      return ret;
  }
  CREATE(vkCreateQueryPool)
-@@ -830,26 +847,28 @@
+@@ -830,26 +847,28 @@ EXPORT int my_vkCreateRenderPass(x86emu_t* emu, void* device, void* pCreateInfo,
      my_VkAllocationCallbacks_t my_alloc;
      int ret = my->vkCreateRenderPass(device, pCreateInfo,
              find_VkAllocationCallbacks(&my_alloc, pAllocator), pRenderPass);
@@ -170,7 +172,7 @@ creation call.
      return ret;
  }
  CREATE(vkCreateSampler)
-@@ -860,7 +879,8 @@
+@@ -860,7 +879,8 @@ EXPORT int my_vkCreateShaderModule(x86emu_t* emu, void* device, void* pCreateInf
      (void)emu;
      const uint32_t *info = pCreateInfo;
      my_VkAllocationCallbacks_t my_alloc;
@@ -180,7 +182,7 @@ creation call.
      if (dump_dir && dump_dir[0] && info && info[3] && info[4]) {
          static uint32_t module_id;
          const uint32_t this_module = __sync_add_and_fetch(&module_id, 1);
-@@ -875,13 +895,15 @@
+@@ -875,13 +895,15 @@ EXPORT int my_vkCreateShaderModule(x86emu_t* emu, void* device, void* pCreateInf
      }
      int ret = my->vkCreateShaderModule(device, pCreateInfo,
              find_VkAllocationCallbacks(&my_alloc, pAllocator), pShaderModule);
@@ -202,3 +204,4 @@ creation call.
 +    }
      return ret;
  }
+ 

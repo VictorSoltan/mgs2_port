@@ -131,6 +131,7 @@ if [ -n "${MGS2_CAPTURE_WAV:-}" ]; then
     echo "запись выхода: $MGS2_CAPTURE_WAV pid=$RECORD_PID"
 fi
 python3 "$G/autoload_save.py" "$OUT" "$CONFIRM"
+AUTOLOAD_RC=$?
 if [ -n "$RECORD_PID" ]; then
     python3 -c 'import time; print("stop_tick=%d" % (time.monotonic() * 1000))' \
         >>"$RECORD_TIMES"
@@ -147,3 +148,4 @@ echo "инстансов: $c"
 grep -oE 'worst [0-9]+ ms' "$LOG" | awk '{print $2}' | sort -rn | head -3 | tr '\n' ' '
 echo "(худшие кадры)"
 echo "снимки в $OUT, лог игры $LOG"
+exit "$AUTOLOAD_RC"

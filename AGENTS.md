@@ -16,23 +16,29 @@ superseded or explicitly retracted.
 
 ## Current production
 
-FINALPLAY16 is current as of 2026-08-24:
+FINALPLAY17 is current as of 2026-08-25:
 
 ```text
-D3D8 -> DXVK-Sarek 1.11.1 -> WineVulkan/Wayland -> proprietary armhf libmali
+D3D8 -> DXVK-Sarek 1.11.1 warm cache/one worker
+     -> WineVulkan/Wayland -> proprietary armhf libmali
+texture decode -> Box86 native fused DXT5 surface bridge
 ```
 
-It uses a direct 32-bit Wine prefix and `box86-fp16-dxvk`. Promotion followed a
-correct gameplay witness and an 18/18 live identity check. There is no matched
-FINALPLAY15 FPS claim.
+It uses a direct 32-bit Wine prefix and
+`box86-fp21-dxvk-native-dxt-surface`. A corrected symmetric FINALPLAY16 versus
+candidate A-B-A-B reduced the controlled gap sum by 20.1% and the two
+pipeline-gap clusters by 32.3%. Promotion followed the correct LOAD GAME route,
+visual gameplay witness and an 18/18 live identity check. This is not a global
+FPS claim and the independent game/read stalls remain open.
 
 Immediate rollback:
 
 ```sh
+MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Read `docs/briefs/MGS2_FINALPLAY16_DXVK_PRODUCTION_2026-08-24.md` before
+Read `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md` before
 changing renderer defaults.
 
 ## Non-negotiable rules
@@ -56,7 +62,7 @@ changing renderer defaults.
 ## Current research entry points
 
 - Production/DXVK:
-  `docs/briefs/MGS2_FINALPLAY16_DXVK_PRODUCTION_2026-08-24.md`
+  `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`
 - DXVK transfer rationale:
   `docs/briefs/MGS2_DMC3_OPTIMIZATION_TRANSFER_2026-08-24.md`
 - Intermittent gameplay SFX:
@@ -97,9 +103,10 @@ Do not mix the Wine 11.0 tree with the older CrossOver Android source tree.
 - `box86-patches/FINALPLAY15-box86-complete.patch` is the complete Box86 record
   against commit `0579f8b9`.
 - `box86-patches/17-native-wayland-vulkan-bridge.patch` adds the FINALPLAY16
-  Vulkan/Wayland bridge.
-- `dxvk-patches/` contains the DXVK-Sarek delta; the present counter is
-  research-only.
+  Vulkan/Wayland bridge; patches 18--21 record diagnostics, the verified fused
+  DXT bridge and its counter-free FINALPLAY17 production entry.
+- `dxvk-patches/01-*`, `02-*` and `08-*` are the FINALPLAY17 DXVK-Sarek delta;
+  the present counter and pipeline timeline remain research-only.
 
 When implementation changes are made in an external source tree, export the
 reviewed diff back into this repository. Never treat an unrecorded binary as the

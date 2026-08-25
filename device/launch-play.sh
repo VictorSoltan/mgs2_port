@@ -1,9 +1,9 @@
 #!/bin/sh
-# FINALPLAY16 production selector.
+# FINALPLAY17 production selector.
 #
 # DXVK-Sarek over proprietary libmali is the normal renderer. The previous
-# byte-exact FINALPLAY15 WineD3D launcher remains beside it as the immediate
-# rollback and can be selected for one launch with MGS2_RENDERER=wined3d.
+# byte-exact FINALPLAY16 DXVK and FINALPLAY15 WineD3D launchers remain beside it
+# as one-launch rollback paths.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -19,13 +19,16 @@ fi
 
 case "$RENDERER" in
     dxvk)
+        exec "$HERE/launch-play-dxvk-fp17.sh"
+        ;;
+    dxvk16|fp16)
         exec "$HERE/launch-play-dxvk-fp16.sh"
         ;;
     wined3d|fp15)
         exec "$HERE/launch-play-wined3d-fp15.sh"
         ;;
     *)
-        echo "MGS2: unknown MGS2_RENDERER=$RENDERER (use dxvk or wined3d)" >&2
+        echo "MGS2: unknown MGS2_RENDERER=$RENDERER (use dxvk, dxvk16 or wined3d)" >&2
         exit 1
         ;;
 esac

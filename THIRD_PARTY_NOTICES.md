@@ -26,8 +26,9 @@ chronology and rejected variants.
 - License: MIT
 - License text: `LICENSES/Box86-MIT.txt`
 
-`box86-patches/` contains modifications to Box86. FINALPLAY16 applies the
-complete FINALPLAY15 delta and the native Wayland/Vulkan bridge.
+`box86-patches/` contains modifications to Box86. FINALPLAY17 applies the
+complete FINALPLAY15 delta, the native Wayland/Vulkan bridge and the verified
+fused DXT surface conversion with a counter-free production entry.
 
 ## DXVK / DXVK-Sarek
 

@@ -1,0 +1,20 @@
+# MGS2 research-only clean freeze candidate, 2026-08-25.
+source_tag          v1.11.1-mali-fix
+source_commit       617958fe1cf2b10e06fa751d3e40bd765dcf2cc6
+box86_patch         box86-patches/20-native-dxt-surface-research-default-off.patch
+box86_prod_patch    box86-patches/21-native-dxt-surface-production-no-hot-counters.patch
+box86_prod_sha256   3e04230704b6f36140cde82adf10202775ad8c71d050eccd2f4c1a05745d99ee
+box86_sha256        51dfcc130b9760970189a67edd8cd78c777c5d69c8b9ec07cfbc5657821d9be9
+dedupe_patch        dxvk-patches/08-state-cache-mapping-dedupe-production.patch
+dedupe_sha256       82c699cd2666173e1ba0814d8f1d72f21e3a1f86a002fc5b4b90f42f51830fff
+d3d8_sha256         22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa
+d3d9_sha256         4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f334c690650
+state_cache         1
+state_cache_dedupe  unconditional-exact-pairs
+compiler_threads    1
+all_cores           unset
+dxt_surface_mode    1
+instrumentation     none-hot-production-path
+warm_cache_sha256   d04158e8e15cb457bd74b97986e750883680622ea9334f292b6ec4390b49f1e8
+warm_cache_size     13151
+wine_mode           direct32
