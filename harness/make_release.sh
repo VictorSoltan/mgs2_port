@@ -48,6 +48,7 @@ _mgs2_workspace_set=${MGS2_WORKSPACE+x}; _mgs2_workspace=${MGS2_WORKSPACE-}
 _wine_src_set=${WINE_SRC+x};             _wine_src=${WINE_SRC-}
 _wine_build_set=${WINE_BUILD+x};         _wine_build=${WINE_BUILD-}
 _wine_unix_set=${WINE_UNIX_BUILD+x};     _wine_unix=${WINE_UNIX_BUILD-}
+_box86_src_set=${BOX86_SRC+x};           _box86_src=${BOX86_SRC-}
 _box86_build_set=${BOX86_BUILD+x};       _box86_build=${BOX86_BUILD-}
 _mingw_bin_set=${MINGW_BIN+x};           _mingw_bin=${MINGW_BIN-}
 _device_set=${MGS2_DEVICE+x};            _device=${MGS2_DEVICE-}
@@ -64,6 +65,7 @@ fi
 [ "$_wine_src_set" = x ]       && WINE_SRC=$_wine_src
 [ "$_wine_build_set" = x ]     && WINE_BUILD=$_wine_build
 [ "$_wine_unix_set" = x ]      && WINE_UNIX_BUILD=$_wine_unix
+[ "$_box86_src_set" = x ]      && BOX86_SRC=$_box86_src
 [ "$_box86_build_set" = x ]    && BOX86_BUILD=$_box86_build
 [ "$_mingw_bin_set" = x ]      && MINGW_BIN=$_mingw_bin
 [ "$_device_set" = x ]         && MGS2_DEVICE=$_device
@@ -74,6 +76,7 @@ WORKSPACE="${MGS2_WORKSPACE:-$(dirname "$REPO")}"
 WINE_SRC="${WINE_SRC:-$WORKSPACE/recovered-session/wine-11.0}"
 WINE_BUILD="${WINE_BUILD:-$WORKSPACE/recovered-session/build-wine-i386}"
 UNIX_BUILD="${WINE_UNIX_BUILD:-$WORKSPACE/recovered-session/build-wine-unix32}"
+BOX86_SRC="${BOX86_SRC:-$WORKSPACE/box86-src}"
 BOX86_BUILD="${BOX86_BUILD:-$WORKSPACE/box86-src/build-timing}"
 MINGW="${MINGW_BIN:-$WORKSPACE/recovered-session/mingw/bin}"
 DEV="${MGS2_DEVICE:-root@rg353vs}"
@@ -132,12 +135,19 @@ echo "== 2. WineD3D =="
         dlls/wined3d/i386-windows/wined3d.dll >/dev/null )
 
 echo "== 3. island objects, and class-B regenerated from THAT WineD3D =="
-( cd "$REPO" && SYSROOT=/ CC=clang-18 \
+( cd "$REPO" && SYSROOT=/ CC=clang-18 MGS2_ISLAND_LAUNCHER="$LAUNCHER" \
     EXTRA_CFLAGS="--target=arm-linux-gnueabihf -mms-bitfields -DMGS2_GL_CENSUS" \
     sh harness/island/full/build_island_objects.sh >/dev/null )
+MGS2_ISLAND_LAUNCHER="$LAUNCHER" sh "$REPO/harness/verify_island_headers.sh"
 
 echo "== 4. Box86 =="
-( cd "$BOX86_BUILD" && make -j8 >/dev/null )
+cmake -S "$BOX86_SRC" -B "$BOX86_BUILD" -DRK3399=1 \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+    -DCMAKE_C_FLAGS="$(awk '$1=="box86_cflags" {print $2}' "$LOCK")" \
+    -DCMAKE_EXE_LINKER_FLAGS="$(awk '$1=="box86_ldflags" {print $2}' "$LOCK")" \
+    -DUSE_CCACHE=OFF >/dev/null
+cmake --build "$BOX86_BUILD" --parallel 8 >/dev/null
 
 echo "== 5. collect =="
 mkdir -p "$OUT"

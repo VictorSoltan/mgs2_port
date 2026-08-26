@@ -119,8 +119,9 @@ The complete FINALPLAY15 Wine/Box86 patches are the reconstruction boundary.
 FINALPLAY16 added `box86-patches/17-native-wayland-vulkan-bridge.patch`.
 FINALPLAY17 additionally records the verified fused-DXT path in Box86 patches
 18--21; patch 22 fixes its clean-build graph without changing production bytes.
-Box86 patch 23 is an unpromoted, fail-closed Wine 11 Wayland-listener ABI
-candidate. FINALPLAY17 also uses exact state-cache mapping dedupe in DXVK patch
+Box86 patches 23+24 are an unpromoted, fail-closed Wine 11 Wayland-listener ABI
+candidate; patch 24 gives the callback-slot publication explicit release/acquire
+ordering. FINALPLAY17 also uses exact state-cache mapping dedupe in DXVK patch
 08. The memory-only
 present counter and pipeline timeline are diagnostic and are not part of the
 production D3D9 DLL.
@@ -135,6 +136,12 @@ After configuring `.env`, verify the pinned reconstruction:
 Use `./harness/verify_rebuild.sh --build` only with the required cross
 toolchains installed. Release artifacts are byte-reproducible only with the
 flags and `SOURCE_DATE_EPOCH` recorded in the lock file and briefs.
+
+The unpromoted native-Wayland candidate has a separate exact callback gate:
+
+```sh
+./harness/wayland/run_device_wayland_abi_gate.sh
+```
 
 ## Measurement rules
 

@@ -1,12 +1,12 @@
 #!/bin/sh
-# Research-only FINALPLAY17 runtime with Box86 patch 23.  The renderer, cache,
+# Research-only FINALPLAY17 runtime with Box86 patches 23 and 24. The renderer, cache,
 # worker count, Wine prefix and every other mounted byte stay at FINALPLAY17.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 D3D8=d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
 D3D9=d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll
-BOX86=box86-fp23-wayland-abi-candidate
+BOX86=box86-fp24-wayland-atomic-candidate
 
 verify_one() {
     want="$1"
@@ -20,9 +20,9 @@ verify_one() {
 
 verify_one 22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa "$D3D8"
 verify_one 4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f334c690650 "$D3D9"
-verify_one 750227508181a929a3973e6d65bb70d60b7c42b60542cb16b021e192815ccf24 "$BOX86"
+verify_one d6cafba667d16f6227c0ffd5437e7ac52253dd46624c2edfcbbd36ca3843188b "$BOX86"
 
-export MGS2_RESEARCH_RUN=box86-wayland-abi-candidate
+export MGS2_RESEARCH_RUN=box86-wayland-abi-p24-candidate
 export MGS2_BOX86_BIN="$BOX86"
 export MGS2_DXVK_D3D8_DLL="$D3D8"
 export MGS2_DXVK_D3D9_DLL="$D3D9"

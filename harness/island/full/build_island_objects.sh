@@ -123,9 +123,13 @@ python3 "$HERE/gen_class_b_table.py" $GEN_ARGS
 # it the tool exits 1 over ids 11 and 34, which no configuration arms, and under
 # `set -e` that aborted this script BEFORE pass 2: the header was written, the
 # island objects were not rebuilt, and the build looked like it had succeeded.
+ISLAND_LAUNCHER="${MGS2_ISLAND_LAUNCHER:-$REPO/device/launch-play-wined3d-fp15.sh}"
 ISLAND_ONLY=$(sed -n 's/^export MGS2_BOX86_ISLAND_ONLY="\${MGS2_BOX86_ISLAND_ONLY:-\([0-9,]*\)}"/\1/p' \
-    "$HERE/../../../device/launch-play.sh")
-[ -n "$ISLAND_ONLY" ] || { echo "cannot read MGS2_BOX86_ISLAND_ONLY from the launcher" >&2; exit 1; }
+    "$ISLAND_LAUNCHER")
+[ -n "$ISLAND_ONLY" ] || {
+    echo "cannot read MGS2_BOX86_ISLAND_ONLY from $ISLAND_LAUNCHER" >&2
+    exit 1
+}
 IDENT_ARGS=""
 for id in $(echo "$ISLAND_ONLY" | tr ',' ' '); do
     IDENT_ARGS="$IDENT_ARGS --require-id $id"

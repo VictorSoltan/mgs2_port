@@ -242,6 +242,7 @@ restore_cpu_state() {
 cleanup() {
     [ -n "${THERMAL_PID:-}" ] && kill "$THERMAL_PID" 2>/dev/null || true
     [ -n "${WINE_PID:-}" ] && kill "$WINE_PID" 2>/dev/null || true
+    [ -n "${PLAY_EXIT_REASON:-}" ] && rm -f "$PLAY_EXIT_REASON" 2>/dev/null || true
     [ -n "${EXPLORER_PID:-}" ] && kill "$EXPLORER_PID" 2>/dev/null || true
     [ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
     killall -9 wineserver wineboot.exe services.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
@@ -594,7 +595,7 @@ else
 fi
 WINE_PID=$!
 PLAY_WINE_PID=$WINE_PID
-PLAY_EXIT_REASON=/tmp/mgs2-play-exit.reason
+PLAY_EXIT_REASON="/tmp/mgs2-play-exit.$PLAY_WINE_PID.reason"
 PLAY_EXIT_LOG=/tmp/mgs2-play-exit.log
 : > "$PLAY_EXIT_REASON"
 
@@ -635,12 +636,18 @@ else
     PLAY_EXIT_STATUS=$?
 fi
 WINE_PID=
-if [ -s "$PLAY_EXIT_REASON" ]; then
-    IFS= read -r PLAY_EXIT_CAUSE < "$PLAY_EXIT_REASON"
-else
-    PLAY_EXIT_CAUSE=process_exit
+if [ -n "${THERMAL_PID:-}" ]; then
+    kill "$THERMAL_PID" 2>/dev/null || true
+    wait "$THERMAL_PID" 2>/dev/null || true
+    THERMAL_PID=
 fi
-printf '%s launcher=dxvk-research pid=%s status=%s reason=%s\n' \
+if [ -s "$PLAY_EXIT_REASON" ]; then
+    IFS= read -r PLAY_REQUESTED_STOP < "$PLAY_EXIT_REASON"
+else
+    PLAY_REQUESTED_STOP=none
+fi
+rm -f "$PLAY_EXIT_REASON"
+printf '%s launcher=dxvk-research pid=%s status=%s requested_stop=%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$PLAY_WINE_PID" \
-    "$PLAY_EXIT_STATUS" "$PLAY_EXIT_CAUSE" > "$PLAY_EXIT_LOG"
+    "$PLAY_EXIT_STATUS" "$PLAY_REQUESTED_STOP" > "$PLAY_EXIT_LOG"
 exit "$PLAY_EXIT_STATUS"

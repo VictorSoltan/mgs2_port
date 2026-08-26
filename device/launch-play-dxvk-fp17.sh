@@ -266,7 +266,6 @@ restore_cpu_state() {
 # Arm cleanup before the first bind mount.  A missing or unreadable selected
 # runtime must not leave the earlier mounts active for the next launch.
 cleanup() {
-    [ -n "${THERMAL_PID:-}" ] && kill "$THERMAL_PID" 2>/dev/null || true
     [ -n "${WINE_PID:-}" ] && kill "$WINE_PID" 2>/dev/null || true
     [ -n "${EXPLORER_PID:-}" ] && kill "$EXPLORER_PID" 2>/dev/null || true
     [ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
@@ -609,45 +608,7 @@ else
 fi
 WINE_PID=$!
 PLAY_WINE_PID=$WINE_PID
-PLAY_EXIT_REASON=/tmp/mgs2-play-exit.reason
 PLAY_EXIT_LOG=/tmp/mgs2-play-exit.log
-: > "$PLAY_EXIT_REASON"
-
-# Improved cooling permits a fixed 1992 MHz target. Keep only the independent
-# emergency cutoff below the observed reset region; there is no frequency
-# ladder in PLAY.
-thermal_guard() {
-    local temp guard_dir fifo
-    if guard_dir=$(mktemp -d /tmp/mgs2-play-guard.XXXXXX); then
-        fifo="$guard_dir/tick"
-        if mkfifo "$fifo" 2>/dev/null; then
-            exec 8<>"$fifo"
-            rm -f "$fifo"
-        fi
-        rmdir "$guard_dir" 2>/dev/null || true
-    fi
-    while kill -0 "$WINE_PID" 2>/dev/null; do
-        temp=0
-        read -r temp < /sys/class/thermal/thermal_zone0/temp 2>/dev/null || temp=0
-        [ -n "$temp" ] || temp=0
-        if [ "$temp" -ge 88000 ]; then
-            # This is a single cold-path write at the emergency cutoff, not
-            # hot-thread instrumentation.  Without it a deliberate thermal
-            # SIGTERM is indistinguishable from a game or Wine crash after the
-            # launcher restores mounts and clocks.
-            printf 'thermal_guard temp_mc=%s\n' "$temp" > "$PLAY_EXIT_REASON"
-            kill "$WINE_PID" 2>/dev/null || true
-            return
-        fi
-        if [ -e /proc/self/fd/8 ]; then
-            read -r -t 0.5 -u 8 _ 2>/dev/null || true
-        else
-            sleep 0.5
-        fi
-    done
-}
-thermal_guard 9>&- &
-THERMAL_PID=$!
 if wait "$WINE_PID"; then
     PLAY_EXIT_STATUS=0
 else
@@ -656,12 +617,7 @@ fi
 # Do not let EXIT cleanup signal a reaped PID which the kernel may already have
 # reused.  Preserve the original PID in the bounded exit record instead.
 WINE_PID=
-if [ -s "$PLAY_EXIT_REASON" ]; then
-    IFS= read -r PLAY_EXIT_CAUSE < "$PLAY_EXIT_REASON"
-else
-    PLAY_EXIT_CAUSE=process_exit
-fi
-printf '%s launcher=finalplay17 pid=%s status=%s reason=%s\n' \
+printf '%s launcher=finalplay17 pid=%s status=%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$PLAY_WINE_PID" \
-    "$PLAY_EXIT_STATUS" "$PLAY_EXIT_CAUSE" > "$PLAY_EXIT_LOG"
+    "$PLAY_EXIT_STATUS" > "$PLAY_EXIT_LOG"
 exit "$PLAY_EXIT_STATUS"

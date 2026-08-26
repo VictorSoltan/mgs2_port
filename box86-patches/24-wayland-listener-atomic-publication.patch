@@ -1,0 +1,257 @@
+Box86 patch 24 -- publish the Wine 11 Wayland callback slots atomically.
+
+Apply after patch 23.
+
+Wine's process Wayland connection has a blocking event-dispatch loop, while
+clipboard and surface objects can install listeners from other call paths.
+Patch 23 serialized allocation of the fixed listener slots, but its native ARM
+callback stubs still read ordinary global pointers.  Do not make correctness
+depend on undocumented ordering across the subsequent libwayland call.
+
+Use a C11 release store when a guest callback table is assigned to one of the
+six listener classes covered or corrected by patch 23, and an acquire load in
+each matching native callback.  Relaxed loads are sufficient for lookup while
+the patch-23 registry mutex excludes other writers.  Callback dispatch remains
+lock-free; no render/audio logging or performance claim is added.
+
+--- a/src/wrapped/wrappedwaylandclient.c
++++ b/src/wrapped/wrappedwaylandclient.c
+@@ -2,6 +2,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <pthread.h>
++#include <stdatomic.h>
+ #define _GNU_SOURCE         /* See feature_test_macros(7) */
+ #include <dlfcn.h>
+ #include <stdarg.h>
+@@ -24,6 +25,9 @@
+
+ typedef void* (*pFp_t)(void*);
+ static pthread_mutex_t listener_registry_mutex = PTHREAD_MUTEX_INITIALIZER;
++#define LISTENER_REF_LOAD(ref) atomic_load_explicit(&(ref), memory_order_acquire)
++#define LISTENER_REF_LOOKUP(ref) atomic_load_explicit(&(ref), memory_order_relaxed)
++#define LISTENER_REF_PUBLISH(ref, fct) atomic_store_explicit(&(ref), (fct), memory_order_release)
+ #define ADDED_FUNCTIONS() \
+     GO(wl_proxy_get_class, pFp_t) \
+
+@@ -81,10 +85,10 @@
+     uintptr_t configure; // vFppu
+ } my_xdg_surface_listener_t;
+ #define GO(A)                                                                                \
+-static my_xdg_surface_listener_t* ref_xdg_surface_listener_##A = NULL;                       \
++static _Atomic(my_xdg_surface_listener_t*) ref_xdg_surface_listener_##A = NULL;                       \
+ static void my_xdg_surface_listener_configure_##A(void* a, void* b, uint32_t c)              \
+ {                                                                                            \
+-    RunFunctionFmt(ref_xdg_surface_listener_##A->configure, "ppu", a, b, c);                 \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_xdg_surface_listener_##A)->configure, "ppu", a, b, c);                 \
+ }                                                                                            \
+ static my_xdg_surface_listener_t my_xdg_surface_listener_fct_##A = {                         \
+     (uintptr_t)my_xdg_surface_listener_configure_##A,                                        \
+@@ -94,10 +98,10 @@
+ static void* find_xdg_surface_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_xdg_surface_listener_##A == fct) return &my_xdg_surface_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_xdg_surface_listener_##A) == fct) return &my_xdg_surface_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_xdg_surface_listener_##A == 0) {ref_xdg_surface_listener_##A = fct; return &my_xdg_surface_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_xdg_surface_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_xdg_surface_listener_##A, fct); return &my_xdg_surface_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client xdg_surface_listener callback\n");
+@@ -389,30 +393,30 @@
+     uintptr_t   repeat_info;   //vFppii
+ } my_wl_keyboard_listener_t;
+ #define GO(A)   \
+-static my_wl_keyboard_listener_t* ref_wl_keyboard_listener_##A = NULL;                                                           \
++static _Atomic(my_wl_keyboard_listener_t*) ref_wl_keyboard_listener_##A = NULL;                                                           \
+ static void my_wl_keyboard_listener_keymap_##A(void* a, void* b, uint32_t c, int d, uint32_t e)                                  \
+ {                                                                                                                                \
+-    RunFunctionFmt(ref_wl_keyboard_listener_##A->keymap, "ppuiu", a, b, c, d, e);                                                \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_keyboard_listener_##A)->keymap, "ppuiu", a, b, c, d, e);                                                \
+ }                                                                                                                                \
+ static void my_wl_keyboard_listener_enter_##A(void* a, void* b, uint32_t c, void* d, void* e)                                    \
+ {                                                                                                                                \
+-    RunFunctionFmt(ref_wl_keyboard_listener_##A->enter, "ppupp", a, b, c, d, e);                                                 \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_keyboard_listener_##A)->enter, "ppupp", a, b, c, d, e);                                                 \
+ }                                                                                                                                \
+ static void my_wl_keyboard_listener_leave_##A(void* a, void* b, uint32_t c, void* d)                                             \
+ {                                                                                                                                \
+-    RunFunctionFmt(ref_wl_keyboard_listener_##A->leave, "ppup", a, b, c, d);                                                     \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_keyboard_listener_##A)->leave, "ppup", a, b, c, d);                                                     \
+ }                                                                                                                                \
+ static void my_wl_keyboard_listener_key_##A(void* a, void* b, uint32_t c, uint32_t d, uint32_t e, uint32_t f)                    \
+ {                                                                                                                                \
+-    RunFunctionFmt(ref_wl_keyboard_listener_##A->key, "ppuuuu", a, b, c, d, e, f);                                               \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_keyboard_listener_##A)->key, "ppuuuu", a, b, c, d, e, f);                                               \
+ }                                                                                                                                \
+ static void my_wl_keyboard_listener_modifiers_##A(void* a, void* b, uint32_t c, uint32_t d, uint32_t e, uint32_t f, uint32_t g)  \
+ {                                                                                                                                \
+-    RunFunctionFmt(ref_wl_keyboard_listener_##A->modifiers, "ppuuuuu", a, b, c, d, e, f, g);                                     \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_keyboard_listener_##A)->modifiers, "ppuuuuu", a, b, c, d, e, f, g);                                     \
+ }                                                                                                                                \
+ static void my_wl_keyboard_listener_repeat_info_##A(void* a, void* b, int c, int d)                                              \
+ {                                                                                                                                \
+-    RunFunctionFmt(ref_wl_keyboard_listener_##A->repeat_info, "ppii", a, b, c, d);                                               \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_keyboard_listener_##A)->repeat_info, "ppii", a, b, c, d);                                               \
+ }                                                                                                                                \
+ static my_wl_keyboard_listener_t my_wl_keyboard_listener_fct_##A = {                                                             \
+     (uintptr_t)my_wl_keyboard_listener_keymap_##A,                                                                               \
+@@ -427,10 +431,10 @@
+ static void* find_wl_keyboard_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_wl_keyboard_listener_##A == fct) return &my_wl_keyboard_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_wl_keyboard_listener_##A) == fct) return &my_wl_keyboard_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_wl_keyboard_listener_##A == 0) {ref_wl_keyboard_listener_##A = fct; return &my_wl_keyboard_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_wl_keyboard_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_wl_keyboard_listener_##A, fct); return &my_wl_keyboard_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client wl_keyboard_listener callback\n");
+@@ -604,14 +608,14 @@
+     uintptr_t cancelled; // vFpp
+ } my_zwlr_data_control_source_v1_listener_t;
+ #define GO(A)                                                                                                       \
+-static my_zwlr_data_control_source_v1_listener_t* ref_zwlr_data_control_source_v1_listener_##A = NULL;              \
++static _Atomic(my_zwlr_data_control_source_v1_listener_t*) ref_zwlr_data_control_source_v1_listener_##A = NULL;              \
+ static void my_zwlr_data_control_source_v1_listener_send_##A(void* a, void* b, void* c, int32_t d)                  \
+ {                                                                                                                   \
+-    RunFunctionFmt(ref_zwlr_data_control_source_v1_listener_##A->send, "pppi", a, b, c, d);                        \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwlr_data_control_source_v1_listener_##A)->send, "pppi", a, b, c, d);                        \
+ }                                                                                                                   \
+ static void my_zwlr_data_control_source_v1_listener_cancelled_##A(void* a, void* b)                                 \
+ {                                                                                                                   \
+-    RunFunctionFmt(ref_zwlr_data_control_source_v1_listener_##A->cancelled, "pp", a, b);                           \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwlr_data_control_source_v1_listener_##A)->cancelled, "pp", a, b);                           \
+ }                                                                                                                   \
+ static my_zwlr_data_control_source_v1_listener_t my_zwlr_data_control_source_v1_listener_fct_##A = {                \
+     (uintptr_t)my_zwlr_data_control_source_v1_listener_send_##A,                                                     \
+@@ -622,10 +626,10 @@
+ static void* find_zwlr_data_control_source_v1_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_zwlr_data_control_source_v1_listener_##A == fct) return &my_zwlr_data_control_source_v1_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwlr_data_control_source_v1_listener_##A) == fct) return &my_zwlr_data_control_source_v1_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_zwlr_data_control_source_v1_listener_##A == 0) {ref_zwlr_data_control_source_v1_listener_##A = fct; return &my_zwlr_data_control_source_v1_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwlr_data_control_source_v1_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_zwlr_data_control_source_v1_listener_##A, fct); return &my_zwlr_data_control_source_v1_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client zwlr_data_control_source_v1_listener callback\n");
+@@ -636,10 +640,10 @@
+     uintptr_t offer; // vFppp
+ } my_zwlr_data_control_offer_v1_listener_t;
+ #define GO(A)                                                                                                      \
+-static my_zwlr_data_control_offer_v1_listener_t* ref_zwlr_data_control_offer_v1_listener_##A = NULL;               \
++static _Atomic(my_zwlr_data_control_offer_v1_listener_t*) ref_zwlr_data_control_offer_v1_listener_##A = NULL;               \
+ static void my_zwlr_data_control_offer_v1_listener_offer_##A(void* a, void* b, void* c)                            \
+ {                                                                                                                  \
+-    RunFunctionFmt(ref_zwlr_data_control_offer_v1_listener_##A->offer, "ppp", a, b, c);                           \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwlr_data_control_offer_v1_listener_##A)->offer, "ppp", a, b, c);                           \
+ }                                                                                                                  \
+ static my_zwlr_data_control_offer_v1_listener_t my_zwlr_data_control_offer_v1_listener_fct_##A = {                 \
+     (uintptr_t)my_zwlr_data_control_offer_v1_listener_offer_##A,                                                    \
+@@ -649,10 +653,10 @@
+ static void* find_zwlr_data_control_offer_v1_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_zwlr_data_control_offer_v1_listener_##A == fct) return &my_zwlr_data_control_offer_v1_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwlr_data_control_offer_v1_listener_##A) == fct) return &my_zwlr_data_control_offer_v1_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_zwlr_data_control_offer_v1_listener_##A == 0) {ref_zwlr_data_control_offer_v1_listener_##A = fct; return &my_zwlr_data_control_offer_v1_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwlr_data_control_offer_v1_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_zwlr_data_control_offer_v1_listener_##A, fct); return &my_zwlr_data_control_offer_v1_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client zwlr_data_control_offer_v1_listener callback\n");
+@@ -665,18 +669,18 @@
+     uintptr_t finished;   // vFpp
+ } my_zwlr_data_control_device_v1_listener_t;
+ #define GO(A)                                                                                                       \
+-static my_zwlr_data_control_device_v1_listener_t* ref_zwlr_data_control_device_v1_listener_##A = NULL;              \
++static _Atomic(my_zwlr_data_control_device_v1_listener_t*) ref_zwlr_data_control_device_v1_listener_##A = NULL;              \
+ static void my_zwlr_data_control_device_v1_listener_data_offer_##A(void* a, void* b, void* c)                       \
+ {                                                                                                                   \
+-    RunFunctionFmt(ref_zwlr_data_control_device_v1_listener_##A->data_offer, "ppp", a, b, c);                      \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwlr_data_control_device_v1_listener_##A)->data_offer, "ppp", a, b, c);                      \
+ }                                                                                                                   \
+ static void my_zwlr_data_control_device_v1_listener_selection_##A(void* a, void* b, void* c)                        \
+ {                                                                                                                   \
+-    RunFunctionFmt(ref_zwlr_data_control_device_v1_listener_##A->selection, "ppp", a, b, c);                       \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwlr_data_control_device_v1_listener_##A)->selection, "ppp", a, b, c);                       \
+ }                                                                                                                   \
+ static void my_zwlr_data_control_device_v1_listener_finished_##A(void* a, void* b)                                  \
+ {                                                                                                                   \
+-    RunFunctionFmt(ref_zwlr_data_control_device_v1_listener_##A->finished, "pp", a, b);                            \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwlr_data_control_device_v1_listener_##A)->finished, "pp", a, b);                            \
+ }                                                                                                                   \
+ static my_zwlr_data_control_device_v1_listener_t my_zwlr_data_control_device_v1_listener_fct_##A = {                \
+     (uintptr_t)my_zwlr_data_control_device_v1_listener_data_offer_##A,                                               \
+@@ -688,10 +692,10 @@
+ static void* find_zwlr_data_control_device_v1_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_zwlr_data_control_device_v1_listener_##A == fct) return &my_zwlr_data_control_device_v1_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwlr_data_control_device_v1_listener_##A) == fct) return &my_zwlr_data_control_device_v1_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_zwlr_data_control_device_v1_listener_##A == 0) {ref_zwlr_data_control_device_v1_listener_##A = fct; return &my_zwlr_data_control_device_v1_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwlr_data_control_device_v1_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_zwlr_data_control_device_v1_listener_##A, fct); return &my_zwlr_data_control_device_v1_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client zwlr_data_control_device_v1_listener callback\n");
+@@ -707,30 +711,30 @@
+     uintptr_t action;             // vFppu
+ } my_wl_data_source_listener_t;
+ #define GO(A)                                                                                              \
+-static my_wl_data_source_listener_t* ref_wl_data_source_listener_##A = NULL;                               \
++static _Atomic(my_wl_data_source_listener_t*) ref_wl_data_source_listener_##A = NULL;                               \
+ static void my_wl_data_source_listener_target_##A(void* a, void* b, void* c)                               \
+ {                                                                                                          \
+-    RunFunctionFmt(ref_wl_data_source_listener_##A->target, "ppp", a, b, c);                              \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_data_source_listener_##A)->target, "ppp", a, b, c);                              \
+ }                                                                                                          \
+ static void my_wl_data_source_listener_send_##A(void* a, void* b, void* c, int32_t d)                      \
+ {                                                                                                          \
+-    RunFunctionFmt(ref_wl_data_source_listener_##A->send, "pppi", a, b, c, d);                            \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_data_source_listener_##A)->send, "pppi", a, b, c, d);                            \
+ }                                                                                                          \
+ static void my_wl_data_source_listener_cancelled_##A(void* a, void* b)                                     \
+ {                                                                                                          \
+-    RunFunctionFmt(ref_wl_data_source_listener_##A->cancelled, "pp", a, b);                               \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_data_source_listener_##A)->cancelled, "pp", a, b);                               \
+ }                                                                                                          \
+ static void my_wl_data_source_listener_dnd_drop_performed_##A(void* a, void* b)                            \
+ {                                                                                                          \
+-    RunFunctionFmt(ref_wl_data_source_listener_##A->dnd_drop_performed, "pp", a, b);                      \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_data_source_listener_##A)->dnd_drop_performed, "pp", a, b);                      \
+ }                                                                                                          \
+ static void my_wl_data_source_listener_dnd_finished_##A(void* a, void* b)                                  \
+ {                                                                                                          \
+-    RunFunctionFmt(ref_wl_data_source_listener_##A->dnd_finished, "pp", a, b);                            \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_data_source_listener_##A)->dnd_finished, "pp", a, b);                            \
+ }                                                                                                          \
+ static void my_wl_data_source_listener_action_##A(void* a, void* b, uint32_t c)                            \
+ {                                                                                                          \
+-    RunFunctionFmt(ref_wl_data_source_listener_##A->action, "ppu", a, b, c);                              \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_data_source_listener_##A)->action, "ppu", a, b, c);                              \
+ }                                                                                                          \
+ static my_wl_data_source_listener_t my_wl_data_source_listener_fct_##A = {                                 \
+     (uintptr_t)my_wl_data_source_listener_target_##A,                                                       \
+@@ -745,10 +749,10 @@
+ static void* find_wl_data_source_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_wl_data_source_listener_##A == fct) return &my_wl_data_source_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_wl_data_source_listener_##A) == fct) return &my_wl_data_source_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_wl_data_source_listener_##A == 0) {ref_wl_data_source_listener_##A = fct; return &my_wl_data_source_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_wl_data_source_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_wl_data_source_listener_##A, fct); return &my_wl_data_source_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client wl_data_source_listener callback\n");

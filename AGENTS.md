@@ -42,7 +42,7 @@ Read `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md` be
 changing renderer defaults.
 
 The 2026-08-26 active-patch audit found a critical Box86 Wayland listener ABI
-defect. Its patch 23 runtime fix is a separate candidate, not production; read
+defect. Its patches 23+24 runtime fix is a separate candidate, not production; read
 `docs/briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md` before changing
 Box86 or promoting it.
 
@@ -110,8 +110,8 @@ Do not mix the Wine 11.0 tree with the older CrossOver Android source tree.
 - `box86-patches/17-native-wayland-vulkan-bridge.patch` adds the FINALPLAY16
   Vulkan/Wayland bridge; patches 18--21 record diagnostics, the verified fused
   DXT bridge and its counter-free FINALPLAY17 production entry. Patch 22 fixes
-  the clean-build graph without changing production bytes; patch 23 is the
-  unpromoted Wayland listener ABI candidate.
+  the clean-build graph without changing production bytes; patches 23+24 are
+  the unpromoted Wayland listener ABI candidate.
 - FINALPLAY17 D3D8 is base+DXVK patch 02 with `b_ndebug=true`; D3D9 is
   base+patches 01, 02 and 08 with `b_ndebug=false`. Do not collapse the stages:
   only the split recorded in `device/FINALPLAY.lock` reproduces both DLLs.

@@ -1,6 +1,6 @@
-# Box86 patch 23 Wayland-listener ABI candidate, 2026-08-25.
+# Box86 patches 23+24 Wayland-listener ABI candidate, 2026-08-26.
 # This is FINALPLAY17_DXVK_FREEZE.manifest with only /usr/bin/box86 changed.
-/usr/bin/box86	750227508181a929a3973e6d65bb70d60b7c42b60542cb16b021e192815ccf24	box86-fp23-wayland-abi-candidate
+/usr/bin/box86	d6cafba667d16f6227c0ffd5437e7ac52253dd46624c2edfcbbd36ca3843188b	box86-fp24-wayland-atomic-candidate
 /storage/roms/ports/MGS2-Substance/game/bin/d3d8.dll	22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa	d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
 /storage/roms/ports/MGS2-Substance/wineprefix11-x86-dxvk-test/drive_c/windows/system32/d3d9.dll	4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f334c690650	d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll
 /usr/lib/wine/i386-windows/dmsynth.dll	b4ec2cd09f26a670eb8206d708f864597d2acde84ff1788732574c116b6baed2	dmsynth_p34_interp_reset.dll

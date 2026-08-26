@@ -23,7 +23,7 @@ The complete device capture, source hashes and rollback proof are in
 A post-promotion audit on 26 August fixed launcher crash attribution and a
 Box86 clean-build dependency without changing the production runtime bytes. It
 also found a critical Wine 11 Wayland-listener ABI defect in the Box86 wrapper.
-That runtime fix is isolated as patch 23 and is **not production** pending a
+That runtime fix is isolated as patches 23+24 and is **not production** pending a
 longer soak. See
 `docs/briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md`.
 
@@ -60,8 +60,11 @@ launchers:
 Unknown renderer names fail instead of falling through.
 
 Each fixed runtime launcher writes one bounded post-exit record to
-`/tmp/mgs2-play-exit.log`. A thermal-guard SIGTERM is named separately from an
-ordinary Wine/game exit, and teardown no longer signals a PID after reaping it.
+`/tmp/mgs2-play-exit.log` with the route, Wine PID and real `wait` status.
+Production and both fixed rollback routes have no thermal polling and send no
+automatic temperature-triggered signal. Teardown also no longer signals a PID
+after reaping it. The explicit DXVK research harness retains its separate
+emergency guard for unattended measurements.
 
 ## Production identity
 
@@ -102,8 +105,9 @@ Box86:
   verified fused bridge; patch 21 selects its counter-free production entry;
 - patch 22 fixes only the clean parallel-build dependency for generated
   `arm_printer.c` and reproduces the existing production hash;
-- patch 23 completes the Wine 11 Wayland listener ABI. It is recorded as a
-  candidate, has a separate manifest/launcher and is not selected normally.
+- patch 23 completes the Wine 11 Wayland listener ABI; patch 24 publishes the
+  affected callback slots with release/acquire ordering. They are recorded as a
+  candidate, have a separate manifest/launcher and are not selected normally.
 
 DXVK-Sarek:
 

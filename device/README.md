@@ -10,9 +10,12 @@
 - `FINALPLAY17_DXVK_FREEZE.manifest`, `FINALPLAY16_DXVK.manifest` and
   `FINALPLAY.manifest` — fail-closed live identity gates.
 
-The play launchers leave one bounded cold-path exit record in
-`/tmp/mgs2-play-exit.log`. It distinguishes an emergency thermal SIGTERM from
-an ordinary process exit without logging from a render or audio thread.
+The three fixed play launchers leave one bounded cold-path exit record in
+`/tmp/mgs2-play-exit.log` with their route, Wine PID and real `wait` status.
+They do not poll temperature and do not automatically signal the game. The
+explicit `launch-dxvk-play.sh` research harness retains an emergency thermal
+guard for unattended experiments; it is not reachable from the normal
+PortMaster selector. Neither path logs from a render or audio thread.
 
 The RG353VS also has an external wrapper at
 `/storage/roms/ports/MGS2-Substance.sh`. When deploying a selector or launcher,
@@ -26,10 +29,11 @@ They set `MGS2_RESEARCH_RUN`, select a matched binary set and then delegate to
 the appropriate full launcher. They are retained because the briefs reference
 their exact controls and rollback boundaries.
 
-`launch-dxvk-wayland-abi-candidate.sh` is the fail-closed Box86 patch-23 route.
-It changes only Box86 and verifies `BOX86_WAYLAND_ABI_CANDIDATE.manifest`; it is
-not selected by the normal PortMaster entry while the candidate remains under
-soak.
+`launch-dxvk-wayland-abi-candidate.sh` is the fail-closed Box86 patches 23+24
+route. It changes only Box86 and verifies
+`BOX86_WAYLAND_ABI_CANDIDATE.manifest`; it is not selected by the normal
+PortMaster entry while the candidate remains under soak. The exact listener ABI
+gate is `harness/wayland/run_device_wayland_abi_gate.sh`.
 
 `launch.sh` is the older general laboratory harness. It is not production.
 

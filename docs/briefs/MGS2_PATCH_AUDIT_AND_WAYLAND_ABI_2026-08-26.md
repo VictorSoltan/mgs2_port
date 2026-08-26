@@ -9,9 +9,9 @@ fail-closed candidate:
 
 | Area | Finding | Resolution | Production effect |
 |---|---|---|---|
-| Box86 Wayland wrapper | guest x86 callback tables could be installed directly in native armhf libwayland; four Wine 11 listener classes were missing and two callback signatures were wrong | patch 23 bridges the exact Wine 11 listeners, serializes slot allocation and rejects unknown/exhausted registrations | separate candidate; not selected by the normal entry |
+| Box86 Wayland wrapper | guest x86 callback tables could be installed directly in native armhf libwayland; four Wine 11 listener classes were missing, two callback signatures were wrong and slot publication had no explicit cross-thread ordering | patch 23 bridges and fails closed; patch 24 adds release/acquire publication for the affected callback slots | separate candidate; not selected by the normal entry |
 | Box86 build graph | clean parallel builds raced `arm_printer.c` generation | patch 22 adds the missing `dynarec_arm -> PRINTER` dependency | build-order-only; reproduced the existing production Box86 hash |
-| launcher teardown | thermal SIGTERM and a crash were indistinguishable; cleanup could signal a reaped/reused PID; FIFO creation used `mktemp -u` | bounded exit record, cleared PID after reap, private temporary FIFO directory | deployed to all three fixed runtime paths |
+| launcher teardown | thermal SIGTERM and a crash were indistinguishable; cleanup could signal a reaped/reused PID; FIFO creation used `mktemp -u` | thermal polling removed from the three fixed runtimes; bounded real exit status and cleared PID after reap; race-safe guard retained only by the research launcher | production no longer polls temperature or automatically signals the game |
 | provenance gates | DXVK was not rebuilt by the verifier; Box86 comparison hid every live-only file; `.env` overrode explicit caller variables | exact two-stage DXVK verifier, strict Box86 comparison, caller-over-`.env` precedence | release gates hardened |
 | DirectSound probe | the default-off write probe calculated the first segment peak but discarded it | Wine patch 03 folds both segments into the maximum | research source only; no production DLL changed |
 
@@ -32,19 +32,28 @@ proves the later exit.
 
 The old thermal guard silently sent SIGTERM at 88 C and discarded `wait`'s
 status, so a deliberate emergency stop became observationally identical to an
-application exit after cleanup. The fixed launchers write exactly one cold-path
-record to `/tmp/mgs2-play-exit.log`:
+application exit after cleanup. It is now absent from FINALPLAY17 and both fixed
+rollback launchers: production does not poll a thermal zone and does not send an
+automatic temperature-triggered signal. Those launchers write exactly one
+cold-path record to `/tmp/mgs2-play-exit.log` after the game has exited:
 
 ```text
-timestamp launcher=<route> pid=<pid> status=<wait-status> reason=process_exit
-timestamp launcher=<route> pid=<pid> status=<wait-status> reason=thermal_guard temp_mc=<temperature>
+timestamp launcher=<route> pid=<pid> status=<wait-status>
 ```
 
-They do not add render/audio-thread logging. A production smoke run reached the
-renderer, passed `18/18` live identity, stayed alive for 30 seconds and recorded
-the externally requested SIGTERM as status 143. Teardown left zero game
-processes and zero MGS2 bind mounts. The same behavior was observed after the
-full candidate gameplay witness.
+Cleanup clears the Wine PID immediately after `wait`, so it cannot signal a
+reaped and possibly reused PID. This adds no render/audio-thread logging. Before
+the thermal code was removed, a production smoke reached the renderer, passed
+`18/18` live identity, stayed alive for 30 seconds and preserved an externally
+requested SIGTERM as status 143; teardown left zero game processes and zero MGS2
+bind mounts. Shell/reconstruction gates cover the final no-monitor launcher
+revision; that exact revision still needs its normal device smoke after deploy.
+
+`device/launch-dxvk-play.sh` is an explicit research harness and retains the
+88 C emergency guard for unattended experiments. There the reason file is
+per-Wine PID, the monitor is joined before reading it and the record says
+`requested_stop` rather than claiming a proved cause. It cannot be selected by
+the normal PortMaster entry.
 
 ## Critical Wayland listener ABI defect
 
@@ -74,11 +83,19 @@ many arguments. Patch 23 now:
 - returns `-1` for an unknown proxy or exhausted callback table rather than
   installing an invalid/NULL native listener.
 
+Wine uses a blocking Wayland event-dispatch loop while clipboard and surface
+paths can install listeners elsewhere. The patch-23 mutex excluded concurrent
+slot writers, but its ARM callback stubs still loaded plain global pointers.
+Patch 24 makes the six corrected/added listener references C11 atomics: a release
+store publishes the guest callback table and each native callback uses an
+acquire load. Lookup remains relaxed under the patch-23 mutex, so callbacks do
+not take a lock.
+
 The rebuilt candidate is:
 
 ```text
-box86-fp23-wayland-abi-candidate
-sha256 750227508181a929a3973e6d65bb70d60b7c42b60542cb16b021e192815ccf24
+box86-fp24-wayland-atomic-candidate
+sha256 d6cafba667d16f6227c0ffd5437e7ac52253dd46624c2edfcbbd36ca3843188b
 ```
 
 `device/BOX86_WAYLAND_ABI_CANDIDATE.manifest` differs from the 18-row
@@ -99,11 +116,44 @@ candidate repeat or three subsequent runs. The final hash above then passed:
   slot-exhaustion message, and no thermal stop;
 - clean status-143 external termination, zero remaining processes and mounts.
 
-The private on-device witness remains under
+That visual witness used the patch-23 hash. It is evidence for patch 23, not for
+the later atomic-publication binary. The private on-device witness remains under
 `/storage/roms/ports/ablogs/box86-wayland-abi-autoload-20260825`; it is ignored
-because it contains game imagery. Patch 23 is not promoted from this one visual
-session. `harness/make_release.sh` refuses to produce a production bundle while
-the lock contains `box86_candidate_patch_23`.
+because it contains game imagery.
+
+The final patch-24 hash passed a purpose-built Linux i386 client through Box86's
+native armhf libwayland wrapper on the RG353VS. This is a callback test, not a
+normal game smoke. `harness/wayland/run_device_wayland_abi_gate.sh` produced:
+
+```text
+observer: data_offer=2 offer=2 selection=4
+source:   source_send=1 source_cancelled=1
+receive:  rc=0 data_offer=1 offer=1 selection=1
+exhaust:  first_ten=10 eleventh=-1
+window:   xdg_configure=2 keyboard_keymap=1 keyboard_key=2
+normal callbacks: 0 unknown-listener, slot-exhaustion or crash matches
+targeted_gate=PASS
+```
+
+The two exhaustion warnings are expected only in the synthetic overflow mode;
+all seven probe processes returned zero and none remained. The standard
+`wl_data_source` fallback was registration/overflow tested even though Sway's
+advertised wlr-data-control route handles the live clipboard events. The p24
+binary was rebuilt twice with the pinned epoch and reproduced its hash byte for
+byte. It is still not production: `harness/make_release.sh` refuses a production
+bundle while either `box86_candidate_patch_23` or `box86_candidate_patch_24`
+remains in the lock.
+
+The same final p24 hash also passed a normal-game witness through the explicit
+research launcher: correct `LOAD GAME` route through rows 09, 08 and 07, a
+visually correct scene, four walking bursts, four actions, 14 non-empty
+screenshots, `18/18` live identity and exactly one game instance. Replacing and
+reading the clipboard while the game stayed live exercised the source send and
+cancel callbacks successfully. Eighteen consecutive 50-second observations
+reached process elapsed time 1101 seconds with the same PID and no crash,
+unknown-listener or slot-exhaustion line. The intended 30-minute observation was
+interrupted at that point, so this is not recorded as a completed 30-minute soak;
+suspend/resume also remains untested.
 
 ## Build and provenance defects
 
@@ -146,6 +196,26 @@ The Box86 comparison formerly removed every line beginning `Only in <live>`,
 which made unrecorded source files invisible to the check. It now excludes only
 named generated products. Reconstruction uses `git archive`, so verification
 does not modify the live checkout's Git worktree metadata.
+
+The first hardening still piped `diff` into `wc`, which allowed a status greater
+than one to be replaced by `wc`'s success. `harness/fail_closed_diff.sh` now
+captures stdout and stderr and preserves all three `diff` outcomes: identical,
+different and comparison failure. Its regression proves an equal tree returns
+0, a live-only `.c` returns 1 and names the file, and a missing input tree
+returns 2 with a diagnostic. The island's two generated identity headers now
+have a separate exact regeneration gate; this also exposed and fixed a stale
+launcher parser in `build_island_objects.sh` after the renderer selector split.
+
+The first clean p24 Box86 build also exposed an unrecorded CMake-cache input: it
+omitted the ROCKNIX compatibility define and eight legacy-libm linker wraps, then
+required `GLIBC_2.43` and could not start on the device. The bad test binary was
+replaced. `box86_cflags` and `box86_ldflags` are now pinned in
+`device/FINALPLAY.lock`; both `verify_rebuild.sh --build` and `make_release.sh`
+reconfigure CMake with those exact values and require all 8/8 wraps. Two manual
+canonical rebuilds reproduced the p24 candidate hash. The final integrated
+`verify_rebuild.sh --build` gate also passed: exact WineD3D bytes, both generated
+island headers, exact candidate Box86 bytes and all 8/8 ROCKNIX-compatible libm
+wraps.
 
 Explicit environment variables now take precedence over `.env` in the Wine,
 Box86 and DXVK verifier/release paths. This was tested by forcing `WORK_DIR` to
@@ -190,19 +260,31 @@ this audit was deployed.
 These are static conclusions. Performance and runtime correctness claims still
 require the RG353VS gates described in `docs/DEVICE.md`.
 
+## Critical open item: display_lock
+
+The direct native-mutex mode remains production because it closed the measured
+shadow-pool publication failure for `session_lock`. It did **not** prove that the
+separate `display_lock` self-owner deadlock is fixed. That signature remains
+critical-open at the exact object/RVA and bounded capture described in
+`MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md`. No new broad `wchan`
+sampler or hot-thread logger was added, and no speculative mutex change was
+promoted without the missing captured call chain.
+
 ## Current decision and rollback
 
 Normal production remains FINALPLAY17 with the original Box86 hash
 `51dfcc...`. Patch 22 records a build dependency without changing those bytes;
-patch 23 remains opt-in. The rollback commands are unchanged:
+patches 23+24 remain opt-in. The rollback commands are unchanged:
 
 ```sh
 MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
-The next promotion gate for patch 23 is a longer normal-entry soak covering
-clipboard/focus transitions and suspend/resume, followed by live 18/18 identity
-and teardown checks. A new crash should be classified first from
+The targeted callback/slot gate for patches 23+24 is complete, and the normal
+p24 witness covered load, movement, live identity and a clipboard replacement.
+The remaining promotion gate is a completed longer normal-entry soak including
+focus transitions and suspend/resume, followed by final live identity and
+teardown checks. A new crash should be classified first from
 `/tmp/mgs2-play-exit.log`, the Wine output and the kernel log; the earlier Mali
 notification alone must not be reused as a diagnosis.

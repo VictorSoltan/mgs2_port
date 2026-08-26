@@ -76,9 +76,12 @@ def focus_game():
         root = json.loads(tree)
     except ValueError:
         return False
+    focus_terms = [term.strip().upper() for term in
+                   os.environ.get("MGS2_FOCUS_MATCH", "METAL GEAR|MGS2").split("|")
+                   if term.strip()]
     for node in walk(root):
         name = (node.get("name") or "") + " " + (node.get("app_id") or "")
-        if "METAL GEAR" in name.upper() or "MGS2" in name.upper():
+        if any(term in name.upper() for term in focus_terms):
             subprocess.run(["swaymsg", "[con_id=%d]" % node["id"], "focus"],
                            capture_output=True, timeout=10)
             return True
