@@ -645,10 +645,21 @@ FREQ_ARR=($FREQ_STEPS)
 set_cpu_cap "${FREQ_ARR[0]}"
 
 cd "$GAMEDIR/game/bin" || exit 1
-if [ -x /usr/bin/gptokeyb ] && [ -r "$GAMEDIR/mgs2.gptk" ]; then
-    /usr/bin/gptokeyb "$EXE" -c "$GAMEDIR/mgs2.gptk" >/tmp/mgs2-gptokeyb.log 2>&1 &
+start_gptokeyb() {
+    [ -r "$GAMEDIR/mgs2.gptk" ] || return 0
+    if [ -n "${GPTOKEYB:-}" ]; then
+        # PortMaster supplies the device/OS-specific kill-mode option.
+        # shellcheck disable=SC2086
+        $GPTOKEYB "$EXE" -c "$GAMEDIR/mgs2.gptk" >/tmp/mgs2-gptokeyb.log 2>&1 &
+    elif [ -x /usr/bin/gptokeyb ]; then
+        /usr/bin/gptokeyb -1 "$EXE" -c "$GAMEDIR/mgs2.gptk" >/tmp/mgs2-gptokeyb.log 2>&1 &
+    else
+        echo "MGS2: gptokeyb unavailable; Start+Select exit is disabled" >&2
+        return 0
+    fi
     GPTOKEYB_PID=$!
-fi
+}
+start_gptokeyb
 # MGS2_TRACE=1 captures the game's own output to a file so a fault seen while
 # playing normally can be diagnosed afterwards. The automated harness cannot be
 # used for this: it mashes the confirm button to reach gameplay quickly, which

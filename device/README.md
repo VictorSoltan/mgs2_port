@@ -9,6 +9,9 @@
 - `launch-play-wined3d-fp15.sh` — byte-exact rollback runtime.
 - `FINALPLAY17_DXVK_FREEZE.manifest`, `FINALPLAY16_DXVK.manifest` and
   `FINALPLAY.manifest` — fail-closed live identity gates.
+- `mgs2.gptk` — tracked controller-to-keyboard mapping. The fixed launchers use
+  PortMaster's `$GPTOKEYB` command, which arms the device-specific Start+Select
+  exit mode; a bare-system fallback passes explicit `-1`.
 
 The three fixed play launchers leave one bounded cold-path exit record in
 `/tmp/mgs2-play-exit.log` with their route, Wine PID and real `wait` status.

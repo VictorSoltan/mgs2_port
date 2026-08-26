@@ -66,6 +66,14 @@ automatic temperature-triggered signal. Teardown also no longer signals a PID
 after reaping it. The explicit DXVK research harness retains its separate
 emergency guard for unattended measurements.
 
+The tracked `device/mgs2.gptk` mapping is started through PortMaster's
+`$GPTOKEYB` command. This carries the platform kill-mode option (`-1` on the
+tested ROCKNIX image), making Start+Select terminate the game immediately. The
+bare `/usr/bin/gptokeyb` fallback also passes `-1` explicitly. A live RG353VS
+test observed Select and Start in one input report, exited FINALPLAY17 with
+status 143 and left no game/helper process or MGS2 bind mount; the launcher lock
+was available and the CPU/GPU governors were restored.
+
 ## Production identity
 
 `device/FINALPLAY17_DXVK_FREEZE.manifest` is the authoritative 18-row identity gate.

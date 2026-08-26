@@ -3,7 +3,7 @@
 ## Result
 
 The active FINALPLAY17 source and release chain was audited from its pinned
-bases through the bytes selected by the device launchers. Four defects were
+bases through the bytes selected by the device launchers. Five defects were
 proved and fixed, and one critical runtime fix was deliberately left as a
 fail-closed candidate:
 
@@ -12,6 +12,7 @@ fail-closed candidate:
 | Box86 Wayland wrapper | guest x86 callback tables could be installed directly in native armhf libwayland; four Wine 11 listener classes were missing, two callback signatures were wrong and slot publication had no explicit cross-thread ordering | patch 23 bridges and fails closed; patch 24 adds release/acquire publication for the affected callback slots | separate candidate; not selected by the normal entry |
 | Box86 build graph | clean parallel builds raced `arm_printer.c` generation | patch 22 adds the missing `dynarec_arm -> PRINTER` dependency | build-order-only; reproduced the existing production Box86 hash |
 | launcher teardown | thermal SIGTERM and a crash were indistinguishable; cleanup could signal a reaped/reused PID; FIFO creation used `mktemp -u` | thermal polling removed from the three fixed runtimes; bounded real exit status and cleared PID after reap; race-safe guard retained only by the research launcher | production no longer polls temperature or automatically signals the game |
+| controller exit | launchers called `gptokeyb` with a positional executable name but no kill-mode option, so Start+Select depended on the intermittent OS confirmation handler | use PortMaster's `$GPTOKEYB` command prefix; explicit `-1` fallback; track and release-gate `mgs2.gptk` | Start+Select terminates the game directly on the RG353VS |
 | provenance gates | DXVK was not rebuilt by the verifier; Box86 comparison hid every live-only file; `.env` overrode explicit caller variables | exact two-stage DXVK verifier, strict Box86 comparison, caller-over-`.env` precedence | release gates hardened |
 | DirectSound probe | the default-off write probe calculated the first segment peak but discarded it | Wine patch 03 folds both segments into the maximum | research source only; no production DLL changed |
 
@@ -47,13 +48,62 @@ the thermal code was removed, a production smoke reached the renderer, passed
 `18/18` live identity, stayed alive for 30 seconds and preserved an externally
 requested SIGTERM as status 143; teardown left zero game processes and zero MGS2
 bind mounts. Shell/reconstruction gates cover the final no-monitor launcher
-revision; that exact revision still needs its normal device smoke after deploy.
+revision. After deploy, its normal device smoke passed the `18/18` live identity
+gate, reached the renderer and exited cleanly through the controller test below.
 
 `device/launch-dxvk-play.sh` is an explicit research harness and retains the
 88 C emergency guard for unattended experiments. There the reason file is
 per-Wine PID, the monitor is joined before reading it and the record says
 `requested_stop` rather than claiming a proved cause. It cannot be selected by
 the normal PortMaster entry.
+
+## Start+Select exit defect
+
+The launchers used this form:
+
+```sh
+/usr/bin/gptokeyb "$EXE" -c "$GAMEDIR/mgs2.gptk"
+```
+
+That starts keyboard/controller mapping, but the current parser does not treat
+the positional executable name as permission to terminate it. Kill mode
+requires `-1 <application>` (or its `-k` equivalent). Consequently the apparent
+Start+Select behavior came from ROCKNIX's global `Ending game?` handler, not from
+the port, and could appear intermittent depending on which handler received the
+combination.
+
+The PortMaster control environment already exposes the correct platform command
+prefix. On the tested image, `$GPTOKEYB` expands to the PortMaster binary plus
+`-1`. All five full launchers now prefer the documented form:
+
+```sh
+$GPTOKEYB "$EXE" -c "$GAMEDIR/mgs2.gptk"
+```
+
+If that environment variable is unavailable, the `/usr/bin/gptokeyb` fallback
+passes `-1` explicitly. `device/mgs2.gptk` is now tracked, and
+`harness/test_gptokeyb_launchers.sh` prevents an active launcher or release
+deploy from silently dropping kill mode or the config.
+
+The executable's long name was tested as a possible `killall` mismatch and
+rejected: the full `mgs2_sse_rg353vs_port.exe` target resolved successfully on
+the device, while the truncated Linux `comm` name did not. No executable rename
+was needed.
+
+The deployed FINALPLAY17 command line was observed as:
+
+```text
+/roms/ports/PortMaster/gptokeyb -1 mgs2_sse_rg353vs_port.exe -c /storage/roms/ports/MGS2-Substance/mgs2.gptk
+```
+
+A bounded, non-grabbing `evtest` observation saw `BTN_SELECT=1` and
+`BTN_START=1` in the same input report. Pressing the combination then closed the
+game immediately, with no confirmation dialog. The launcher recorded status
+143. Afterwards there were zero game, Wine, Box86 or gptokeyb processes, zero
+MGS2 bind mounts, the `flock` lock was immediately available, and CPU/GPU
+governors were restored to `ondemand`/`simple_ondemand`. The device-side
+pre-change files remain available with suffix
+`.bak-20260826-gptokeyb-killmode`; Git revert is the source rollback.
 
 ## Critical Wayland listener ABI defect
 

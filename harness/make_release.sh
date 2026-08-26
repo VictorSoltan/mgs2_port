@@ -16,7 +16,7 @@
 #   collect into release/NAME/
 #   point the WineD3D production launcher at the names just produced
 #   generate FINALPLAY.manifest from the ELEVEN files that launcher mounts
-#   (--deploy) copy exactly those files, and the launcher, and nothing else
+#   (--deploy) copy exactly those files, the launchers and controller config
 #
 # It builds from the live tree, not from a fresh checkout, and that is sound only
 # because step one proves the live tree is byte-identical to the reconstruction.
@@ -128,7 +128,12 @@ sh "$REPO/harness/verify_rebuild.sh" >/dev/null || {
     echo "run: harness/verify_rebuild.sh --refresh, inspect the diff, commit it" >&2
     exit 1
 }
+sh "$REPO/harness/test_gptokeyb_launchers.sh" >/dev/null || {
+    echo "gptokeyb launcher gate failed -- refusing to ship a port without reliable Start+Select exit" >&2
+    exit 1
+}
 echo "ok     live trees match the pinned bases plus the complete patches"
+echo "ok     launchers arm PortMaster Start+Select exit mode"
 
 echo "== 2. WineD3D =="
 ( cd "$WINE_BUILD" && make -j8 i386_LDFLAGS="$LD_DET" \
@@ -273,8 +278,10 @@ if [ "$DEPLOY" = "--deploy" ]; then
     # The device carries far more scripts than device/ does; nothing is deleted,
     # only the ones on record are overwritten.
     scp -q "$REPO"/device/*.sh "$DEV:$GAMEDIR/"
+    scp -q "$REPO/device/mgs2.gptk" "$DEV:$GAMEDIR/mgs2.gptk"
     ssh -o BatchMode=yes "$DEV" "cd $GAMEDIR && chmod +x box86-$NAME *.sh"
     echo "       $(ls "$REPO"/device/*.sh | wc -l) launchers copied"
+    echo "       mgs2.gptk copied"
     echo "ok     deployed; $LAUNCHER_NAME on the device mounts $NAME"
 fi
 echo

@@ -592,10 +592,25 @@ if [ -n "${MGS2_DXVK_D3D8_DLL:-}" ]; then
     sleep 3
 fi
 
-if [ -x /usr/bin/gptokeyb ] && [ -r "$GAMEDIR/mgs2.gptk" ]; then
-    /usr/bin/gptokeyb "$EXE" -c "$GAMEDIR/mgs2.gptk" 9>&- >/tmp/mgs2-gptokeyb.log 2>&1 &
+start_gptokeyb() {
+    [ -r "$GAMEDIR/mgs2.gptk" ] || return 0
+    if [ -n "${GPTOKEYB:-}" ]; then
+        # PortMaster supplies a command prefix including the device/OS-specific
+        # kill-mode option (on ROCKNIX: .../gptokeyb -1). Word splitting here
+        # is intentional and is the documented PortMaster calling convention.
+        # shellcheck disable=SC2086
+        $GPTOKEYB "$EXE" -c "$GAMEDIR/mgs2.gptk" 9>&- >/tmp/mgs2-gptokeyb.log 2>&1 &
+    elif [ -x /usr/bin/gptokeyb ]; then
+        # The positional application name alone does not arm kill mode in the
+        # current gptokeyb parser. Keep an explicit fallback for bare systems.
+        /usr/bin/gptokeyb -1 "$EXE" -c "$GAMEDIR/mgs2.gptk" 9>&- >/tmp/mgs2-gptokeyb.log 2>&1 &
+    else
+        echo "MGS2: gptokeyb unavailable; Start+Select exit is disabled" >&2
+        return 0
+    fi
     GPTOKEYB_PID=$!
-fi
+}
+start_gptokeyb
 
 if [ "$DXVK_WINE_MODE" = direct32 ] && type taskset >/dev/null 2>&1; then
     taskset -c 0-3 box86 /usr/lib/wine/i386-unix/wine "$EXE" 9>&- &

@@ -104,6 +104,10 @@ MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 
 All three fixed runtime paths fail closed when live file hashes differ from their
 manifests. A filename is never accepted as proof of what is loaded.
+`device/mgs2.gptk` is the tracked controller mapping. Active launchers use
+PortMaster's `$GPTOKEYB` command (or an explicit `-1` bare-system fallback), so
+Start+Select terminates the game directly instead of relying on the OS-level
+confirmation dialog.
 
 ## Rebuilding
 
@@ -131,6 +135,7 @@ After configuring `.env`, verify the pinned reconstruction:
 ```sh
 ./harness/verify_rebuild.sh
 ./harness/verify_dxvk_rebuild.sh
+./harness/test_gptokeyb_launchers.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross
