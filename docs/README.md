@@ -6,6 +6,9 @@ problem rather than reading by filename alone.
 
 ## Current production
 
+- [Active patch audit and Box86 Wayland ABI candidate](briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md)
+  — critical listener-ABI fix held as a fail-closed candidate, launcher crash
+  attribution, clean-build fix and exact Wine/Box86/DXVK reconstruction gates.
 - [FINALPLAY17 freeze-reduction production](briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md)
   — corrected symmetric A-B-A-B, deterministic bundle, 18/18 live identity,
   normal-entry witness and rollback.

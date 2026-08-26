@@ -680,7 +680,7 @@ fi
 WINE_PID=$!
 
 thermal_guard() {
-    local temp idx n cur fifo
+    local temp idx n cur guard_dir fifo
     n=${#FREQ_ARR[@]}
     idx=0
     # Poll without forking.  The old loop ran `cat` and `sleep` twice a second and
@@ -691,10 +691,13 @@ thermal_guard() {
     # reaction time is what keeps the console below its reset point.
     #
     # fd 8, not 9 -- fd 9 is the instance lock this script holds through flock.
-    fifo=$(mktemp -u /tmp/mgs2-guard.XXXXXX)
-    if mkfifo "$fifo" 2>/dev/null; then
-        exec 8<>"$fifo"
-        rm -f "$fifo"
+    if guard_dir=$(mktemp -d /tmp/mgs2-guard.XXXXXX); then
+        fifo="$guard_dir/tick"
+        if mkfifo "$fifo" 2>/dev/null; then
+            exec 8<>"$fifo"
+            rm -f "$fifo"
+        fi
+        rmdir "$guard_dir" 2>/dev/null || true
     fi
     while kill -0 "$WINE_PID" 2>/dev/null; do
         temp=0

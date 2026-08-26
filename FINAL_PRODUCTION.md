@@ -20,6 +20,13 @@ result, not a global FPS claim; independent game/read stalls remain.
 The complete device capture, source hashes and rollback proof are in
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`.
 
+A post-promotion audit on 26 August fixed launcher crash attribution and a
+Box86 clean-build dependency without changing the production runtime bytes. It
+also found a critical Wine 11 Wayland-listener ABI defect in the Box86 wrapper.
+That runtime fix is isolated as patch 23 and is **not production** pending a
+longer soak. See
+`docs/briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md`.
+
 ## Launch and rollback
 
 Normal launch:
@@ -51,6 +58,10 @@ launchers:
 - `device/launch-play-wined3d-fp15.sh`.
 
 Unknown renderer names fail instead of falling through.
+
+Each fixed runtime launcher writes one bounded post-exit record to
+`/tmp/mgs2-play-exit.log`. A thermal-guard SIGTERM is named separately from an
+ordinary Wine/game exit, and teardown no longer signals a PID after reaping it.
 
 ## Production identity
 
@@ -88,15 +99,23 @@ Box86:
 - FINALPLAY16 Wayland/Vulkan bridge:
   `box86-patches/17-native-wayland-vulkan-bridge.patch`;
 - FINALPLAY17 DXT record: patches 18--20 contain the default-off diagnostics and
-  verified fused bridge; patch 21 selects its counter-free production entry.
+  verified fused bridge; patch 21 selects its counter-free production entry;
+- patch 22 fixes only the clean parallel-build dependency for generated
+  `arm_printer.c` and reproduces the existing production hash;
+- patch 23 completes the Wine 11 Wayland listener ABI. It is recorded as a
+  candidate, has a separate manifest/launcher and is not selected normally.
 
 DXVK-Sarek:
 
 - source: `https://github.com/zeyadadev/DXVK-Sarek`;
 - tag: `v1.11.1-mali-fix`;
 - commit: `617958fe1cf2b10e06fa751d3e40bd765dcf2cc6`;
-- production compatibility changes: `dxvk-patches/01-*.patch`,
-  `dxvk-patches/02-*.patch` and unconditional exact-pair dedupe patch 08;
+- D3D8 production stage: base plus `dxvk-patches/02-*`, Meson
+  `b_ndebug=true`;
+- D3D9 production stage: base plus `dxvk-patches/01-*`, `02-*` and
+  unconditional exact-pair dedupe patch 08, Meson `b_ndebug=false`;
+- the per-DLL epochs, tool versions, submodule commits and exact hashes are in
+  `device/FINALPLAY.lock`; `harness/verify_dxvk_rebuild.sh` reproduces both;
 - `dxvk-patches/03-memory-only-present-counter.patch` is diagnostic-only.
 
 Wine:
@@ -104,6 +123,8 @@ Wine:
 - base: pristine Wine 11.0, hash in `device/FINALPLAY.lock`;
 - complete FINALPLAY15 source delta:
   `wine-patches/FINALPLAY15-wine-complete.patch`;
+- patches 01--03 after that boundary are default-off research instrumentation
+  and its audit cleanup; no audit-built Wine DLL was deployed;
 - the FINALPLAY17 audio DLLs are the same byte-identified components used by the
   prior production route.
 

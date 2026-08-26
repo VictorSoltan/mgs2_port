@@ -118,7 +118,10 @@ Pinned inputs:
 The complete FINALPLAY15 Wine/Box86 patches are the reconstruction boundary.
 FINALPLAY16 added `box86-patches/17-native-wayland-vulkan-bridge.patch`.
 FINALPLAY17 additionally records the verified fused-DXT path in Box86 patches
-18--21 and exact state-cache mapping dedupe in DXVK patch 08. The memory-only
+18--21; patch 22 fixes its clean-build graph without changing production bytes.
+Box86 patch 23 is an unpromoted, fail-closed Wine 11 Wayland-listener ABI
+candidate. FINALPLAY17 also uses exact state-cache mapping dedupe in DXVK patch
+08. The memory-only
 present counter and pipeline timeline are diagnostic and are not part of the
 production D3D9 DLL.
 
@@ -126,6 +129,7 @@ After configuring `.env`, verify the pinned reconstruction:
 
 ```sh
 ./harness/verify_rebuild.sh
+./harness/verify_dxvk_rebuild.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross

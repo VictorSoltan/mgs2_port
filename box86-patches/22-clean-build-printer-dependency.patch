@@ -1,0 +1,24 @@
+Box86 patch 22 -- make a clean parallel build generate arm_printer.c first.
+
+Apply after patches 17--21 on top of the FINALPLAY15 complete patch.
+
+The pinned upstream CMake graph makes the final box86 executable depend on the
+PRINTER custom target, but dynarec_arm compiles the generated arm_printer.c
+before the executable is linked.  A stale source-tree copy hid the missing
+edge.  After `make clean`, a parallel build raced directly into:
+
+    cc1: fatal error: src/dynarec/arm_printer.c: No such file or directory
+
+Make the consumer depend on the generator.  This changes build ordering only;
+it does not change generated source or runtime code.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -683,6 +683,7 @@ if(ARM_DYNAREC)
+     set(DYNAREC_PASS "${BOX86_ROOT}/src/wrapped/generated/wrapper.h" ${DYNAREC_PASS})
+ 
+     add_library(dynarec_arm OBJECT ${DYNAREC_SRC})
++    add_dependencies(dynarec_arm PRINTER)
+ 
+     add_library(arm_pass0 OBJECT ${DYNAREC_PASS})
+     set_target_properties(arm_pass0 PROPERTIES COMPILE_FLAGS "-DSTEP=0")

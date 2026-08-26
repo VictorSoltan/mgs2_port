@@ -41,6 +41,11 @@ MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 Read `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md` before
 changing renderer defaults.
 
+The 2026-08-26 active-patch audit found a critical Box86 Wayland listener ABI
+defect. Its patch 23 runtime fix is a separate candidate, not production; read
+`docs/briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md` before changing
+Box86 or promoting it.
+
 ## Non-negotiable rules
 
 1. **Measure on the device.** If it was not measured on the RG353VS, call it an
@@ -104,9 +109,13 @@ Do not mix the Wine 11.0 tree with the older CrossOver Android source tree.
   against commit `0579f8b9`.
 - `box86-patches/17-native-wayland-vulkan-bridge.patch` adds the FINALPLAY16
   Vulkan/Wayland bridge; patches 18--21 record diagnostics, the verified fused
-  DXT bridge and its counter-free FINALPLAY17 production entry.
-- `dxvk-patches/01-*`, `02-*` and `08-*` are the FINALPLAY17 DXVK-Sarek delta;
-  the present counter and pipeline timeline remain research-only.
+  DXT bridge and its counter-free FINALPLAY17 production entry. Patch 22 fixes
+  the clean-build graph without changing production bytes; patch 23 is the
+  unpromoted Wayland listener ABI candidate.
+- FINALPLAY17 D3D8 is base+DXVK patch 02 with `b_ndebug=true`; D3D9 is
+  base+patches 01, 02 and 08 with `b_ndebug=false`. Do not collapse the stages:
+  only the split recorded in `device/FINALPLAY.lock` reproduces both DLLs.
+  The present counter and pipeline timeline remain research-only.
 
 When implementation changes are made in an external source tree, export the
 reviewed diff back into this repository. Never treat an unrecorded binary as the

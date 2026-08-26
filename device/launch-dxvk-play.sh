@@ -593,22 +593,30 @@ else
     box64 /usr/bin/wine "$EXE" 9>&- &
 fi
 WINE_PID=$!
+PLAY_WINE_PID=$WINE_PID
+PLAY_EXIT_REASON=/tmp/mgs2-play-exit.reason
+PLAY_EXIT_LOG=/tmp/mgs2-play-exit.log
+: > "$PLAY_EXIT_REASON"
 
 # Improved cooling permits a fixed 1992 MHz target. Keep only the independent
 # emergency cutoff below the observed reset region; there is no frequency
 # ladder in PLAY.
 thermal_guard() {
-    local temp fifo
-    fifo=$(mktemp -u /tmp/mgs2-play-guard.XXXXXX)
-    if mkfifo "$fifo" 2>/dev/null; then
-        exec 8<>"$fifo"
-        rm -f "$fifo"
+    local temp guard_dir fifo
+    if guard_dir=$(mktemp -d /tmp/mgs2-play-guard.XXXXXX); then
+        fifo="$guard_dir/tick"
+        if mkfifo "$fifo" 2>/dev/null; then
+            exec 8<>"$fifo"
+            rm -f "$fifo"
+        fi
+        rmdir "$guard_dir" 2>/dev/null || true
     fi
     while kill -0 "$WINE_PID" 2>/dev/null; do
         temp=0
         read -r temp < /sys/class/thermal/thermal_zone0/temp 2>/dev/null || temp=0
         [ -n "$temp" ] || temp=0
         if [ "$temp" -ge 88000 ]; then
+            printf 'thermal_guard temp_mc=%s\n' "$temp" > "$PLAY_EXIT_REASON"
             kill "$WINE_PID" 2>/dev/null || true
             return
         fi
@@ -621,4 +629,18 @@ thermal_guard() {
 }
 thermal_guard 9>&- &
 THERMAL_PID=$!
-wait "$WINE_PID"
+if wait "$WINE_PID"; then
+    PLAY_EXIT_STATUS=0
+else
+    PLAY_EXIT_STATUS=$?
+fi
+WINE_PID=
+if [ -s "$PLAY_EXIT_REASON" ]; then
+    IFS= read -r PLAY_EXIT_CAUSE < "$PLAY_EXIT_REASON"
+else
+    PLAY_EXIT_CAUSE=process_exit
+fi
+printf '%s launcher=dxvk-research pid=%s status=%s reason=%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$PLAY_WINE_PID" \
+    "$PLAY_EXIT_STATUS" "$PLAY_EXIT_CAUSE" > "$PLAY_EXIT_LOG"
+exit "$PLAY_EXIT_STATUS"

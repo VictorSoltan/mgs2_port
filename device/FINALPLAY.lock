@@ -13,6 +13,7 @@ wine_complete_patch  wine-patches/FINALPLAY15-wine-complete.patch
 wine_files_changed   53 modified, 1 deleted
 wine_research_patch_01 wine-patches/01-wait-census-research-default-off.patch
 wine_research_patch_02 wine-patches/02-sleep0-wait-research-default-off.patch
+wine_research_patch_03 wine-patches/03-dsound-probe-p1-and-c90-cleanup.patch
 
 box86_base_remote    https://github.com/ptitSeb/box86.git
 box86_base_commit    0579f8b9
@@ -23,15 +24,31 @@ box86_production_patch_18 box86-patches/18-vulkan-diagnostics-default-off.patch
 box86_production_patch_19 box86-patches/19-native-dxt-research-default-off.patch
 box86_production_patch_20 box86-patches/20-native-dxt-surface-research-default-off.patch
 box86_production_patch_21 box86-patches/21-native-dxt-surface-production-no-hot-counters.patch
+box86_production_patch_22 box86-patches/22-clean-build-printer-dependency.patch
+box86_candidate_patch_23 box86-patches/23-wayland-wine11-listener-abi-fix.patch
 finalplay17_box86_sha256 51dfcc130b9760970189a67edd8cd78c777c5d69c8b9ec07cfbc5657821d9be9
 
 dxvk_base_remote     https://github.com/zeyadadev/DXVK-Sarek.git
 dxvk_base_tag        v1.11.1-mali-fix
 dxvk_base_commit     617958fe1cf2b10e06fa751d3e40bd765dcf2cc6
-dxvk_production_patch_01 dxvk-patches/01-mali-d3d9-pipeline-compat.patch
-dxvk_production_patch_02 dxvk-patches/02-d3d8-wine-user-driver-init.patch
-dxvk_production_patch_08 dxvk-patches/08-state-cache-mapping-dedupe-production.patch
-dxvk_source_date_epoch 1787659200
+dxvk_spirv_headers_commit 0bcc624926a25a2a273d07877fd25a6ff5ba1cfb
+dxvk_vulkan_headers_commit 85c2334e92e215cce34e8e0ed8b2dce4700f4a50
+# D3D8 and D3D9 are separate build stages.  Treating 01+02+08 as one source
+# stage cannot reproduce the carried-forward D3D8: Meson 1.10 also enables
+# _GLIBCXX_ASSERTIONS unless b_ndebug is explicit.  These rows reproduce both
+# shipped DLLs byte for byte through harness/verify_dxvk_rebuild.sh.
+dxvk_d3d8_patch_02  dxvk-patches/02-d3d8-wine-user-driver-init.patch
+dxvk_d3d8_b_ndebug  true
+dxvk_d3d8_source_date_epoch 1787578049
+dxvk_d3d9_patch_01  dxvk-patches/01-mali-d3d9-pipeline-compat.patch
+dxvk_d3d9_patch_02  dxvk-patches/02-d3d8-wine-user-driver-init.patch
+dxvk_d3d9_patch_08  dxvk-patches/08-state-cache-mapping-dedupe-production.patch
+dxvk_d3d9_b_ndebug  false
+dxvk_d3d9_source_date_epoch 1787659200
+dxvk_meson_version  1.10.1
+dxvk_ninja_version  1.13.2
+dxvk_glslang_version 16.2.0
+finalplay17_d3d8_sha256 22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa
 finalplay17_d3d9_sha256 4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f334c690650
 
 # Builds are byte-reproducible, so the manifest carries exact hashes. These
@@ -41,7 +58,7 @@ finalplay17_d3d9_sha256 4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f33
 #   Box86    SOURCE_DATE_EPOCH           twenty-three, because src/build_info.c
 #                                        prints __DATE__/__TIME__ and the GNU
 #                                        build-id followed the change
-#   DXVK     dxvk_source_date_epoch      PE TimeDateStamp/checksum bytes
+#   DXVK     per-DLL epoch + b_ndebug     PE timestamp and libstdc++ code
 # harness/pe_normalised_sha.py is kept for investigating binaries built before
 # this, but production provenance no longer depends on normalisation.
 source_date_epoch    1756000000

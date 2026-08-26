@@ -1,0 +1,49 @@
+Wine research patch 03 -- repair the bounded DirectSound write probe and clean
+one D3D8 declaration warning found by the production patch audit.
+
+The default-off per-buffer DirectSound probe calculated the peak of Unlock's
+first segment (p1), stored it in a local, and never compared it with the slot
+maximum.  Only the optional wraparound segment p2 influenced the report.  A
+normal one-piece write could therefore be reported as silent.  Fold both
+segments into the same maximum and remove an unused diagnostic name table.
+
+Also move the D3D8 texture declarations above the first statement.  Wine builds
+with -Wdeclaration-after-statement; this is a source-order cleanup only.
+
+Neither change enables instrumentation.  The probe remains behind
+MGS2_DSOUND_PROBE>=3 and must not be used for an ordinary timing run.
+
+--- a/dlls/d3d8/texture.c
++++ b/dlls/d3d8/texture.c
+@@ -1084,11 +1084,11 @@ static const struct wined3d_parent_ops d3d8_texture_wined3d_parent_ops =
+ static HRESULT d3d8_texture_init(struct d3d8_texture *texture, struct d3d8_device *device,
+         const struct wined3d_resource_desc *desc, D3DPOOL pool, unsigned int layer_count, unsigned int level_count)
+ {
+-    /* MGS2: nothing has been uploaded yet, so the first draw must. */
+-    texture->mgs2_content_dirty = TRUE;
+     unsigned int flags = 0;
+     HRESULT hr;
+ 
++    /* MGS2: nothing has been uploaded yet, so the first draw must. */
++    texture->mgs2_content_dirty = TRUE;
+     d3d8_resource_init(&texture->resource);
+     list_init(&texture->rtv_list);
+ 
+--- a/dlls/dsound/mixer.c
++++ b/dlls/dsound/mixer.c
+@@ -490,7 +490,6 @@ static BOOL mgs_dsound_global_probe_on(void)
+ }
+ 
+ static LONG mgs_peak[4];
+-static const char *const mgs_stage_name[4] = { "unlock", "tmp", "vol", "final" };
+ 
+ void mgs_dsound_note(int stage, double peak)
+ {
+@@ -658,6 +657,7 @@ void mgs_probe_buffer_write(void *buf, DWORD buflen, const WAVEFORMATEX *fmt,
+     }
+ 
+     peak = mgs_peak_of(p1, x1, bits, 8);
++    if ((scaled = peak * 100000.0) > st->peak) st->peak = scaled;
+     if ((scaled = mgs_peak_of(p2, x2, bits, 8) * 100000.0) > st->peak) st->peak = scaled;
+     InterlockedIncrement(&st->writes);
+     InterlockedExchangeAdd(&st->kbytes, (x1 + x2) / 1024);

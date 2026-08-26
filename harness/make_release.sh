@@ -44,12 +44,32 @@ set -eu
 NAME="${1:?usage: make_release.sh <name> [--deploy]}"
 DEPLOY="${2:-}"
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+_mgs2_workspace_set=${MGS2_WORKSPACE+x}; _mgs2_workspace=${MGS2_WORKSPACE-}
+_wine_src_set=${WINE_SRC+x};             _wine_src=${WINE_SRC-}
+_wine_build_set=${WINE_BUILD+x};         _wine_build=${WINE_BUILD-}
+_wine_unix_set=${WINE_UNIX_BUILD+x};     _wine_unix=${WINE_UNIX_BUILD-}
+_box86_build_set=${BOX86_BUILD+x};       _box86_build=${BOX86_BUILD-}
+_mingw_bin_set=${MINGW_BIN+x};           _mingw_bin=${MINGW_BIN-}
+_device_set=${MGS2_DEVICE+x};            _device=${MGS2_DEVICE-}
+_game_dir_set=${MGS2_GAME_DIR+x};        _game_dir=${MGS2_GAME_DIR-}
+_launcher_set=${MGS2_RELEASE_LAUNCHER+x}; _launcher=${MGS2_RELEASE_LAUNCHER-}
+_source_epoch_set=${SOURCE_DATE_EPOCH+x}; _source_epoch=${SOURCE_DATE_EPOCH-}
 if [ -r "$REPO/.env" ]; then
     set -a
     # shellcheck disable=SC1091
     . "$REPO/.env"
     set +a
 fi
+[ "$_mgs2_workspace_set" = x ] && MGS2_WORKSPACE=$_mgs2_workspace
+[ "$_wine_src_set" = x ]       && WINE_SRC=$_wine_src
+[ "$_wine_build_set" = x ]     && WINE_BUILD=$_wine_build
+[ "$_wine_unix_set" = x ]      && WINE_UNIX_BUILD=$_wine_unix
+[ "$_box86_build_set" = x ]    && BOX86_BUILD=$_box86_build
+[ "$_mingw_bin_set" = x ]      && MINGW_BIN=$_mingw_bin
+[ "$_device_set" = x ]         && MGS2_DEVICE=$_device
+[ "$_game_dir_set" = x ]       && MGS2_GAME_DIR=$_game_dir
+[ "$_launcher_set" = x ]       && MGS2_RELEASE_LAUNCHER=$_launcher
+[ "$_source_epoch_set" = x ]   && SOURCE_DATE_EPOCH=$_source_epoch
 WORKSPACE="${MGS2_WORKSPACE:-$(dirname "$REPO")}"
 WINE_SRC="${WINE_SRC:-$WORKSPACE/recovered-session/wine-11.0}"
 WINE_BUILD="${WINE_BUILD:-$WORKSPACE/recovered-session/build-wine-i386}"
@@ -67,6 +87,15 @@ TAB=$(printf '\t')
 [ -d "$MINGW" ] && PATH="$MINGW:$PATH" && export PATH
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1756000000}"
 LD_DET='-Wl,--disable-stdcall-fixup -Wl,--no-insert-timestamp'
+
+# A candidate patch is recorded so verify_rebuild can reconstruct the live
+# source tree while it is under test.  It must never silently enter a production
+# bundle merely because someone ran the release command before promotion.
+if awk '$1 ~ /^box86_candidate_patch_/ {found=1} END {exit !found}' "$LOCK"; then
+    echo "the Box86 tree contains an unpromoted candidate patch" >&2
+    echo "refusing to create a production release until its lock entry is promoted or removed" >&2
+    exit 1
+fi
 
 # The production bundle, read out of the launcher rather than typed here. Emits
 # "game-dir file<TAB>mounted path" per bind mount. ${VAR:-default} resolves to the
