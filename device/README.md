@@ -4,10 +4,12 @@
 
 - `MGS2-Substance.sh` — PortMaster-facing entry point.
 - `launch-play.sh` — renderer selector.
-- `launch-play-dxvk-fp17.sh` — current FINALPLAY17 runtime.
+- `launch-play-dxvk-fp18.sh` — current FINALPLAY18 route.
+- `launch-play-dxvk-fp17.sh` — shared fixed engine and exact FINALPLAY17 rollback.
 - `launch-play-dxvk-fp16.sh` — byte-exact previous-DXVK rollback.
 - `launch-play-wined3d-fp15.sh` — byte-exact rollback runtime.
-- `FINALPLAY17_DXVK_FREEZE.manifest`, `FINALPLAY16_DXVK.manifest` and
+- `FINALPLAY18_WAYLAND_ABI.manifest`, `FINALPLAY17_DXVK_FREEZE.manifest`,
+  `FINALPLAY16_DXVK.manifest` and
   `FINALPLAY.manifest` — fail-closed live identity gates.
 - `mgs2.gptk` — tracked controller-to-keyboard mapping. The fixed launchers use
   PortMaster's `$GPTOKEYB` command, which arms the device-specific Start+Select
@@ -32,11 +34,10 @@ They set `MGS2_RESEARCH_RUN`, select a matched binary set and then delegate to
 the appropriate full launcher. They are retained because the briefs reference
 their exact controls and rollback boundaries.
 
-`launch-dxvk-wayland-abi-candidate.sh` is the fail-closed Box86 patches 23+24
-route. It changes only Box86 and verifies
-`BOX86_WAYLAND_ABI_CANDIDATE.manifest`; it is not selected by the normal
-PortMaster entry while the candidate remains under soak. The exact listener ABI
-gate is `harness/wayland/run_device_wayland_abi_gate.sh`.
+`launch-dxvk-wayland-abi-candidate.sh` preserves the research form used to
+validate the now-promoted Box86 patches 23+24 bytes. Normal production uses
+`launch-play-dxvk-fp18.sh` and `FINALPLAY18_WAYLAND_ABI.manifest`. The exact
+listener ABI gate is `harness/wayland/run_device_wayland_abi_gate.sh`.
 
 `launch.sh` is the older general laboratory harness. It is not production.
 

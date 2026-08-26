@@ -284,6 +284,8 @@ if [ "${1:-}" = "--build" ]; then
         got=$(sha256sum "$BOX86_BUILD/box86" | cut -d' ' -f1)
         if awk '$1 ~ /^box86_candidate_patch_/ {found=1} END {exit !found}' "$LOCK"; then
             want=$(lock box86_candidate_sha256)
+        elif [ -n "$(lock box86_production_sha256)" ]; then
+            want=$(lock box86_production_sha256)
         else
             want=$(lock box86_sha256)
         fi

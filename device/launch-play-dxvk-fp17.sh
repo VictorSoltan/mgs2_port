@@ -1,7 +1,7 @@
 #!/bin/bash
-# FINALPLAY17: FINALPLAY16 DXVK route plus the measured freeze-reduction set.
-# The previous FINALPLAY16 DXVK and FINALPLAY15 WineD3D launchers remain
-# byte-exact one-launch rollback paths.
+# Shared fixed-bundle engine for FINALPLAY17 and FINALPLAY18. Direct execution
+# selects the exact FINALPLAY17 rollback; launch-play-dxvk-fp18.sh selects the
+# p24 Wayland-listener ABI production bundle by a closed route name.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster" ]; then
@@ -55,10 +55,25 @@ mgs2_reject_research_overrides() {
 }
 mgs2_reject_research_overrides
 
-# This is one fixed production bundle, not the research selector. Keep these
-# assignments after the stale-override check so inherited experiment variables
-# cannot assemble an accidental hybrid.
-MGS2_BOX86_BIN=box86-fp21-dxvk-native-dxt-surface
+# These are two complete, named production bundles, not binary selectors. Keep
+# this closed case after the stale-override check so inherited experiment
+# variables cannot assemble an accidental hybrid. FINALPLAY17 remains the exact
+# p21 rollback; FINALPLAY18 changes only Box86 to the verified p24 ABI fix.
+PRODUCTION_ROUTE=${MGS2_PRODUCTION_ROUTE:-finalplay17}
+case "$PRODUCTION_ROUTE" in
+    finalplay17)
+        MGS2_BOX86_BIN=box86-fp21-dxvk-native-dxt-surface
+        PLAY_IDENTITY_MANIFEST=FINALPLAY17_DXVK_FREEZE.manifest
+        ;;
+    finalplay18)
+        MGS2_BOX86_BIN=box86-fp24-wayland-atomic-production
+        PLAY_IDENTITY_MANIFEST=FINALPLAY18_WAYLAND_ABI.manifest
+        ;;
+    *)
+        echo "MGS2: unknown fixed production route $PRODUCTION_ROUTE" >&2
+        exit 1
+        ;;
+esac
 MGS2_DXVK_D3D8_DLL=d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
 MGS2_DXVK_D3D9_DLL=d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll
 MGS2_DXVK_WINE_MODE=direct32
@@ -531,7 +546,7 @@ mount_bind "$GAMEDIR/dmusic_shared_lifetime1.dll" /usr/lib/wine/i386-windows/dmu
 # There is no off switch. Binary-selection overrides are rejected at the top and
 # every manifest mismatch remains fatal.
 mgs2_verify_identity() {
-    manifest="$GAMEDIR/FINALPLAY17_DXVK_FREEZE.manifest"
+    manifest="$GAMEDIR/$PLAY_IDENTITY_MANIFEST"
     if [ ! -r "$manifest" ]; then
         echo "MGS2: no $manifest, cannot verify identity" >&2
         return 1
@@ -562,7 +577,7 @@ mgs2_verify_identity() {
         return 1
     fi
     echo "MGS2: identity verified, $checked of $checked runtime files match" \
-        "FINALPLAY17_DXVK_FREEZE.manifest" >&2
+        "$PLAY_IDENTITY_MANIFEST" >&2
 }
 
 mgs2_verify_identity || exit 1
@@ -632,7 +647,7 @@ fi
 # Do not let EXIT cleanup signal a reaped PID which the kernel may already have
 # reused.  Preserve the original PID in the bounded exit record instead.
 WINE_PID=
-printf '%s launcher=finalplay17 pid=%s status=%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$PLAY_WINE_PID" \
-    "$PLAY_EXIT_STATUS" > "$PLAY_EXIT_LOG"
+printf '%s launcher=%s pid=%s status=%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$PRODUCTION_ROUTE" \
+    "$PLAY_WINE_PID" "$PLAY_EXIT_STATUS" > "$PLAY_EXIT_LOG"
 exit "$PLAY_EXIT_STATUS"

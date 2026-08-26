@@ -25,9 +25,9 @@ box86_production_patch_19 box86-patches/19-native-dxt-research-default-off.patch
 box86_production_patch_20 box86-patches/20-native-dxt-surface-research-default-off.patch
 box86_production_patch_21 box86-patches/21-native-dxt-surface-production-no-hot-counters.patch
 box86_production_patch_22 box86-patches/22-clean-build-printer-dependency.patch
-box86_candidate_patch_23 box86-patches/23-wayland-wine11-listener-abi-fix.patch
-box86_candidate_patch_24 box86-patches/24-wayland-listener-atomic-publication.patch
-box86_candidate_sha256 d6cafba667d16f6227c0ffd5437e7ac52253dd46624c2edfcbbd36ca3843188b
+box86_production_patch_23 box86-patches/23-wayland-wine11-listener-abi-fix.patch
+box86_production_patch_24 box86-patches/24-wayland-listener-atomic-publication.patch
+box86_production_sha256 d6cafba667d16f6227c0ffd5437e7ac52253dd46624c2edfcbbd36ca3843188b
 finalplay17_box86_sha256 51dfcc130b9760970189a67edd8cd78c777c5d69c8b9ec07cfbc5657821d9be9
 
 dxvk_base_remote     https://github.com/zeyadadev/DXVK-Sarek.git

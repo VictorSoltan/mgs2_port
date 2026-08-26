@@ -132,8 +132,13 @@ sh "$REPO/harness/test_gptokeyb_launchers.sh" >/dev/null || {
     echo "gptokeyb launcher gate failed -- refusing to ship a port without reliable Start+Select exit" >&2
     exit 1
 }
+sh "$REPO/harness/test_finalplay18_production.sh" >/dev/null || {
+    echo "FINALPLAY18 selector gate failed -- refusing to ship an ambiguous production route" >&2
+    exit 1
+}
 echo "ok     live trees match the pinned bases plus the complete patches"
 echo "ok     launchers arm PortMaster Start+Select exit mode"
+echo "ok     FINALPLAY18 selector and rollback split are fail-closed"
 
 echo "== 2. WineD3D =="
 ( cd "$WINE_BUILD" && make -j8 i386_LDFLAGS="$LD_DET" \
@@ -278,9 +283,11 @@ if [ "$DEPLOY" = "--deploy" ]; then
     # The device carries far more scripts than device/ does; nothing is deleted,
     # only the ones on record are overwritten.
     scp -q "$REPO"/device/*.sh "$DEV:$GAMEDIR/"
+    scp -q "$REPO"/device/*.manifest "$DEV:$GAMEDIR/"
     scp -q "$REPO/device/mgs2.gptk" "$DEV:$GAMEDIR/mgs2.gptk"
     ssh -o BatchMode=yes "$DEV" "cd $GAMEDIR && chmod +x box86-$NAME *.sh"
     echo "       $(ls "$REPO"/device/*.sh | wc -l) launchers copied"
+    echo "       $(ls "$REPO"/device/*.manifest | wc -l) fixed manifests copied"
     echo "       mgs2.gptk copied"
     echo "ok     deployed; $LAUNCHER_NAME on the device mounts $NAME"
 fi

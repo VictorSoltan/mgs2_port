@@ -16,7 +16,7 @@ endorsed by Konami, Anbernic, WineHQ, Box86 or DXVK.
 
 Picture, music, menu sounds, gameplay sound effects, input and saves work.
 
-The current production configuration is **FINALPLAY17**:
+The current production configuration is **FINALPLAY18**:
 
 ```text
 MGS2 D3D8 / Box86 native fused DXT5 surface decode
@@ -30,6 +30,11 @@ controlled load/location gaps by **20.1%** and the two pipeline-gap clusters by
 **32.3%**. Promotion also passed the correct LOAD GAME route and 18/18 live
 identity on the device. These are first-use-stall measurements, not a global FPS
 claim; independent game/read stalls remain.
+
+FINALPLAY18 changes only Box86 from FINALPLAY17: patches 23+24 fix the native
+Wayland callback ABI and publication ordering. The exact bytes passed the
+device callback gate, a loaded-game soak over 40 minutes, focus transitions,
+deep suspend/resume and normal-entry `18/18` identity.
 
 Open problems:
 
@@ -89,6 +94,12 @@ One-launch rollback to the byte-exact FINALPLAY15 WineD3D path:
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
+One-launch rollback to exact FINALPLAY17:
+
+```sh
+MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
+```
+
 One-launch rollback to the previous byte-exact FINALPLAY16 DXVK path:
 
 ```sh
@@ -97,12 +108,13 @@ MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 
 `device/launch-play.sh` is only the selector. The complete launchers are:
 
-- `device/launch-play-dxvk-fp17.sh` — current production;
+- `device/launch-play-dxvk-fp18.sh` — current production;
+- `device/launch-play-dxvk-fp17.sh` — exact FINALPLAY17 rollback/shared engine;
 - `device/launch-play-dxvk-fp16.sh` — previous DXVK rollback;
 - `device/launch-play-wined3d-fp15.sh` — immediate rollback;
 - `device/launch.sh` — archival laboratory harness, not production.
 
-All three fixed runtime paths fail closed when live file hashes differ from their
+All named fixed runtime paths fail closed when live file hashes differ from their
 manifests. A filename is never accepted as proof of what is loaded.
 `device/mgs2.gptk` is the tracked controller mapping. Active launchers use
 PortMaster's `$GPTOKEYB` command (or an explicit `-1` bare-system fallback), so
@@ -123,9 +135,9 @@ The complete FINALPLAY15 Wine/Box86 patches are the reconstruction boundary.
 FINALPLAY16 added `box86-patches/17-native-wayland-vulkan-bridge.patch`.
 FINALPLAY17 additionally records the verified fused-DXT path in Box86 patches
 18--21; patch 22 fixes its clean-build graph without changing production bytes.
-Box86 patches 23+24 are an unpromoted, fail-closed Wine 11 Wayland-listener ABI
-candidate; patch 24 gives the callback-slot publication explicit release/acquire
-ordering. FINALPLAY17 also uses exact state-cache mapping dedupe in DXVK patch
+Box86 patches 23+24 are the promoted FINALPLAY18 Wine 11 Wayland-listener ABI
+fix; patch 24 gives the callback-slot publication explicit release/acquire
+ordering. FINALPLAY17/18 also use exact state-cache mapping dedupe in DXVK patch
 08. The memory-only
 present counter and pipeline timeline are diagnostic and are not part of the
 production D3D9 DLL.
@@ -136,13 +148,14 @@ After configuring `.env`, verify the pinned reconstruction:
 ./harness/verify_rebuild.sh
 ./harness/verify_dxvk_rebuild.sh
 ./harness/test_gptokeyb_launchers.sh
+./harness/test_finalplay18_production.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross
 toolchains installed. Release artifacts are byte-reproducible only with the
 flags and `SOURCE_DATE_EPOCH` recorded in the lock file and briefs.
 
-The unpromoted native-Wayland candidate has a separate exact callback gate:
+The promoted native-Wayland route retains its separate exact callback gate:
 
 ```sh
 ./harness/wayland/run_device_wayland_abi_gate.sh

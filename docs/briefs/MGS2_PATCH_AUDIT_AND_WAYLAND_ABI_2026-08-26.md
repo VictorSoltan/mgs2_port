@@ -9,7 +9,7 @@ fail-closed candidate:
 
 | Area | Finding | Resolution | Production effect |
 |---|---|---|---|
-| Box86 Wayland wrapper | guest x86 callback tables could be installed directly in native armhf libwayland; four Wine 11 listener classes were missing, two callback signatures were wrong and slot publication had no explicit cross-thread ordering | patch 23 bridges and fails closed; patch 24 adds release/acquire publication for the affected callback slots | separate candidate; not selected by the normal entry |
+| Box86 Wayland wrapper | guest x86 callback tables could be installed directly in native armhf libwayland; four Wine 11 listener classes were missing, two callback signatures were wrong and slot publication had no explicit cross-thread ordering | patch 23 bridges and fails closed; patch 24 adds release/acquire publication for the affected callback slots | promoted as FINALPLAY18 after the final device gates |
 | Box86 build graph | clean parallel builds raced `arm_printer.c` generation | patch 22 adds the missing `dynarec_arm -> PRINTER` dependency | build-order-only; reproduced the existing production Box86 hash |
 | launcher teardown | thermal SIGTERM and a crash were indistinguishable; cleanup could signal a reaped/reused PID; FIFO creation used `mktemp -u` | thermal polling removed from the three fixed runtimes; bounded real exit status and cleared PID after reap; race-safe guard retained only by the research launcher | production no longer polls temperature or automatically signals the game |
 | controller exit | launchers called `gptokeyb` with a positional executable name but no kill-mode option, so Start+Select depended on the intermittent OS confirmation handler | use PortMaster's `$GPTOKEYB` command prefix; explicit `-1` fallback; track and release-gate `mgs2.gptk` | Start+Select terminates the game directly on the RG353VS |
@@ -190,9 +190,8 @@ all seven probe processes returned zero and none remained. The standard
 `wl_data_source` fallback was registration/overflow tested even though Sway's
 advertised wlr-data-control route handles the live clipboard events. The p24
 binary was rebuilt twice with the pinned epoch and reproduced its hash byte for
-byte. It is still not production: `harness/make_release.sh` refuses a production
-bundle while either `box86_candidate_patch_23` or `box86_candidate_patch_24`
-remains in the lock.
+byte. At this audit checkpoint it remained fail-closed as a candidate; the
+later final gate promoted the same hash without rebuilding or changing it.
 
 The same final p24 hash also passed a normal-game witness through the explicit
 research launcher: correct `LOAD GAME` route through rows 09, 08 and 07, a
@@ -203,7 +202,9 @@ cancel callbacks successfully. Eighteen consecutive 50-second observations
 reached process elapsed time 1101 seconds with the same PID and no crash,
 unknown-listener or slot-exhaustion line. The intended 30-minute observation was
 interrupted at that point, so this is not recorded as a completed 30-minute soak;
-suspend/resume also remains untested.
+suspend/resume was also untested in that first witness. Both gates were later
+completed by the promotion run recorded in
+`MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md`.
 
 ## Build and provenance defects
 
@@ -310,31 +311,34 @@ this audit was deployed.
 These are static conclusions. Performance and runtime correctness claims still
 require the RG353VS gates described in `docs/DEVICE.md`.
 
-## Critical open item: display_lock
+## Historical rollback-only open item: display_lock
 
 The direct native-mutex mode remains production because it closed the measured
 shadow-pool publication failure for `session_lock`. It did **not** prove that the
 separate `display_lock` self-owner deadlock is fixed. That signature remains
-critical-open at the exact object/RVA and bounded capture described in
+open for the older WineD3D/native-island route at the exact object/RVA and
+bounded capture described in
 `MGS2_NATIVE_DRAW_TAIL_AND_DIRECT_MUTEX_2026-08-20.md`. No new broad `wchan`
 sampler or hot-thread logger was added, and no speculative mutex change was
-promoted without the missing captured call chain.
+promoted without the missing captured call chain. The ring recorded zero target
+calls throughout the later 40-minute FINALPLAY18 DXVK gate, including focus and
+deep suspend/resume, so this is not a captured current-production crash path.
 
 ## Current decision and rollback
 
-Normal production remains FINALPLAY17 with the original Box86 hash
-`51dfcc...`. Patch 22 records a build dependency without changing those bytes;
-patches 23+24 remain opt-in. The rollback commands are unchanged:
+Normal production is now FINALPLAY18 with the p24 Box86 hash `d6cafba...`.
+FINALPLAY17 with the original `51dfcc...` hash remains the immediate rollback:
 
 ```sh
+MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
 The targeted callback/slot gate for patches 23+24 is complete, and the normal
 p24 witness covered load, movement, live identity and a clipboard replacement.
-The remaining promotion gate is a completed longer normal-entry soak including
-focus transitions and suspend/resume, followed by final live identity and
-teardown checks. A new crash should be classified first from
+The final promotion gate added more than 40 minutes on one loaded-game PID,
+focus transitions, deep suspend/resume, final `18/18` live identity and clean
+teardown. A new crash should be classified first from
 `/tmp/mgs2-play-exit.log`, the Wine output and the kernel log; the earlier Mali
 notification alone must not be reused as a diagnosis.

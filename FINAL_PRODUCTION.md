@@ -1,6 +1,6 @@
-# FINALPLAY17 production record
+# FINALPLAY18 production record
 
-FINALPLAY17 was promoted on 25 August 2026. The normal PortMaster entry selects:
+FINALPLAY18 was promoted on 26 August 2026. The normal PortMaster entry selects:
 
 ```text
 MGS2 D3D8
@@ -20,12 +20,12 @@ result, not a global FPS claim; independent game/read stalls remain.
 The complete device capture, source hashes and rollback proof are in
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`.
 
-A post-promotion audit on 26 August fixed launcher crash attribution and a
-Box86 clean-build dependency without changing the production runtime bytes. It
-also found a critical Wine 11 Wayland-listener ABI defect in the Box86 wrapper.
-That runtime fix is isolated as patches 23+24 and is **not production** pending a
-longer soak. See
-`docs/briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md`.
+FINALPLAY18 changes only Box86 from FINALPLAY17 p21 to patches 23+24. They fix a
+critical Wine 11 Wayland-listener ABI defect and explicit callback publication
+ordering. The exact p24 hash passed its callback gate, more than 40 minutes in
+the loaded game, focus transitions, deep suspend/resume, normal-entry visual
+gameplay and `18/18` live identity. See
+`docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md`.
 
 ## Launch and rollback
 
@@ -35,10 +35,10 @@ Normal launch:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to the byte-exact FINALPLAY15 WineD3D runtime:
+Immediate one-launch rollback to the exact FINALPLAY17 DXVK runtime:
 
 ```sh
-MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
+MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
 ```
 
 One-launch rollback to the previous byte-exact FINALPLAY16 DXVK runtime:
@@ -47,13 +47,20 @@ One-launch rollback to the previous byte-exact FINALPLAY16 DXVK runtime:
 MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 ```
 
+Older one-launch rollback to the byte-exact FINALPLAY15 WineD3D runtime:
+
+```sh
+MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
+```
+
 The `dxvk16` selector branch was live-tested after promotion and matched the
 unchanged FINALPLAY16 manifest `18/18`.
 
-The selector is `device/launch-play.sh`; it dispatches to one of three fixed
-launchers:
+The selector is `device/launch-play.sh`; it dispatches to the fixed production
+route or one of three rollback routes:
 
-- `device/launch-play-dxvk-fp17.sh`;
+- `device/launch-play-dxvk-fp18.sh` — current production route;
+- `device/launch-play-dxvk-fp17.sh` — shared fixed engine and p21 rollback;
 - `device/launch-play-dxvk-fp16.sh`;
 - `device/launch-play-wined3d-fp15.sh`.
 
@@ -61,7 +68,7 @@ Unknown renderer names fail instead of falling through.
 
 Each fixed runtime launcher writes one bounded post-exit record to
 `/tmp/mgs2-play-exit.log` with the route, Wine PID and real `wait` status.
-Production and both fixed rollback routes have no thermal polling and send no
+Production and all fixed rollback routes have no thermal polling and send no
 automatic temperature-triggered signal. Teardown also no longer signals a PID
 after reaping it. The explicit DXVK research harness retains its separate
 emergency guard for unattended measurements.
@@ -76,7 +83,7 @@ was available and the CPU/GPU governors were restored.
 
 ## Production identity
 
-`device/FINALPLAY17_DXVK_FREEZE.manifest` is the authoritative 18-row identity gate.
+`device/FINALPLAY18_WAYLAND_ABI.manifest` is the authoritative 18-row identity gate.
 It covers seven supplied/bind-mounted files plus the exact system Wine, Vulkan
 loader and proprietary Mali files on which the route depends.
 
@@ -84,7 +91,7 @@ Supplied production artifacts:
 
 | Role | Artifact | SHA-256 prefix |
 |---|---|---|
-| Box86 | `box86-fp21-dxvk-native-dxt-surface` | `51dfcc130b97` |
+| Box86 | `box86-fp24-wayland-atomic-production` | `d6cafba667d1` |
 | D3D8 | `d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll` | `22e519d266b6` |
 | D3D9 | `d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll` | `4918b0283329` |
 | DirectMusic synth | `dmsynth_p34_interp_reset.dll` | `b4ec2cd09f26` |
@@ -114,8 +121,8 @@ Box86:
 - patch 22 fixes only the clean parallel-build dependency for generated
   `arm_printer.c` and reproduces the existing production hash;
 - patch 23 completes the Wine 11 Wayland listener ABI; patch 24 publishes the
-  affected callback slots with release/acquire ordering. They are recorded as a
-  candidate, have a separate manifest/launcher and are not selected normally.
+  affected callback slots with release/acquire ordering. FINALPLAY18 promotes
+  their exact p24 hash after the callback, soak and suspend/resume gates.
 
 DXVK-Sarek:
 
@@ -137,8 +144,8 @@ Wine:
   `wine-patches/FINALPLAY15-wine-complete.patch`;
 - patches 01--03 after that boundary are default-off research instrumentation
   and its audit cleanup; no audit-built Wine DLL was deployed;
-- the FINALPLAY17 audio DLLs are the same byte-identified components used by the
-  prior production route.
+- the FINALPLAY17/18 audio DLLs are the same byte-identified components used by
+  the prior production routes.
 
 ## What remains open
 
@@ -152,6 +159,9 @@ Wine:
   captured and named rather than attributed by resemblance.
 
 ## Historical production
+
+FINALPLAY17 remains the exact `MGS2_RENDERER=fp17` rollback and is documented in
+`docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`.
 
 FINALPLAY16 remains the exact `MGS2_RENDERER=dxvk16` rollback and is documented
 in `docs/briefs/MGS2_FINALPLAY16_DXVK_PRODUCTION_2026-08-24.md`.
