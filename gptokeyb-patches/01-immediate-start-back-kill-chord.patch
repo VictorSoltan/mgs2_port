@@ -1,0 +1,90 @@
+gptokeyb patch 01 -- immediate ordinary Start/Back while retaining kill chord.
+
+Base: https://github.com/PortsMaster/gptokeyb
+commit 5b1284e1502548d476aa38e5979b0a8f48cb7b94.
+
+The upstream kill mode treats both Start and Back/Select as chord prefixes. It
+therefore withholds their mapped keys until button release. MGS2 uses both as
+ordinary keyboard controls and also sees the physical controller through Wine,
+so this was observable as delayed input and a transient unrelated game action.
+
+Add an explicit, default-off option which emits those two mappings on the real
+button edge while leaving the same-device Start+Back state and doKillMode()
+gate intact. A combined chord may emit the first mapped edge before termination;
+that is intentional, bounded by the second edge and irrelevant after the target
+is killed. All other ports retain upstream behaviour.
+
+diff --git a/src/gptokeyb.cpp b/src/gptokeyb.cpp
+index 11acb0a..f83c3f3 100644
+--- a/src/gptokeyb.cpp
++++ b/src/gptokeyb.cpp
+@@ -56,6 +56,7 @@ bool app_exult_adjust = false;
+ char* AppToKill;
+ bool config_mode = false;
+ bool hotkey_override = false;
++bool immediate_start_back = false;
+ bool emuelec_override = false;
+ char* hotkey_code;
+ 
+@@ -208,6 +209,15 @@ int main(int argc, char* argv[])
+                 hotkey_override = true;
+                 hotkey_code = argv[++ii];
+             }
++        } else if (strcmp(argv[ii], "-immediate-start-back") == 0) {
++            /*
++             * Kill mode normally defers both buttons until release so neither
++             * key is emitted before a Start+Back chord is recognised.  Some
++             * keyboard-only ports need those two ordinary mappings on button
++             * down instead.  The chord remains armed; when both buttons are
++             * held doKillMode() still runs after the current event.
++             */
++            immediate_start_back = true;
+         } else if ((strcmp(argv[ii], "1") == 0) || (strcmp(argv[ii], "-1") == 0) || (strcmp(argv[ii], "-k") == 0)) {
+             if (ii + 1 < argc) { 
+                 kill_mode = true;
+diff --git a/src/gptokeyb.h b/src/gptokeyb.h
+index df87fae..377471c 100644
+--- a/src/gptokeyb.h
++++ b/src/gptokeyb.h
+@@ -156,6 +156,7 @@ extern bool app_exult_adjust;
+ extern char* AppToKill;
+ extern bool config_mode;
+ extern bool hotkey_override;
++extern bool immediate_start_back;
+ extern bool emuelec_override;
+ extern char* hotkey_code;
+ 
+diff --git a/src/keyboard.cpp b/src/keyboard.cpp
+index c2a1367..b11f742 100644
+--- a/src/keyboard.cpp
++++ b/src/keyboard.cpp
+@@ -681,7 +681,13 @@ void handleEventBtnFakeKeyboardMouseDevice(const SDL_Event& event, bool is_press
+             }
+         }
+ 
+-        if (state.hotkey_pressed && (state.hotkey_jsdevice == event.cdevice.which)) {
++        if (immediate_start_back && kill_mode) {
++            state.hotkey_was_pressed = false;
++            emitKey(config.back, is_pressed, config.back_modifier);
++            if ((config.back_repeat && is_pressed && (state.key_to_repeat == 0)) || (!(is_pressed) && (state.key_to_repeat == config.back))){
++                setKeyRepeat(config.back, is_pressed);
++            }
++        } else if (state.hotkey_pressed && (state.hotkey_jsdevice == event.cdevice.which)) {
+             state.hotkey_was_pressed = true; // if hotkey is pressed, note the details of hotkey press in case it is released without triggering a hotkey combo event, since its press will need to be processed
+ 
+         } else if (state.hotkey_combo_triggered && !(is_pressed)) { 
+@@ -712,7 +718,13 @@ void handleEventBtnFakeKeyboardMouseDevice(const SDL_Event& event, bool is_press
+             state.start_jsdevice = event.cdevice.which;
+             state.start_pressed = is_pressed;
+         } // start pressed - ready for text input modes if trigger is also pressed
+-        if (state.start_pressed && (state.start_jsdevice == event.cdevice.which)) { 
++        if (immediate_start_back && kill_mode) {
++            state.start_was_pressed = false;
++            emitKey(config.start, is_pressed, config.start_modifier);
++            if ((config.start_repeat && is_pressed && (state.key_to_repeat == 0)) || (!(is_pressed) && (state.key_to_repeat == config.start))){
++                setKeyRepeat(config.start, is_pressed);
++            }
++        } else if (state.start_pressed && (state.start_jsdevice == event.cdevice.which)) {
+             state.start_was_pressed = true; // if start as hotkey is pressed, note the details of start key press in case it is released without triggering a hotkey event, since its press will need to be processed
+ 
+         } else if (state.start_combo_triggered && !(is_pressed)) { 

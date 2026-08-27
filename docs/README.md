@@ -6,6 +6,9 @@ problem rather than reading by filename alone.
 
 ## Current production
 
+- [Input latency and exit-status-40 follow-up](briefs/MGS2_INPUT_AND_EXIT40_FOLLOWUP_2026-08-27.md)
+  — current crash evidence, proved gptokeyb delay/double-input cause, immediate
+  input candidate, remaining p25 Wayland ABI mismatch and promotion gates.
 - [FINALPLAY18 Wayland ABI production](briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md)
   — current p24 production, loaded-game soak, deep suspend/resume, exact live
   identity and FINALPLAY17 rollback.

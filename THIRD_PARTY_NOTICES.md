@@ -30,6 +30,19 @@ chronology and rejected variants.
 complete FINALPLAY15 delta, the native Wayland/Vulkan bridge and the verified
 fused DXT surface conversion with a counter-free production entry.
 
+## gptokeyb
+
+- Upstream: https://github.com/PortsMaster/gptokeyb
+- Base commit: `5b1284e1502548d476aa38e5979b0a8f48cb7b94`
+- Copyright: gptokeyb contributors
+- License: GNU General Public License version 2
+- License text: `LICENSES/gptokeyb-GPL-2.0-only.txt`
+
+`gptokeyb-patches/` contains the default-off MGS2 input-route modification.
+The distributed helper must retain the corresponding-source offer required by
+the GPL; the pinned upstream commit plus the tracked patch is that source
+record. It is not represented as an upstream PortMaster binary.
+
 ## DXVK / DXVK-Sarek
 
 - Original upstream: https://github.com/doitsujin/dxvk

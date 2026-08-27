@@ -38,6 +38,12 @@ deep suspend/resume and normal-entry `18/18` identity.
 
 Open problems:
 
+- FINALPLAY18 defers ordinary Start/Select mappings until release and also
+  exposes the raw controller to Wine; a closed immediate-input candidate is
+  device-tested but not yet promoted;
+- the newest status-40 exit has no captured exception frame; the current
+  candidate corrects one additional reachable Wayland callback ABI mismatch,
+  but causation remains unproved until its device gates pass;
 - intermittent gameplay-SFX loss across some encounter/map transitions;
 - residual game/read stalls, including pressure/I/O-correlated cases;
 - frame rate in dense reinforcement scenes.

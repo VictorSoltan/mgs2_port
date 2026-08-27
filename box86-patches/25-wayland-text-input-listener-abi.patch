@@ -1,0 +1,91 @@
+Box86 patch 25 -- correct the remaining Wine 11 Wayland listener ABI mismatch.
+
+Apply after patch 24 to Box86 commit 0579f8b9 plus the FINALPLAY15 complete
+patch and patches 17--24.
+
+AUDIT EVIDENCE
+
+The generated Wine 11 text-input-unstable-v3 protocol header declares
+zwp_text_input_v3_listener.delete_surrounding_text as exactly:
+
+    (data, object, uint32_t before_length, uint32_t after_length)
+
+Patch 17 instead declared an additional pointer between object and the two
+lengths and used RunFunctionFmt "pppuu". The i386 cdecl guest could ignore the
+extra tail word, but the function installed into native armhf libwayland still
+had the wrong C callback type and shifted after_length into the wrong guest
+argument.
+
+A complete callback-count/type comparison against the exact Wine build headers
+found five other table-length differences. Wine binds wl_compositor at version
+4, wl_seat at version 5 and zwlr_data_control_manager_v1 at version 1, so the
+newer wl_surface, wl_touch and data-control primary-selection events are not
+legal on the live objects and are deliberately not claimed here.
+
+FIX
+
+Use the exact four-argument callback and "ppuu" guest format. Publish this
+listener table through the same release/acquire scheme as the callback classes
+corrected in patches 23+24. This listener is registered from Wine's text-input
+setup and dispatched on its Wayland event thread, so the ordinary pointer store
+had the same cross-thread publication weakness.
+
+--- a/src/wrapped/wrappedwaylandclient.c
++++ b/src/wrapped/wrappedwaylandclient.c
+@@ -815,34 +815,34 @@
+     uintptr_t   leave; //vFppp
+     uintptr_t   preedit_string; //vFpppii
+     uintptr_t   commit_string; //vFppp
+-    uintptr_t   delete_surrounding_text; //vFpppuu
++    uintptr_t   delete_surrounding_text; //vFppuu
+     uintptr_t   done; //vFppu
+ } my_zwp_text_input_v3_listener_t;
+ #define GO(A)   \
+-static my_zwp_text_input_v3_listener_t* ref_zwp_text_input_v3_listener_##A = NULL;                                          \
++static _Atomic(my_zwp_text_input_v3_listener_t*) ref_zwp_text_input_v3_listener_##A = NULL;                                 \
+ static void my_zwp_text_input_v3_listener_enter_##A(void* a, void* b, void* c)                                              \
+ {                                                                                                                           \
+-    RunFunctionFmt(ref_zwp_text_input_v3_listener_##A->enter, "ppp", a, b, c);                                              \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwp_text_input_v3_listener_##A)->enter, "ppp", a, b, c);                          \
+ }                                                                                                                           \
+ static void my_zwp_text_input_v3_listener_leave_##A(void* a, void* b, void* c)                                              \
+ {                                                                                                                           \
+-    RunFunctionFmt(ref_zwp_text_input_v3_listener_##A->leave, "ppp", a, b, c);                                              \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwp_text_input_v3_listener_##A)->leave, "ppp", a, b, c);                          \
+ }                                                                                                                           \
+ static void my_zwp_text_input_v3_listener_preedit_string_##A(void* a, void* b, void* c, int d, int e)                       \
+ {                                                                                                                           \
+-    RunFunctionFmt(ref_zwp_text_input_v3_listener_##A->preedit_string, "pppii", a, b, c, d, e);                             \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwp_text_input_v3_listener_##A)->preedit_string, "pppii", a, b, c, d, e);         \
+ }                                                                                                                           \
+ static void my_zwp_text_input_v3_listener_commit_string_##A(void* a, void* b, void* c)                                      \
+ {                                                                                                                           \
+-    RunFunctionFmt(ref_zwp_text_input_v3_listener_##A->commit_string, "ppp", a, b, c);                                      \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwp_text_input_v3_listener_##A)->commit_string, "ppp", a, b, c);                  \
+ }                                                                                                                           \
+-static void my_zwp_text_input_v3_listener_delete_surrounding_text_##A(void* a, void* b, void* c, uint32_t d, uint32_t e)    \
++static void my_zwp_text_input_v3_listener_delete_surrounding_text_##A(void* a, void* b, uint32_t c, uint32_t d)             \
+ {                                                                                                                           \
+-    RunFunctionFmt(ref_zwp_text_input_v3_listener_##A->delete_surrounding_text, "pppuu", a, b, c, d, e);                    \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwp_text_input_v3_listener_##A)->delete_surrounding_text, "ppuu", a, b, c, d);    \
+ }                                                                                                                           \
+ static void my_zwp_text_input_v3_listener_done_##A(void* a, void* b, uint32_t c)                                            \
+ {                                                                                                                           \
+-    RunFunctionFmt(ref_zwp_text_input_v3_listener_##A->done, "ppu", a, b, c);                                               \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_zwp_text_input_v3_listener_##A)->done, "ppu", a, b, c);                           \
+ }                                                                                                                           \
+ static my_zwp_text_input_v3_listener_t my_zwp_text_input_v3_listener_fct_##A = {                                            \
+     (uintptr_t)my_zwp_text_input_v3_listener_enter_##A,                                                                     \
+@@ -857,10 +857,10 @@
+ static void* find_zwp_text_input_v3_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_zwp_text_input_v3_listener_##A == fct) return &my_zwp_text_input_v3_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwp_text_input_v3_listener_##A) == fct) return &my_zwp_text_input_v3_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_zwp_text_input_v3_listener_##A == 0) {ref_zwp_text_input_v3_listener_##A = fct; return &my_zwp_text_input_v3_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_zwp_text_input_v3_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_zwp_text_input_v3_listener_##A, fct); return &my_zwp_text_input_v3_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client zwp_text_input_v3_listener callback\n");

@@ -39,6 +39,14 @@ validate the now-promoted Box86 patches 23+24 bytes. Normal production uses
 `launch-play-dxvk-fp18.sh` and `FINALPLAY18_WAYLAND_ABI.manifest`. The exact
 listener ABI gate is `harness/wayland/run_device_wayland_abi_gate.sh`.
 
+`launch-input-immediate-candidate.sh` is the closed follow-up route. It selects
+the reproducible Box86 p25 text-input ABI candidate, the patched immediate-edge
+gptokeyb helper and `winebus.sys=d` as one bundle. Its 19-row identity is
+`BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest`; it is not selected by the normal
+PortMaster entry before its remaining device gates pass.
+`FOLLOWUP_CANDIDATE.lock` records both upstream/patch boundaries and candidate
+artifact hashes without changing the current production reconstruction lock.
+
 `launch.sh` is the older general laboratory harness. It is not production.
 
 Compiled artifacts named by these scripts live in the ignored local

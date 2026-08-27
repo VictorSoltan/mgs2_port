@@ -1,7 +1,9 @@
 #!/bin/bash
 # Shared fixed-bundle engine for FINALPLAY17 and FINALPLAY18. Direct execution
 # selects the exact FINALPLAY17 rollback; launch-play-dxvk-fp18.sh selects the
-# p24 Wayland-listener ABI production bundle by a closed route name.
+# p24 Wayland-listener ABI production bundle by a closed route name. The p25
+# route is an explicit device-gate candidate and is never selected by normal
+# play.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster" ]; then
@@ -39,6 +41,7 @@ mgs2_reject_research_overrides() {
              MGS2_DXVK_D3D8_DLL MGS2_DXVK_D3D9_DLL \
              MGS2_DMSYNTH_DLL MGS2_DSOUND_DLL MGS2_DMIME_DLL \
              MGS2_WINEDLLOVERRIDES MGS2_BOX86_EMULATED_LIBS \
+             MGS2_INPUT_ROUTE \
              MGS2_BOX86_NATIVE_DXT MGS2_BOX86_NATIVE_DXT_SURFACE \
              MGS2_DXVK_STATE_CACHE_DEDUPE MGS2_DXVK_PIPELINE_TRACE \
              DXVK_STATE_CACHE DXVK_STATE_CACHE_PATH DXVK_CONFIG \
@@ -64,10 +67,17 @@ case "$PRODUCTION_ROUTE" in
     finalplay17)
         MGS2_BOX86_BIN=box86-fp21-dxvk-native-dxt-surface
         PLAY_IDENTITY_MANIFEST=FINALPLAY17_DXVK_FREEZE.manifest
+        INPUT_ROUTE=legacy
         ;;
     finalplay18)
         MGS2_BOX86_BIN=box86-fp24-wayland-atomic-production
         PLAY_IDENTITY_MANIFEST=FINALPLAY18_WAYLAND_ABI.manifest
+        INPUT_ROUTE=legacy
+        ;;
+    wayland-p25-candidate)
+        MGS2_BOX86_BIN=box86-fp25-wayland-text-input-candidate
+        PLAY_IDENTITY_MANIFEST=BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest
+        INPUT_ROUTE=immediate-candidate
         ;;
     *)
         echo "MGS2: unknown fixed production route $PRODUCTION_ROUTE" >&2
@@ -79,6 +89,24 @@ MGS2_DXVK_D3D9_DLL=d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll
 MGS2_DXVK_WINE_MODE=direct32
 MGS2_BOX86_EMULATED_LIBS='winewayland.so:winevulkan.so:libffi.so.8:libwayland-egl.so.1:libxkbcommon.so.0:libxkbregistry.so.0:libxml2.so.2:libicuuc.so.72:libicudata.so.72:liblzma.so.5:libstdc++.so.6'
 MGS2_WINEDLLOVERRIDES='mscoree=;mshtml=;winemenubuilder.exe=;winepulse.drv=d;d3d8=n,b;d3d9=n,b;dxgi=builtin'
+
+# Research gate for the one-process immediate Start/Select input candidate.
+# The closed production route above selects it together with exact renderer
+# bytes. Environment selection is rejected so an accidental hybrid cannot
+# bypass either manifest.
+case "$INPUT_ROUTE" in
+    legacy)
+        ;;
+    immediate-candidate)
+        MGS2_GPTOKEYB_BIN="$GAMEDIR/gptokeyb-mgs2-immediate"
+        MGS2_GPTOKEYB_SHA256=49c782dad9da50cb0f5bb9e37821104e5089563feb24c7b0303117b75196b43a
+        MGS2_WINEDLLOVERRIDES="$MGS2_WINEDLLOVERRIDES;winebus.sys=d"
+        ;;
+    *)
+        echo "MGS2: unknown fixed input route $INPUT_ROUTE" >&2
+        exit 1
+        ;;
+esac
 export MGS2_BOX86_BIN MGS2_DXVK_D3D8_DLL MGS2_DXVK_D3D9_DLL
 export MGS2_DXVK_WINE_MODE MGS2_BOX86_EMULATED_LIBS MGS2_WINEDLLOVERRIDES
 
@@ -608,6 +636,28 @@ if [ -n "${MGS2_DXVK_D3D8_DLL:-}" ]; then
 fi
 
 start_gptokeyb() {
+    if [ "$INPUT_ROUTE" = immediate-candidate ]; then
+        if [ ! -r "$GAMEDIR/mgs2.gptk" ]; then
+            echo "MGS2: immediate input route requires $GAMEDIR/mgs2.gptk" >&2
+            return 1
+        fi
+        got=$(sha256sum "$MGS2_GPTOKEYB_BIN" 2>/dev/null | cut -d" " -f1)
+        if [ "$got" != "$MGS2_GPTOKEYB_SHA256" ]; then
+            echo "MGS2: input helper is ${got:-missing}, expected $MGS2_GPTOKEYB_SHA256" >&2
+            return 1
+        fi
+        "$MGS2_GPTOKEYB_BIN" -immediate-start-back -1 "$EXE" \
+            -c "$GAMEDIR/mgs2.gptk" 9>&- >/tmp/mgs2-gptokeyb.log 2>&1 &
+        GPTOKEYB_PID=$!
+        sleep 0.1
+        if ! kill -0 "$GPTOKEYB_PID" 2>/dev/null; then
+            wait "$GPTOKEYB_PID" 2>/dev/null || true
+            GPTOKEYB_PID=
+            echo "MGS2: immediate input helper failed during startup" >&2
+            return 1
+        fi
+        return 0
+    fi
     [ -r "$GAMEDIR/mgs2.gptk" ] || return 0
     if [ -n "${GPTOKEYB:-}" ]; then
         # PortMaster supplies a command prefix including the device/OS-specific
@@ -625,7 +675,7 @@ start_gptokeyb() {
     fi
     GPTOKEYB_PID=$!
 }
-start_gptokeyb
+start_gptokeyb || exit 1
 
 if [ "$DXVK_WINE_MODE" = direct32 ] && type taskset >/dev/null 2>&1; then
     taskset -c 0-3 box86 /usr/lib/wine/i386-unix/wine "$EXE" 9>&- &
