@@ -1,5 +1,5 @@
 #!/bin/sh
-# Static fail-closed gate for the FINALPLAY19 selector and fixed bundle split.
+# Static fail-closed gate for the retained FINALPLAY19 rollback bundle.
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,7 +25,7 @@ recorded_hash() {
     awk -v name="$1" '$2 == name {print $1}' "$PRODUCTION_HASHES"
 }
 
-grep -Fq 'dxvk|dxvk19|fp19)' "$SELECTOR"
+grep -Fq 'dxvk19|fp19)' "$SELECTOR"
 grep -Fq 'exec "$HERE/launch-play-dxvk-fp19.sh"' "$SELECTOR"
 grep -Fq 'dxvk18|fp18)' "$SELECTOR"
 grep -Fq 'exec "$HERE/launch-play-dxvk-fp18.sh"' "$SELECTOR"
@@ -73,7 +73,7 @@ fi
   "$(lock_value finalplay17_d3d9_sha256)" ]
 ( cd "$REPO/device" && sed -n '5,$p' "$PRODUCTION_HASHES" | sha256sum -c - >/dev/null )
 
-echo "ok     FINALPLAY19 is the fixed default and FINALPLAY18 remains rollback"
+echo "ok     FINALPLAY19 remains a fixed rollback and FINALPLAY18 remains available"
 echo "ok     FINALPLAY19 adds p25/p26 Box86 and the immediate input helper"
 echo "ok     p25/p26, helper source and exact binary hashes are production-locked"
 echo "ok     tracked FINALPLAY19 launcher/manifest/config hashes match"

@@ -1,6 +1,6 @@
-# FINALPLAY19 production record
+# FINALPLAY20 production record
 
-FINALPLAY19 was promoted on 27 August 2026. The normal PortMaster entry selects:
+FINALPLAY20 was promoted on 27 August 2026. The normal PortMaster entry selects:
 
 ```text
 MGS2 D3D8
@@ -20,7 +20,7 @@ result, not a global FPS claim; independent game/read stalls remain.
 The complete device capture, source hashes and rollback proof are in
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`.
 
-FINALPLAY19 adds two runtime fixes to FINALPLAY18. Box86 patch 25 corrects the
+FINALPLAY19 added two runtime fixes to FINALPLAY18. Box86 patch 25 corrects the
 remaining reachable Wine 11 text-input listener signature and publishes its
 callback table atomically; patch 26 and the release recipe make the artifact
 independent of source/build paths. The source-recorded helper delivers Start
@@ -30,6 +30,16 @@ exact bundle passed the callback, loaded-game, input-edge, soak, direct-exit
 cleanup and normal-entry `19/19` identity gates. See
 `docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md`.
 
+FINALPLAY20 retains that exact Box86/input route and replaces only DMSynth p34
+with p37 plus a fixed one-tick recovery setting. The preceding transport repair
+could restart DirectSound after suspend while leaving DMSynth's sample mapping
+`18.302 s` behind, delaying newly queued steps and attacks while music remained
+current. Wine patches 60+83 re-arm the transport and rebase the stale timeline
+as one bounded recovery. The player confirmed ordinary-button sleep/resume,
+then the same process completed 180 movement cycles and 30 attacks. The normal
+entry passed nine of nine fully cold starts with `19/19` identity. See
+`docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`.
+
 ## Launch and rollback
 
 Normal launch:
@@ -38,7 +48,13 @@ Normal launch:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to the exact FINALPLAY18 DXVK runtime:
+Immediate one-launch rollback to the exact FINALPLAY19 p34 runtime:
+
+```sh
+MGS2_RENDERER=fp19 /storage/roms/ports/MGS2-Substance.sh
+```
+
+One-launch rollback to the exact FINALPLAY18 DXVK runtime:
 
 ```sh
 MGS2_RENDERER=fp18 /storage/roms/ports/MGS2-Substance.sh
@@ -66,9 +82,10 @@ The `dxvk16` selector branch was live-tested after promotion and matched the
 unchanged FINALPLAY16 manifest `18/18`.
 
 The selector is `device/launch-play.sh`; it dispatches to the fixed production
-route or one of three rollback routes:
+route or a named rollback route:
 
-- `device/launch-play-dxvk-fp19.sh` — current production route;
+- `device/launch-play-dxvk-fp20.sh` — current production route;
+- `device/launch-play-dxvk-fp19.sh` — exact p34 rollback;
 - `device/launch-play-dxvk-fp18.sh` — exact p24 rollback;
 - `device/launch-play-dxvk-fp17.sh` — shared fixed engine and p21 rollback;
 - `device/launch-play-dxvk-fp16.sh`;
@@ -84,8 +101,8 @@ after reaping it. The explicit DXVK research harness retains its separate
 emergency guard for unattended measurements.
 
 The tracked `device/mgs2.gptk` mapping is executed by the exact patched helper
-in FINALPLAY19. Its default-off `-immediate-start-back` mode emits normal Start
-and Select mappings on the physical down/up edges without waiting for chord
+in FINALPLAY19 and FINALPLAY20. Its default-off `-immediate-start-back` mode
+emits normal Start and Select mappings on the physical down/up edges without waiting for chord
 resolution. The closed route also sets `winebus.sys=d`, so Wine cannot consume
 the same physical input first as a raw joystick action. Same-device
 Start+Select still sends SIGTERM directly. The final device gate exited with
@@ -94,7 +111,7 @@ was available and the CPU/GPU governors were restored.
 
 ## Production identity
 
-`device/FINALPLAY19_INPUT_WAYLAND.manifest` is the authoritative 19-row identity
+`device/FINALPLAY20_DMSYNTH_RESUME.manifest` is the authoritative 19-row identity
 gate. It covers eight supplied/bind-mounted files plus the exact system Wine,
 Vulkan loader and proprietary Mali files on which the route depends.
 
@@ -106,7 +123,7 @@ Supplied production artifacts:
 | input helper | `gptokeyb-mgs2-immediate` | `49c782dad9da` |
 | D3D8 | `d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll` | `22e519d266b6` |
 | D3D9 | `d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll` | `4918b0283329` |
-| DirectMusic synth | `dmsynth_p34_interp_reset.dll` | `b4ec2cd09f26` |
+| DirectMusic synth | `dmsynth_p37_resume_timeline.dll` | `b11c9b6ba2f1` |
 | DirectSound | `dsound_p36_native_fir_target.dll` | `302eff548429` |
 | DirectMusic performance | `dmime_transition1.dll` | `ce3e3f14a62a` |
 | DirectMusic port | `dmusic_shared_lifetime1.dll` | `1fe0a571503b` |
@@ -172,8 +189,11 @@ Wine:
   `wine-patches/FINALPLAY15-wine-complete.patch`;
 - patches 01--03 after that boundary are default-off research instrumentation
   and its audit cleanup; no audit-built Wine DLL was deployed;
-- the FINALPLAY17--19 audio DLLs are the same byte-identified components used by
-  the prior production routes.
+- The complete Wine boundary already contains retained patch 60's bounded
+  transport recovery; patch 83 adds the stale-timeline rebase on top. Both
+  source records and the exact binary hash are pinned in `device/FINALPLAY.lock`;
+  rejected patch 82 records the failed wall-clock resume witness and is not
+  shipped.
 
 ## What remains open
 
@@ -181,8 +201,13 @@ Wine:
   must be captured separately from compiler gaps.
 - New state-cache entries may still compile once when later gameplay first
   encounters them.
-- Intermittent gameplay SFX loss still requires a timestamp-correlated bounded
-  capture.
+- Intermittent gameplay SFX loss across encounter/map transitions still
+  requires a timestamp-correlated bounded capture; it is separate from the
+  now-fixed post-resume sample-clock delay.
+- One pre-renderer cold start fault at the same linked FluidSynth instruction
+  previously seen with p36 remains unclassified. The relevant p35/p36/p37 code
+  is identical and the next nine fully cold FINALPLAY20 starts passed, so no
+  speculative workaround is shipped.
 - Runtime freezes have multiple known signatures; new occurrences must be
   captured and named rather than attributed by resemblance.
 - The previous status-40 exit remains unclassified because no exception frame
@@ -190,6 +215,10 @@ Wine:
   run's elapsed point, but status 40 alone does not prove causation.
 
 ## Historical production
+
+FINALPLAY19 remains the exact `MGS2_RENDERER=fp19` p34 rollback and is
+documented in
+`docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md`.
 
 FINALPLAY18 remains the exact `MGS2_RENDERER=fp18` rollback and is documented in
 `docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md`.

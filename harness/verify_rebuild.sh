@@ -138,7 +138,7 @@ refresh_box86() {
 }
 
 if [ "${1:-}" = "--refresh" ]; then
-    if awk '$1 ~ /^(wine_research_patch_|box86_(production|candidate)_patch_)/ {found=1}
+    if awk '$1 ~ /^(wine_(research|production)_patch_|box86_(production|candidate)_patch_)/ {found=1}
             END {exit !found}' "$LOCK"; then
         echo "refusing --refresh: the lock has explicit incremental patches" >&2
         echo "squashing them into immutable complete patches would apply them twice" >&2
@@ -170,7 +170,7 @@ mkdir -p "$WORK" && ( cd "$WORK" && tar xf "$TARBALL" )
 awk '/^--- a\//{p=1} p' "$REPO/$(lock wine_complete_patch)" > "$WORK/wine.diff"
 if ( cd "$WORK/wine-11.0" \
         && patch -p1 -E --silent < "$WORK/wine.diff" >/dev/null 2>&1 \
-        && for rel in $(awk '$1 ~ /^wine_research_patch_/ {print $2}' "$LOCK"); do \
+        && for rel in $(awk '$1 ~ /^wine_(research|production)_patch_/ {print $2}' "$LOCK"); do \
                patch -p1 -E --silent < "$REPO/$rel" >/dev/null 2>&1 || exit 1; \
            done ); then
     compare_tree "wine" "reconstructed byte for byte, 0 differences" \

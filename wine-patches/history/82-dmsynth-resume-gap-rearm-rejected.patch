@@ -1,0 +1,103 @@
+Patch 82 (rejected dmsynth p36) -- wall-clock resume witness.
+
+REJECTED on the RG353VS on 2026-08-27; retain this patch as a negative result
+and do not ship its binary. During an externally observed roughly 20-second
+deep suspend, the device's CLOCK_REALTIME advanced only 345 ms before the game
+resumed. Therefore GetSystemTimeAsFileTime is not a valid immediate resume
+witness on this ROCKNIX image. The exact p36 candidate remained on its
+four-tick fallback and did not solve the clock-independent recovery problem.
+
+Apply after history/60-dmsynth-resume-recover.patch. Patch 60 proved on the
+RG353VS that the same Wine/game PID survives deep suspend and that restarting
+the dmsynth DirectSound transport restores gameplay SFX. Its conservative
+four-tick position-stall gate can, however, make the first post-resume effects
+audibly late by about one second.
+
+The experiment assumed that system wall time advances while the CPU is in deep
+suspend. Compare wall time around the existing timing-thread wait. A gap over
+two seconds was intended as a resume witness for this port. On the first
+post-resume wake, pass the already-live buffer through patch 60's bounded
+Stop+Play re-arm immediately instead of waiting for four stalled ticks. Normal
+200 ms notification traffic does not take this arm; the original watchdog
+remains as fallback for non-suspend stalls.
+
+There is no new thread, system hook, signal, hot-path log or external polling.
+A large forward wall-clock correction can cause one harmless conservative
+re-arm; backward corrections do not match.
+
+--- a/dlls/dmsynth/synthsink.c
++++ b/dlls/dmsynth/synthsink.c
+@@ -715,6 +715,22 @@
+ #define SINK_WATCHDOG_MS 250
+ #define SINK_WATCHDOG_STALL 4
+ 
++/* Patch 36: system time advances while the CPU is in deep suspend. Detect that
++ * discontinuity on the timing thread's first post-resume wake and re-arm the
++ * existing buffer immediately, instead of waiting for four stalled ticks. */
++#define SINK_RESUME_GAP_100NS (2 * (ULONGLONG)10000000)
++
++static ULONGLONG sink_wall_time(void)
++{
++    FILETIME file_time;
++    ULARGE_INTEGER value;
++
++    GetSystemTimeAsFileTime(&file_time);
++    value.LowPart = file_time.dwLowDateTime;
++    value.HighPart = file_time.dwHighDateTime;
++    return value.QuadPart;
++}
++
+ static DWORD sink_watchdog_timeout(void)
+ {
+     static int watchdog_ms = -1;
+@@ -795,6 +811,7 @@
+     struct synth_sink *sink = params->sink;
+     BOOL recover_failed = FALSE;
+     DWORD last_play_pos = ~0u;
++    ULONGLONG last_wall_time;
+     IDirectSoundNotify *notify;
+     DWORD watchdog_ticks = 0;
+     BOOL started = FALSE;
+@@ -848,6 +865,8 @@
+         goto done;
+     }
+ 
++    last_wall_time = sink_wall_time();
++
+     for (;;)
+     {
+         HANDLE handles[] = {sink->timing_stop_event, buffer_event};
+@@ -855,6 +874,8 @@
+         DWORD write_pos;
+         DWORD play_pos;
+         DWORD ret;
++        BOOL resumed;
++        ULONGLONG wall_time;
+ 
+         ret = WaitForMultipleObjects(ARRAY_SIZE(handles), handles, FALSE,
+                 sink_watchdog_timeout());
+@@ -867,7 +888,12 @@
+         if (ret == WAIT_OBJECT_0)
+             break;
+ 
+-        if (ret == WAIT_TIMEOUT)
++        wall_time = sink_wall_time();
++        resumed = wall_time > last_wall_time
++                && wall_time - last_wall_time > SINK_RESUME_GAP_100NS;
++        last_wall_time = wall_time;
++
++        if (ret == WAIT_TIMEOUT || resumed)
+         {
+             DWORD stall_ticks = sink_watchdog_stall_ticks();
+             BOOL rearmed = FALSE;
+@@ -880,7 +906,9 @@
+             if (WaitForSingleObject(sink->timing_stop_event, 0) == WAIT_OBJECT_0)
+                 break;
+ 
+-            stalled = stall_ticks && ++watchdog_ticks >= stall_ticks;
++            if (ret == WAIT_TIMEOUT && stall_ticks)
++                ++watchdog_ticks;
++            stalled = resumed || (stall_ticks && watchdog_ticks >= stall_ticks);
+             recover_hr = sink_watchdog_recover(buffer, stalled, &rearmed);
+ 
+             if (rearmed)

@@ -16,7 +16,7 @@ superseded or explicitly retracted.
 
 ## Current production
 
-FINALPLAY19 is current as of 2026-08-27:
+FINALPLAY20 is current as of 2026-08-27:
 
 ```text
 D3D8 -> DXVK-Sarek 1.11.1 warm cache/one worker
@@ -24,14 +24,13 @@ D3D8 -> DXVK-Sarek 1.11.1 warm cache/one worker
 texture decode -> Box86 native fused DXT5 surface bridge
 ```
 
-It uses a direct 32-bit Wine prefix and
-`box86-fp26-wayland-text-input-production`. FINALPLAY19 adds Box86 patch 25's
-exact text-input listener ABI fix, patch 26's reproducible revision boundary and
-a source-recorded immediate-edge gptokeyb helper to FINALPLAY18. Wine's
-duplicate raw-controller route is disabled, while
-the same-device Start+Select direct-exit chord is retained. Promotion followed
-the callback gate, correct LOAD GAME route, input-edge checks, loaded-game soak,
-direct-exit cleanup and 19/19 normal-entry identity. The inherited
+It uses a direct 32-bit Wine prefix,
+`box86-fp26-wayland-text-input-production` and the FINALPLAY19 immediate-edge
+input route. FINALPLAY20 replaces only DMSynth p34 with p37 and fixes the
+measured stale sample timeline that delayed steps and attacks after resume.
+Promotion followed exact-object clock checks, ordinary-button sleep/listening,
+a 180-movement/30-attack soak, nine of nine fully cold starts and 19/19 live
+identity. FINALPLAY19 remains the exact p34 rollback. The inherited
 corrected symmetric FINALPLAY16 versus FINALPLAY17 A-B-A-B reduced the
 controlled gap sum by 20.1% and the two
 pipeline-gap clusters by 32.3%. This is not a global FPS claim and the
@@ -40,13 +39,15 @@ independent game/read stalls remain open.
 Immediate rollback:
 
 ```sh
+MGS2_RENDERER=fp19 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=fp18 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Read `docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md` and
+Read `docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`,
+`docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md` and
 `docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md` and
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md` before
 changing Box86 or renderer defaults.
@@ -72,13 +73,13 @@ changing Box86 or renderer defaults.
 ## Current research entry points
 
 - Production/DXVK:
-  `docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md`
+  `docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`
 - DXVK transfer rationale:
   `docs/briefs/MGS2_DMC3_OPTIMIZATION_TRANSFER_2026-08-24.md`
 - Intermittent gameplay SFX:
   `docs/briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md`
 - Sound after suspend/resume:
-  `docs/briefs/MGS2_DMSYNTH_RESUME_RECOVER_2026-08-19.md`
+  `docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`
 - Runtime freezes/provenance:
   `docs/briefs/MGS2_FREEZE_AND_PROVENANCE_2026-08-23.md`
 - Next FPS decision:
@@ -110,6 +111,9 @@ Do not mix the Wine 11.0 tree with the older CrossOver Android source tree.
 
 - `wine-patches/FINALPLAY15-wine-complete.patch` is the complete Wine source
   record against pristine Wine 11.0.
+- The complete Wine boundary already contains retained patch 60's DMSynth
+  transport recovery. FINALPLAY20 applies patch 83's stale-timeline rebase on
+  top. Patch 82 is a rejected wall-clock witness and is never production.
 - `box86-patches/FINALPLAY15-box86-complete.patch` is the complete Box86 record
   against commit `0579f8b9`.
 - `box86-patches/17-native-wayland-vulkan-bridge.patch` adds the FINALPLAY16

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY19. Direct
+# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY20. Direct
 # execution selects the exact FINALPLAY17 rollback. The newer wrappers select
 # complete closed routes; arbitrary renderer/input combinations are rejected.
 
@@ -40,6 +40,7 @@ mgs2_reject_research_overrides() {
              MGS2_DMSYNTH_DLL MGS2_DSOUND_DLL MGS2_DMIME_DLL \
              MGS2_WINEDLLOVERRIDES MGS2_BOX86_EMULATED_LIBS \
              MGS2_INPUT_ROUTE \
+             MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL \
              MGS2_BOX86_NATIVE_DXT MGS2_BOX86_NATIVE_DXT_SURFACE \
              MGS2_DXVK_STATE_CACHE_DEDUPE MGS2_DXVK_PIPELINE_TRACE \
              DXVK_STATE_CACHE DXVK_STATE_CACHE_PATH DXVK_CONFIG \
@@ -61,7 +62,8 @@ mgs2_reject_research_overrides
 # variables cannot assemble an accidental hybrid. FINALPLAY17 remains the exact
 # p21 rollback; FINALPLAY18 changes only Box86 to the verified p24 ABI fix;
 # FINALPLAY19 adds the p25 text-input ABI fix, the p26 reproducible-build
-# boundary and immediate input.
+# boundary and immediate input; FINALPLAY20 adds the p37 DMSynth transport and
+# stale-timeline resume repair.
 PRODUCTION_ROUTE=${MGS2_PRODUCTION_ROUTE:-finalplay17}
 case "$PRODUCTION_ROUTE" in
     finalplay17)
@@ -78,6 +80,37 @@ case "$PRODUCTION_ROUTE" in
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=FINALPLAY19_INPUT_WAYLAND.manifest
         INPUT_ROUTE=immediate-production
+        ;;
+    finalplay20)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=FINALPLAY20_DMSYNTH_RESUME.manifest
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    dmsynth-resume-p35-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=DMSYNTH_RESUME_P35_CANDIDATE.manifest
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p35_resume_recover.dll
+        ;;
+    dmsynth-resume-stall1-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=DMSYNTH_RESUME_STALL1_CANDIDATE.manifest
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p35_resume_recover.dll
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        export MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    dmsynth-resume-p37-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=DMSYNTH_RESUME_P37_CANDIDATE.manifest
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        export MGS2_DMSYNTH_WATCHDOG_STALL
         ;;
     wayland-p26-candidate)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-candidate

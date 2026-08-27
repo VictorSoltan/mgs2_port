@@ -16,7 +16,7 @@ endorsed by Konami, Anbernic, WineHQ, Box86 or DXVK.
 
 Picture, music, menu sounds, gameplay sound effects, input and saves work.
 
-The current production configuration is **FINALPLAY19**:
+The current production configuration is **FINALPLAY20**:
 
 ```text
 MGS2 D3D8 / Box86 native fused DXT5 surface decode
@@ -31,13 +31,14 @@ controlled load/location gaps by **20.1%** and the two pipeline-gap clusters by
 identity on the device. These are first-use-stall measurements, not a global FPS
 claim; independent game/read stalls remain.
 
-FINALPLAY19 adds two bounded runtime fixes to FINALPLAY18. Box86 patch 25
-corrects the last reachable Wine 11 text-input listener ABI mismatch; patch 26
-and the release recipe close a build-path-dependent provenance defect. A source-recorded
-gptokeyb helper now delivers Start/Select on their real button edges while
-retaining same-device Start+Select termination; Wine's duplicate raw-controller
-route is disabled. The exact 19-file bundle passed its device callback, loaded
-game, input-edge, soak, direct-exit and normal-entry identity gates.
+FINALPLAY20 retains FINALPLAY19's exact Wayland/input fixes and replaces only
+the DMSynth DLL plus its fixed watchdog state. After suspend, the old transport
+recovery could restart DirectSound while leaving the DMSynth sample mapping
+18.302 seconds behind; newly queued steps and attacks then played many seconds
+late while music remained current. Wine patches 60+83 re-arm that transport and
+rebase the stale mapping together. The exact bundle passed ordinary-button
+sleep/listening, a 180-movement/30-attack soak, nine of nine fully cold starts
+and `19/19` live identity on the RG353VS.
 
 Open problems:
 
@@ -46,6 +47,9 @@ Open problems:
   point without recurrence, but the numerical exit status alone does not prove
   they had the same cause;
 - intermittent gameplay-SFX loss across some encounter/map transitions;
+- a rare pre-renderer cold-start page fault remains unclassified. Its relevant
+  FluidSynth instructions are unchanged across p35/p36/p37, and it did not
+  recur in the nine-run FINALPLAY20 cold-start gate;
 - residual game/read stalls, including pressure/I/O-correlated cases;
 - frame rate in dense reinforcement scenes.
 
@@ -95,10 +99,10 @@ The normal PortMaster entry selects DXVK:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-One-launch rollback to the byte-exact FINALPLAY15 WineD3D path:
+Immediate one-launch rollback to exact FINALPLAY19 and its p34 DMSynth:
 
 ```sh
-MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
+MGS2_RENDERER=fp19 /storage/roms/ports/MGS2-Substance.sh
 ```
 
 Immediate one-launch rollback to exact FINALPLAY18:
@@ -119,9 +123,16 @@ One-launch rollback to the previous byte-exact FINALPLAY16 DXVK path:
 MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 ```
 
+One-launch rollback to the byte-exact FINALPLAY15 WineD3D path:
+
+```sh
+MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
+```
+
 `device/launch-play.sh` is only the selector. The complete launchers are:
 
-- `device/launch-play-dxvk-fp19.sh` — current production;
+- `device/launch-play-dxvk-fp20.sh` — current production;
+- `device/launch-play-dxvk-fp19.sh` — exact FINALPLAY19/p34 rollback;
 - `device/launch-play-dxvk-fp18.sh` — exact FINALPLAY18 rollback;
 - `device/launch-play-dxvk-fp17.sh` — exact FINALPLAY17 rollback/shared engine;
 - `device/launch-play-dxvk-fp16.sh` — previous DXVK rollback;
@@ -132,8 +143,9 @@ All named fixed runtime paths fail closed when live file hashes differ from thei
 manifests. A filename is never accepted as proof of what is loaded.
 `device/mgs2.gptk` is the tracked controller mapping. Legacy fixed routes use
 PortMaster's `$GPTOKEYB` command (or an explicit `-1` bare-system fallback).
-FINALPLAY19 uses the exact patched helper recorded under `gptokeyb-patches/`
-and disables Wine's duplicate physical-controller route. Both routes make
+FINALPLAY19 and FINALPLAY20 use the exact patched helper recorded under
+`gptokeyb-patches/` and disable Wine's duplicate physical-controller route.
+Both routes make
 Start+Select terminate the game directly instead of relying on the OS-level
 confirmation dialog.
 
@@ -155,7 +167,11 @@ Box86 patches 23+24 are the FINALPLAY18 Wine 11 Wayland-listener ABI fix;
 patch 24 gives callback publication explicit release/acquire ordering. Patch 25
 corrects the remaining reachable text-input listener signature and is promoted
 in FINALPLAY19; patch 26 pins the embedded revision across build directories.
-FINALPLAY17--19 also use exact state-cache mapping dedupe in
+The complete Wine boundary already contains patch 60's bounded DMSynth
+transport recovery. FINALPLAY20 adds patch 83's stale-timeline rebase on top;
+rejected patch 82 records why the device wall clock cannot be used as the
+resume witness.
+FINALPLAY17--20 also use exact state-cache mapping dedupe in
 DXVK patch 08. The memory-only
 present counter and pipeline timeline are diagnostic and are not part of the
 production D3D9 DLL.
@@ -168,6 +184,7 @@ After configuring `.env`, verify the pinned reconstruction:
 ./harness/test_gptokeyb_launchers.sh
 ./harness/test_finalplay18_production.sh
 ./harness/test_finalplay19_production.sh
+./harness/test_finalplay20_production.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross

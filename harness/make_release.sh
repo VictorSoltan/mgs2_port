@@ -132,13 +132,13 @@ sh "$REPO/harness/test_gptokeyb_launchers.sh" >/dev/null || {
     echo "gptokeyb launcher gate failed -- refusing to ship a port without reliable Start+Select exit" >&2
     exit 1
 }
-sh "$REPO/harness/test_finalplay19_production.sh" >/dev/null || {
-    echo "FINALPLAY19 selector gate failed -- refusing to ship an ambiguous production route" >&2
+sh "$REPO/harness/test_finalplay20_production.sh" >/dev/null || {
+    echo "FINALPLAY20 selector gate failed -- refusing to ship an ambiguous production route" >&2
     exit 1
 }
 echo "ok     live trees match the pinned bases plus the complete patches"
 echo "ok     launchers arm PortMaster Start+Select exit mode"
-echo "ok     FINALPLAY19 selector and rollback split are fail-closed"
+echo "ok     FINALPLAY20 selector and rollback split are fail-closed"
 
 echo "== 2. WineD3D =="
 ( cd "$WINE_BUILD" && make -j8 i386_LDFLAGS="$LD_DET" \

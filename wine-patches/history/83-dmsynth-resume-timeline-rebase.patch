@@ -1,0 +1,239 @@
+Patch 83 (dmsynth p37) -- drop a recovered suspend gap from the synth timeline.
+
+Patch 60 restores the DirectSound transport after it stops or stalls, but the
+transport and DirectMusic sample timeline are independent.  A live p35 process
+after repeated deep suspend/resume had music but delayed steps and attacks.  A
+bounded external read of its synth_sink proved the mapping itself was stale:
+
+  activate_time + written_samples_time - master_time = -18.302 seconds
+
+That negative value means a gameplay note stamped with the current reference
+time maps roughly 18 seconds ahead of the sample position the render thread is
+currently producing.  The user's approximately ten-second report was taken
+while this gap was already being rendered away.  PipeWire remained running at
+10 ms node latency with a 30 ms forced quantum, and music was unaffected, so an
+endpoint-wide delay does not explain the observation.
+
+When patch 60 actually re-arms the DirectSound transport, mark the timeline for
+review.  The render thread owns sink->written and consumes that marker.  If its
+mapping is more than 250 ms behind the live DirectSound write lead, move
+activate_time forward by exactly that deficit and move all already queued MIDI
+events backward by the equivalent sample count.  New RefTimeToSample mappings
+and queue insertion are serialized with the same synth lock so an event cannot
+cross the rebase half-converted.  Ordinary recovery with no material clock gap
+is a no-op.
+
+No new thread, import, wall clock, polling loop or hot-thread logging is added.
+The p37 PE has the same DLL import set as p35.  The function-level binary diff
+is limited to PlayBuffer, render/recovery call paths, three queue-lock helpers,
+and the compiler's unsigned 64-bit division helper used by the bounded timing
+arithmetic.
+
+Candidate binary:
+
+  binaries/dmsynth_p37_resume_timeline.dll
+  b11c9b6ba2f1d27fcdea822fff37f62187862aa7aeb5527d2efd2a159778ede8
+
+This patch is relative to dmsynth p35 (patch 60 plus the inherited recorded
+dmsynth chain), not pristine Wine 11.0.  Status at export: candidate, not yet
+the FINALPLAY19 default.
+
+--- a/dlls/dmsynth/dmsynth_private.h
++++ b/dlls/dmsynth/dmsynth_private.h
+@@ -176,6 +176,12 @@
+ extern void synth_sink_probe_mark(void *sink, void *synth, DWORD group, BYTE status,
+         BYTE note, BYTE velocity, int program);
+ 
++/* Keep the synth event queue and the sink's reference-to-sample mapping in one
++ * transaction when a resumed transport drops the suspended interval. */
++extern void synth_timeline_lock(IDirectMusicSynth *iface);
++extern void synth_timeline_shift_events_locked(IDirectMusicSynth *iface, LONGLONG samples);
++extern void synth_timeline_unlock(IDirectMusicSynth *iface);
++
+ /*****************************************************************************
+  * Misc.
+  */
+--- a/dlls/dmsynth/synth.c
++++ b/dlls/dmsynth/synth.c
+@@ -666,6 +666,29 @@
+     return CONTAINING_RECORD(iface, struct synth, IDirectMusicSynth8_iface);
+ }
+ 
++void synth_timeline_lock(IDirectMusicSynth *iface)
++{
++    struct synth *This = impl_from_IDirectMusicSynth8((IDirectMusicSynth8 *)iface);
++
++    EnterCriticalSection(&This->cs);
++}
++
++void synth_timeline_shift_events_locked(IDirectMusicSynth *iface, LONGLONG samples)
++{
++    struct synth *This = impl_from_IDirectMusicSynth8((IDirectMusicSynth8 *)iface);
++    struct event *event;
++
++    LIST_FOR_EACH_ENTRY(event, &This->events, struct event, entry)
++        event->position -= samples;
++}
++
++void synth_timeline_unlock(IDirectMusicSynth *iface)
++{
++    struct synth *This = impl_from_IDirectMusicSynth8((IDirectMusicSynth8 *)iface);
++
++    LeaveCriticalSection(&This->cs);
++}
++
+ static HRESULT WINAPI synth_QueryInterface(IDirectMusicSynth8 *iface, REFIID riid,
+         void **ret_iface)
+ {
+@@ -1391,9 +1414,13 @@
+         LONGLONG position;
+ 
+         if ((BYTE *)next > end) return E_INVALIDARG;
++        EnterCriticalSection(&This->cs);
+         if (FAILED(hr = IDirectMusicSynthSink_RefTimeToSample(This->sink,
+                 time + head->rtDelta, &position)))
++        {
++            LeaveCriticalSection(&This->cs);
+             return hr;
++        }
+ 
+         if (!(head->dwFlags & DMUS_EVENT_STRUCTURED))
+             FIXME("Unstructured events not implemeted\n");
+@@ -1401,7 +1428,11 @@
+             FIXME("Unexpected MIDI event size %lu\n", head->cbEvent);
+         else
+         {
+-            if (!(event = calloc(1, sizeof(*event)))) return E_OUTOFMEMORY;
++            if (!(event = calloc(1, sizeof(*event))))
++            {
++                LeaveCriticalSection(&This->cs);
++                return E_OUTOFMEMORY;
++            }
+             memcpy(event->midi, data, head->cbEvent);
+             event->time = time + head->rtDelta;
+             event->position = position;
+@@ -1427,12 +1458,11 @@
+                         This, event->channel_group, event->midi[0] & 0xf, event->midi[1], event->midi[2],
+                         event->time, event->position);
+ 
+-            EnterCriticalSection(&This->cs);
+             LIST_FOR_EACH_ENTRY(next_event, &This->events, struct event, entry)
+                 if (next_event->time > event->time) break;
+             list_add_before(&next_event->entry, &event->entry);
+-            LeaveCriticalSection(&This->cs);
+         }
++        LeaveCriticalSection(&This->cs);
+ 
+         head = next;
+     }
+--- a/dlls/dmsynth/synthsink.c
++++ b/dlls/dmsynth/synthsink.c
+@@ -176,6 +176,8 @@
+     DWORD meter_tick;
+     DWORD meter_blocks;
+     DWORD meter_nonzero;
++
++    volatile LONG timeline_rebase_pending;
+ };
+ 
+ static DWORD sinkprobe_checksum(const void *data, DWORD bytes)
+@@ -637,13 +639,70 @@
+     return S_OK;
+ }
+ 
++/* A resumed DirectSound transport and the DirectMusic sample timeline are two
++ * separate clocks. Re-arming only the transport can leave the next synth
++ * render many seconds behind the master clock: newly queued gameplay notes
++ * then wait for that suspended interval while music on other buffers remains
++ * current.
++ *
++ * Consume the recovery marker on the render thread, which owns sink->written.
++ * Re-anchor the reference/sample mapping so the next byte to render is at the
++ * live DirectSound write lead, and shift already queued MIDI events by the same
++ * amount. A 250 ms gate makes an ordinary watchdog re-arm a no-op here; only a
++ * materially stale timeline is rebased. The synth queue lock also serialises
++ * RefTimeToSample() plus insertion in synth_PlayBuffer(). */
++#define SINK_TIMELINE_REBASE_MIN_100NS (250 * (REFERENCE_TIME)10000)
++
++static void synth_sink_rebase_timeline(struct synth_sink *sink, IDirectMusicSynth *synth,
++        const DSBCAPS *caps, const WAVEFORMATEX *format)
++{
++    REFERENCE_TIME written_time, desired_latency, current_latency, shift;
++    REFERENCE_TIME master_time;
++    LONGLONG shift_samples = 0;
++    DWORD write_latency;
++
++    if (!InterlockedExchange(&sink->timeline_rebase_pending, 0)) return;
++    if (FAILED(IReferenceClock_GetTime(sink->master_clock, &master_time)))
++    {
++        InterlockedExchange(&sink->timeline_rebase_pending, 1);
++        return;
++    }
++
++    synth_timeline_lock(synth);
++    EnterCriticalSection(&sink->cs);
++
++    write_latency = (sink->write_pos - sink->play_pos + caps->dwBufferBytes)
++            % caps->dwBufferBytes + sink_jitter_bytes(format);
++    desired_latency = (REFERENCE_TIME)write_latency * 10000000 / format->nAvgBytesPerSec;
++    written_time = ((REFERENCE_TIME)sink->written / format->nBlockAlign)
++            * 10000000 / format->nSamplesPerSec;
++    current_latency = sink->activate_time + written_time - master_time;
++    shift = desired_latency - current_latency;
++
++    if (shift > SINK_TIMELINE_REBASE_MIN_100NS)
++    {
++        shift_samples = shift * format->nSamplesPerSec / 10000000;
++        sink->activate_time += shift;
++        sink->latency = desired_latency;
++        sink->latency_time = master_time + desired_latency;
++    }
++
++    LeaveCriticalSection(&sink->cs);
++    if (shift_samples)
++        synth_timeline_shift_events_locked(synth, shift_samples);
++    synth_timeline_unlock(synth);
++}
++
+ static HRESULT synth_sink_render_data(struct synth_sink *sink, IDirectMusicSynth *synth,
+-        IDirectSoundBuffer *buffer, WAVEFORMATEX *format, short *samples, DWORD samples_size)
++        IDirectSoundBuffer *buffer, DSBCAPS *caps, WAVEFORMATEX *format,
++        short *samples, DWORD samples_size)
+ {
+     REFERENCE_TIME master_time;
+     REFERENCE_TIME sample_time;
+     HRESULT hr;
+ 
++    synth_sink_rebase_timeline(sink, synth, caps, format);
++
+     if (FAILED(hr = IReferenceClock_GetTime(sink->master_clock, &master_time)))
+         ERR("Failed to get master clock time, hr %#lx\n", hr);
+ 
+@@ -890,6 +949,7 @@
+                  * next one from the position it was recovering from. */
+                 watchdog_ticks = 0;
+                 last_play_pos = ~0u;
++                InterlockedExchange(&sink->timeline_rebase_pending, 1);
+             }
+             else if (stalled)
+                 watchdog_ticks = 0;
+@@ -1014,7 +1074,8 @@
+         goto done;
+     }
+ 
+-    if (FAILED(hr = synth_sink_render_data(sink, synth, buffer, &format, samples, samples_size)))
++    if (FAILED(hr = synth_sink_render_data(sink, synth, buffer, &caps,
++            &format, samples, samples_size)))
+         ERR("Failed to render initial buffer data, hr %#lx.\n", hr);
+     SetEvent(params->started_event);
+ 
+@@ -1024,7 +1085,8 @@
+         HRESULT wait_hr;
+ 
+         if (hr == S_OK) /* if successfully written, render more data */
+-            hr = synth_sink_render_data(sink, synth, buffer, &format, samples, samples_size);
++            hr = synth_sink_render_data(sink, synth, buffer, &caps,
++                    &format, samples, samples_size);
+ 
+         if (S_OK != (wait_hr = synth_sink_wait_write(sink, buffer, &caps, &format)))
+         {

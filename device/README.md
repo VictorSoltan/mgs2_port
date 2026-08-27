@@ -4,19 +4,21 @@
 
 - `MGS2-Substance.sh` — PortMaster-facing entry point.
 - `launch-play.sh` — renderer selector.
-- `launch-play-dxvk-fp19.sh` — current FINALPLAY19 route.
+- `launch-play-dxvk-fp20.sh` — current FINALPLAY20 DMSynth-resume route.
+- `launch-play-dxvk-fp19.sh` — exact FINALPLAY19/p34 rollback.
 - `launch-play-dxvk-fp18.sh` — exact FINALPLAY18 rollback.
 - `launch-play-dxvk-fp17.sh` — shared fixed engine and exact FINALPLAY17 rollback.
 - `launch-play-dxvk-fp16.sh` — byte-exact previous-DXVK rollback.
 - `launch-play-wined3d-fp15.sh` — byte-exact rollback runtime.
-- `FINALPLAY19_INPUT_WAYLAND.manifest`, `FINALPLAY18_WAYLAND_ABI.manifest`,
+- `FINALPLAY20_DMSYNTH_RESUME.manifest`, `FINALPLAY19_INPUT_WAYLAND.manifest`,
+  `FINALPLAY18_WAYLAND_ABI.manifest`,
   `FINALPLAY17_DXVK_FREEZE.manifest`,
   `FINALPLAY16_DXVK.manifest` and
   `FINALPLAY.manifest` — fail-closed live identity gates.
 - `mgs2.gptk` — tracked controller-to-keyboard mapping. Legacy fixed routes use
   PortMaster's `$GPTOKEYB` command for direct Start+Select exit. FINALPLAY19
-  selects the source-recorded immediate-edge helper and disables Wine's
-  duplicate raw-controller route.
+  and FINALPLAY20 select the source-recorded immediate-edge helper and disable
+  Wine's duplicate raw-controller route.
 
 The fixed play launchers leave one bounded cold-path exit record in
 `/tmp/mgs2-play-exit.log` with their route, Wine PID and real `wait` status.
@@ -44,9 +46,15 @@ listener ABI gate is `harness/wayland/run_device_wayland_abi_gate.sh`.
 
 `launch-input-immediate-candidate.sh` preserves the exact closed route used to
 validate the p25 ABI fix, p26 reproducible artifact and immediate-edge helper.
-Normal production uses the byte-identical fixes through `launch-play-dxvk-fp19.sh`
-and `FINALPLAY19_INPUT_WAYLAND.manifest`. `FOLLOWUP_CANDIDATE.lock` retains the
-pre-promotion record; `FINALPLAY.lock` is the production reconstruction source.
+FINALPLAY19 preserves the byte-identical promoted route through
+`launch-play-dxvk-fp19.sh` and `FINALPLAY19_INPUT_WAYLAND.manifest`; FINALPLAY20
+inherits it unchanged. `FOLLOWUP_CANDIDATE.lock` retains the pre-promotion
+record; `FINALPLAY.lock` is the production reconstruction source.
+
+The three `launch-dmsynth-resume-*-candidate.sh` routes preserve the p35,
+one-tick and p37 measurement sequence. Normal production uses the promoted p37
+bytes through `launch-play-dxvk-fp20.sh` and
+`FINALPLAY20_DMSYNTH_RESUME.manifest`; FINALPLAY19 is the immediate p34 rollback.
 
 `launch.sh` is the older general laboratory harness. It is not production.
 

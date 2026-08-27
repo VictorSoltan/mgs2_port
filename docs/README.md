@@ -6,9 +6,13 @@ problem rather than reading by filename alone.
 
 ## Current production
 
+- [FINALPLAY20 DMSynth resume production](briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md)
+  — current p37 production, measured sample-clock repair after suspend,
+  ordinary sleep/listening gate, active-game soak, nine cold starts, exact
+  `19/19` identity and FINALPLAY19 rollback.
 - [FINALPLAY19 input and Wayland production](briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md)
-  — current p25/p26 production, immediate Start/Select edges, direct exit, loaded
-  game soak, exact `19/19` identity and FINALPLAY18 rollback.
+  — retained p34 rollback, p25/p26 Wayland fixes, immediate Start/Select edges
+  and direct exit.
 - [Input latency and exit-status-40 follow-up](briefs/MGS2_INPUT_AND_EXIT40_FOLLOWUP_2026-08-27.md)
   — crash evidence, proved gptokeyb delay/double-input cause and the candidate
   record that preceded FINALPLAY19 promotion.
@@ -43,6 +47,11 @@ supersede it for current decisions.
 
 ## Audio
 
+- [FINALPLAY20 DMSynth resume production](briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md)
+  — promoted repair for the measured stale sample clock behind delayed
+  post-resume steps and attacks.
+- [Rejected one-tick resume candidate](briefs/MGS2_DMSYNTH_STALL1_RESUME_CANDIDATE_2026-08-27.md)
+  — transport re-arm alone did not remove the future event-queue delay.
 - [Intermittent SFX handoff](briefs/MGS2_INTERMITTENT_SFX_HANDOFF_2026-08-10.md)
   — current route for gameplay SFX loss.
 - [DirectSound SFX state capture](briefs/MGS2_DSOUND_SFX_STATE_CAPTURE_2026-08-10.md)
