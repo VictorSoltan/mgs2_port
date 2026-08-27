@@ -16,7 +16,7 @@ superseded or explicitly retracted.
 
 ## Current production
 
-FINALPLAY18 is current as of 2026-08-26:
+FINALPLAY19 is current as of 2026-08-27:
 
 ```text
 D3D8 -> DXVK-Sarek 1.11.1 warm cache/one worker
@@ -25,24 +25,29 @@ texture decode -> Box86 native fused DXT5 surface bridge
 ```
 
 It uses a direct 32-bit Wine prefix and
-`box86-fp24-wayland-atomic-production`. FINALPLAY18 differs from FINALPLAY17
-only by promoting the Box86 patches 23+24 Wine 11 Wayland-listener ABI fix after
-its callback gate, loaded-game soak and deep suspend/resume. The inherited
+`box86-fp26-wayland-text-input-production`. FINALPLAY19 adds Box86 patch 25's
+exact text-input listener ABI fix, patch 26's reproducible revision boundary and
+a source-recorded immediate-edge gptokeyb helper to FINALPLAY18. Wine's
+duplicate raw-controller route is disabled, while
+the same-device Start+Select direct-exit chord is retained. Promotion followed
+the callback gate, correct LOAD GAME route, input-edge checks, loaded-game soak,
+direct-exit cleanup and 19/19 normal-entry identity. The inherited
 corrected symmetric FINALPLAY16 versus FINALPLAY17 A-B-A-B reduced the
 controlled gap sum by 20.1% and the two
-pipeline-gap clusters by 32.3%. Promotion followed the correct LOAD GAME route,
-visual gameplay witness and an 18/18 live identity check. This is not a global
-FPS claim and the independent game/read stalls remain open.
+pipeline-gap clusters by 32.3%. This is not a global FPS claim and the
+independent game/read stalls remain open.
 
 Immediate rollback:
 
 ```sh
+MGS2_RENDERER=fp18 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Read `docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md` and
+Read `docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md` and
+`docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md` and
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md` before
 changing Box86 or renderer defaults.
 
@@ -67,7 +72,7 @@ changing Box86 or renderer defaults.
 ## Current research entry points
 
 - Production/DXVK:
-  `docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md`
+  `docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md`
 - DXVK transfer rationale:
   `docs/briefs/MGS2_DMC3_OPTIMIZATION_TRANSFER_2026-08-24.md`
 - Intermittent gameplay SFX:
@@ -111,7 +116,9 @@ Do not mix the Wine 11.0 tree with the older CrossOver Android source tree.
   Vulkan/Wayland bridge; patches 18--21 record diagnostics, the verified fused
   DXT bridge and its counter-free FINALPLAY17 production entry. Patch 22 fixes
   the clean-build graph without changing those bytes; patches 23+24 are the
-  promoted FINALPLAY18 Wayland listener ABI fix.
+  promoted FINALPLAY18 Wayland listener ABI fix. Patch 25 corrects the remaining
+  reachable text-input callback signature; patch 26 closes its build-directory
+  dependent embedded-revision boundary for FINALPLAY19.
 - FINALPLAY17 D3D8 is base+DXVK patch 02 with `b_ndebug=true`; D3D9 is
   base+patches 01, 02 and 08 with `b_ndebug=false`. Do not collapse the stages:
   only the split recorded in `device/FINALPLAY.lock` reproduces both DLLs.

@@ -1,6 +1,6 @@
-# FINALPLAY18 production record
+# FINALPLAY19 production record
 
-FINALPLAY18 was promoted on 26 August 2026. The normal PortMaster entry selects:
+FINALPLAY19 was promoted on 27 August 2026. The normal PortMaster entry selects:
 
 ```text
 MGS2 D3D8
@@ -20,12 +20,15 @@ result, not a global FPS claim; independent game/read stalls remain.
 The complete device capture, source hashes and rollback proof are in
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`.
 
-FINALPLAY18 changes only Box86 from FINALPLAY17 p21 to patches 23+24. They fix a
-critical Wine 11 Wayland-listener ABI defect and explicit callback publication
-ordering. The exact p24 hash passed its callback gate, more than 40 minutes in
-the loaded game, focus transitions, deep suspend/resume, normal-entry visual
-gameplay and `18/18` live identity. See
-`docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md`.
+FINALPLAY19 adds two runtime fixes to FINALPLAY18. Box86 patch 25 corrects the
+remaining reachable Wine 11 text-input listener signature and publishes its
+callback table atomically; patch 26 and the release recipe make the artifact
+independent of source/build paths. The source-recorded helper delivers Start
+and Select on their real button edges while preserving the same-device
+direct-exit chord; Wine's duplicate physical-controller route is disabled. The
+exact bundle passed the callback, loaded-game, input-edge, soak, direct-exit
+cleanup and normal-entry `19/19` identity gates. See
+`docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md`.
 
 ## Launch and rollback
 
@@ -35,7 +38,13 @@ Normal launch:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to the exact FINALPLAY17 DXVK runtime:
+Immediate one-launch rollback to the exact FINALPLAY18 DXVK runtime:
+
+```sh
+MGS2_RENDERER=fp18 /storage/roms/ports/MGS2-Substance.sh
+```
+
+One-launch rollback to the exact FINALPLAY17 DXVK runtime:
 
 ```sh
 MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
@@ -59,7 +68,8 @@ unchanged FINALPLAY16 manifest `18/18`.
 The selector is `device/launch-play.sh`; it dispatches to the fixed production
 route or one of three rollback routes:
 
-- `device/launch-play-dxvk-fp18.sh` — current production route;
+- `device/launch-play-dxvk-fp19.sh` — current production route;
+- `device/launch-play-dxvk-fp18.sh` — exact p24 rollback;
 - `device/launch-play-dxvk-fp17.sh` — shared fixed engine and p21 rollback;
 - `device/launch-play-dxvk-fp16.sh`;
 - `device/launch-play-wined3d-fp15.sh`.
@@ -73,25 +83,27 @@ automatic temperature-triggered signal. Teardown also no longer signals a PID
 after reaping it. The explicit DXVK research harness retains its separate
 emergency guard for unattended measurements.
 
-The tracked `device/mgs2.gptk` mapping is started through PortMaster's
-`$GPTOKEYB` command. This carries the platform kill-mode option (`-1` on the
-tested ROCKNIX image), making Start+Select terminate the game immediately. The
-bare `/usr/bin/gptokeyb` fallback also passes `-1` explicitly. A live RG353VS
-test observed Select and Start in one input report, exited FINALPLAY17 with
+The tracked `device/mgs2.gptk` mapping is executed by the exact patched helper
+in FINALPLAY19. Its default-off `-immediate-start-back` mode emits normal Start
+and Select mappings on the physical down/up edges without waiting for chord
+resolution. The closed route also sets `winebus.sys=d`, so Wine cannot consume
+the same physical input first as a raw joystick action. Same-device
+Start+Select still sends SIGTERM directly. The final device gate exited with
 status 143 and left no game/helper process or MGS2 bind mount; the launcher lock
 was available and the CPU/GPU governors were restored.
 
 ## Production identity
 
-`device/FINALPLAY18_WAYLAND_ABI.manifest` is the authoritative 18-row identity gate.
-It covers seven supplied/bind-mounted files plus the exact system Wine, Vulkan
-loader and proprietary Mali files on which the route depends.
+`device/FINALPLAY19_INPUT_WAYLAND.manifest` is the authoritative 19-row identity
+gate. It covers eight supplied/bind-mounted files plus the exact system Wine,
+Vulkan loader and proprietary Mali files on which the route depends.
 
 Supplied production artifacts:
 
 | Role | Artifact | SHA-256 prefix |
 |---|---|---|
-| Box86 | `box86-fp24-wayland-atomic-production` | `d6cafba667d1` |
+| Box86 | `box86-fp26-wayland-text-input-production` | `b7e9530f6039` |
+| input helper | `gptokeyb-mgs2-immediate` | `49c782dad9da` |
 | D3D8 | `d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll` | `22e519d266b6` |
 | D3D9 | `d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll` | `4918b0283329` |
 | DirectMusic synth | `dmsynth_p34_interp_reset.dll` | `b4ec2cd09f26` |
@@ -120,9 +132,25 @@ Box86:
   verified fused bridge; patch 21 selects its counter-free production entry;
 - patch 22 fixes only the clean parallel-build dependency for generated
   `arm_printer.c` and reproduces the existing production hash;
-- patch 23 completes the Wine 11 Wayland listener ABI; patch 24 publishes the
-  affected callback slots with release/acquire ordering. FINALPLAY18 promotes
-  their exact p24 hash after the callback, soak and suspend/resume gates.
+- patch 23 completes the original Wine 11 Wayland listener ABI; patch 24
+  publishes the affected callback slots with release/acquire ordering;
+- patch 25 corrects `zwp_text_input_v3_listener.delete_surrounding_text` from
+  the erroneous `pppuu` bridge to the generated Wine 11 `ppuu` ABI and applies
+  atomic publication to that listener table;
+- patch 26 pins the embedded Box86 revision independently of CMake's working
+  directory. The release recipe also normalises source paths and removes debug
+  sections plus the path-derived GNU build-id. Two different build directories
+  reproduced the exact FINALPLAY19 runtime hash above.
+
+gptokeyb:
+
+- upstream commit: `5b1284e1502548d476aa38e5979b0a8f48cb7b94`;
+- production delta:
+  `gptokeyb-patches/01-immediate-start-back-kill-chord.patch`;
+- compiler, target SDL/libstdc++ identities, patch and exact binary hashes are
+  pinned in `device/FINALPLAY.lock`;
+- `harness/build_gptokeyb_mgs2.sh` rebuilds the helper; its GPL-2.0 source and
+  notice boundary are recorded in the repository.
 
 DXVK-Sarek:
 
@@ -144,7 +172,7 @@ Wine:
   `wine-patches/FINALPLAY15-wine-complete.patch`;
 - patches 01--03 after that boundary are default-off research instrumentation
   and its audit cleanup; no audit-built Wine DLL was deployed;
-- the FINALPLAY17/18 audio DLLs are the same byte-identified components used by
+- the FINALPLAY17--19 audio DLLs are the same byte-identified components used by
   the prior production routes.
 
 ## What remains open
@@ -157,8 +185,14 @@ Wine:
   capture.
 - Runtime freezes have multiple known signatures; new occurrences must be
   captured and named rather than attributed by resemblance.
+- The previous status-40 exit remains unclassified because no exception frame
+  was captured. FINALPLAY19 repairs a reachable ABI defect and exceeded that
+  run's elapsed point, but status 40 alone does not prove causation.
 
 ## Historical production
+
+FINALPLAY18 remains the exact `MGS2_RENDERER=fp18` rollback and is documented in
+`docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md`.
 
 FINALPLAY17 remains the exact `MGS2_RENDERER=fp17` rollback and is documented in
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md`.

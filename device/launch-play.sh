@@ -1,8 +1,8 @@
 #!/bin/sh
-# FINALPLAY18 production selector.
+# FINALPLAY19 production selector.
 #
-# DXVK-Sarek over proprietary libmali is the normal renderer. The previous
-# FINALPLAY17, FINALPLAY16 and FINALPLAY15 remain one-launch rollback paths.
+# DXVK-Sarek over proprietary libmali is the normal renderer. FINALPLAY18 and
+# the older fixed bundles remain one-launch rollback paths.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -17,7 +17,10 @@ else
 fi
 
 case "$RENDERER" in
-    dxvk|dxvk18|fp18)
+    dxvk|dxvk19|fp19)
+        exec "$HERE/launch-play-dxvk-fp19.sh"
+        ;;
+    dxvk18|fp18)
         exec "$HERE/launch-play-dxvk-fp18.sh"
         ;;
     dxvk17|fp17)
@@ -30,7 +33,7 @@ case "$RENDERER" in
         exec "$HERE/launch-play-wined3d-fp15.sh"
         ;;
     *)
-        echo "MGS2: unknown MGS2_RENDERER=$RENDERER (use dxvk, fp17, dxvk16 or wined3d)" >&2
+        echo "MGS2: unknown MGS2_RENDERER=$RENDERER (use dxvk, fp18, fp17, dxvk16 or wined3d)" >&2
         exit 1
         ;;
 esac

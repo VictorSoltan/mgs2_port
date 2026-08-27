@@ -1,9 +1,7 @@
 #!/bin/bash
-# Shared fixed-bundle engine for FINALPLAY17 and FINALPLAY18. Direct execution
-# selects the exact FINALPLAY17 rollback; launch-play-dxvk-fp18.sh selects the
-# p24 Wayland-listener ABI production bundle by a closed route name. The p25
-# route is an explicit device-gate candidate and is never selected by normal
-# play.
+# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY19. Direct
+# execution selects the exact FINALPLAY17 rollback. The newer wrappers select
+# complete closed routes; arbitrary renderer/input combinations are rejected.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster" ]; then
@@ -58,10 +56,12 @@ mgs2_reject_research_overrides() {
 }
 mgs2_reject_research_overrides
 
-# These are two complete, named production bundles, not binary selectors. Keep
+# These are complete, named production/rollback bundles, not binary selectors. Keep
 # this closed case after the stale-override check so inherited experiment
 # variables cannot assemble an accidental hybrid. FINALPLAY17 remains the exact
-# p21 rollback; FINALPLAY18 changes only Box86 to the verified p24 ABI fix.
+# p21 rollback; FINALPLAY18 changes only Box86 to the verified p24 ABI fix;
+# FINALPLAY19 adds the p25 text-input ABI fix, the p26 reproducible-build
+# boundary and immediate input.
 PRODUCTION_ROUTE=${MGS2_PRODUCTION_ROUTE:-finalplay17}
 case "$PRODUCTION_ROUTE" in
     finalplay17)
@@ -74,8 +74,13 @@ case "$PRODUCTION_ROUTE" in
         PLAY_IDENTITY_MANIFEST=FINALPLAY18_WAYLAND_ABI.manifest
         INPUT_ROUTE=legacy
         ;;
-    wayland-p25-candidate)
-        MGS2_BOX86_BIN=box86-fp25-wayland-text-input-candidate
+    finalplay19)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=FINALPLAY19_INPUT_WAYLAND.manifest
+        INPUT_ROUTE=immediate-production
+        ;;
+    wayland-p26-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-candidate
         PLAY_IDENTITY_MANIFEST=BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest
         INPUT_ROUTE=immediate-candidate
         ;;
@@ -90,14 +95,13 @@ MGS2_DXVK_WINE_MODE=direct32
 MGS2_BOX86_EMULATED_LIBS='winewayland.so:winevulkan.so:libffi.so.8:libwayland-egl.so.1:libxkbcommon.so.0:libxkbregistry.so.0:libxml2.so.2:libicuuc.so.72:libicudata.so.72:liblzma.so.5:libstdc++.so.6'
 MGS2_WINEDLLOVERRIDES='mscoree=;mshtml=;winemenubuilder.exe=;winepulse.drv=d;d3d8=n,b;d3d9=n,b;dxgi=builtin'
 
-# Research gate for the one-process immediate Start/Select input candidate.
-# The closed production route above selects it together with exact renderer
-# bytes. Environment selection is rejected so an accidental hybrid cannot
-# bypass either manifest.
+# Closed gate for the one-process immediate Start/Select input route. Candidate
+# and production names select complete exact bundles. Environment selection is
+# rejected so an accidental hybrid cannot bypass either manifest.
 case "$INPUT_ROUTE" in
     legacy)
         ;;
-    immediate-candidate)
+    immediate-candidate|immediate-production)
         MGS2_GPTOKEYB_BIN="$GAMEDIR/gptokeyb-mgs2-immediate"
         MGS2_GPTOKEYB_SHA256=49c782dad9da50cb0f5bb9e37821104e5089563feb24c7b0303117b75196b43a
         MGS2_WINEDLLOVERRIDES="$MGS2_WINEDLLOVERRIDES;winebus.sys=d"
@@ -636,7 +640,7 @@ if [ -n "${MGS2_DXVK_D3D8_DLL:-}" ]; then
 fi
 
 start_gptokeyb() {
-    if [ "$INPUT_ROUTE" = immediate-candidate ]; then
+    if [ "$INPUT_ROUTE" != legacy ]; then
         if [ ! -r "$GAMEDIR/mgs2.gptk" ]; then
             echo "MGS2: immediate input route requires $GAMEDIR/mgs2.gptk" >&2
             return 1

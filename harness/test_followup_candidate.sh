@@ -1,5 +1,5 @@
 #!/bin/sh
-# Static fail-closed gate for the combined p25 + immediate-input candidate.
+# Static fail-closed gate for the combined p25/p26 + immediate-input candidate.
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -8,17 +8,17 @@ WRAPPER="$REPO/device/launch-input-immediate-candidate.sh"
 MANIFEST="$REPO/device/BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest"
 FP18="$REPO/device/FINALPLAY18_WAYLAND_ABI.manifest"
 LOCK="$REPO/device/FOLLOWUP_CANDIDATE.lock"
-BOX_HASH=1ff20d6d36dbbabd5a5aadd9ab677f0e02f6f06ab119f8a3c9952175db45e4cd
+BOX_HASH=b7e9530f6039335a37ee54d8d3a2974e25b71500b96b95a9dd899f1e20374d51
 INPUT_HASH=49c782dad9da50cb0f5bb9e37821104e5089563feb24c7b0303117b75196b43a
 TMP=$(mktemp -d /tmp/mgs2-followup-candidate.XXXXXX)
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT HUP INT TERM
 
-grep -Fq 'wayland-p25-candidate)' "$ENGINE"
-grep -Fq 'MGS2_BOX86_BIN=box86-fp25-wayland-text-input-candidate' "$ENGINE"
+grep -Fq 'wayland-p26-candidate)' "$ENGINE"
+grep -Fq 'MGS2_BOX86_BIN=box86-fp26-wayland-text-input-candidate' "$ENGINE"
 grep -Fq 'PLAY_IDENTITY_MANIFEST=BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest' "$ENGINE"
 grep -Fq 'INPUT_ROUTE=immediate-candidate' "$ENGINE"
-grep -Fq 'export MGS2_PRODUCTION_ROUTE=wayland-p25-candidate' "$WRAPPER"
+grep -Fq 'export MGS2_PRODUCTION_ROUTE=wayland-p26-candidate' "$WRAPPER"
 
 rows=$(awk '$1 !~ /^#/ && NF {n++} END {print n+0}' "$MANIFEST")
 [ "$rows" = 19 ] || { echo "FAIL: candidate manifest has $rows rows" >&2; exit 1; }
@@ -37,8 +37,10 @@ lock_value() { awk -v key="$1" '$1==key {print $2}' "$LOCK"; }
 [ "$(lock_value gptokeyb_candidate_sha256)" = "$INPUT_HASH" ]
 [ "$(sha256sum "$REPO/$(lock_value box86_patch_25)" | cut -d' ' -f1)" = \
   "$(lock_value box86_patch_25_sha256)" ]
+[ "$(sha256sum "$REPO/$(lock_value box86_patch_26)" | cut -d' ' -f1)" = \
+  "$(lock_value box86_patch_26_sha256)" ]
 [ "$(sha256sum "$REPO/$(lock_value gptokeyb_patch_01)" | cut -d' ' -f1)" = \
   "$(lock_value gptokeyb_patch_01_sha256)" ]
 
-echo "ok     candidate differs from FINALPLAY18 only by p25 Box86 and input helper"
-echo "ok     exact 19-row candidate identity and both source patches are pinned"
+echo "ok     candidate adds p25/p26 Box86 and the immediate input helper"
+echo "ok     exact 19-row identity and all three source patches are pinned"

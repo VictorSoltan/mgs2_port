@@ -1,10 +1,12 @@
-# Unpromoted 2026-08-27 crash/input follow-up. This is intentionally separate
-# from FINALPLAY.lock so the current FINALPLAY18 reconstruction remains exact.
+# Pre-promotion 2026-08-27 crash/input follow-up. This remains separate from
+# FINALPLAY.lock as the record of the candidate boundary that preceded FINALPLAY19.
 box86_parent_sha256 d6cafba667d16f6227c0ffd5437e7ac52253dd46624c2edfcbbd36ca3843188b
 box86_patch_25 box86-patches/25-wayland-text-input-listener-abi.patch
 box86_patch_25_sha256 91240d1ecab3aa255c8323774e029822af6d36f22866d22e2bcff07a903a9ca7
+box86_patch_26 box86-patches/26-reproducible-git-revision.patch
+box86_patch_26_sha256 3730fe1add66336979a376d7c05d078729b9f846b0c1a7e63c30fb1f469cdd26
 box86_source_date_epoch 1756000000
-box86_candidate_sha256 1ff20d6d36dbbabd5a5aadd9ab677f0e02f6f06ab119f8a3c9952175db45e4cd
+box86_candidate_sha256 b7e9530f6039335a37ee54d8d3a2974e25b71500b96b95a9dd899f1e20374d51
 
 gptokeyb_remote https://github.com/PortsMaster/gptokeyb
 gptokeyb_base_commit 5b1284e1502548d476aa38e5979b0a8f48cb7b94

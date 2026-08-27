@@ -96,23 +96,34 @@ format `pppuu`. Patch 25 changes it to the exact `ppuu` ABI and gives the whole
 text-input listener the release/acquire publication used by patches 23+24.
 
 `harness/wayland/audit_listener_abi.py` fails p24 on that mismatch and passes
-p25 with exactly the five version-gated omissions. The p25 Box86 build was made
-twice with the pinned `SOURCE_DATE_EPOCH=1756000000` and produced the same
-unstripped production-style hash both times:
+p25 with exactly the five version-gated omissions. The device-tested p25 Box86
+used the pinned `SOURCE_DATE_EPOCH=1756000000` and had this exact unstripped
+hash:
 
 ```text
 1ff20d6d36dbbabd5a5aadd9ab677f0e02f6f06ab119f8a3c9952175db45e4cd
 ```
 
-An earlier p25 build that embedded the current date was rejected before a gate
-or promotion. `device/BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest` pins the
-reproducible p25 and helper hashes plus the unchanged 18 FINALPLAY18 runtime
-dependencies.
+An earlier p25 build that embedded the current date was rejected before a gate.
+The hash above then passed a 37:58 loaded-game soak, but an independent rebuild
+later exposed another provenance boundary: RelWithDebInfo embedded absolute
+source/build paths, and the git revision command depended on CMake's working
+directory. It was retained as device evidence but rejected for production
+identity. Patch 26 pins the revision; the release recipe normalises source paths
+and removes debug sections plus the derived build-id. Two different build
+directories then produced the same runtime artifact:
 
-## Remaining gates
+```text
+b7e9530f6039335a37ee54d8d3a2974e25b71500b96b95a9dd899f1e20374d51
+```
 
-Before promotion, replace the rejected dated p25 device candidate with the
-reproducible hash above, then run:
+`device/BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest` now pins that p26 artifact,
+the helper and the unchanged 17 FINALPLAY18 runtime dependencies.
+
+## Gate outcome
+
+The reproducible p26 artifact above replaced the rejected p25 production
+identity and completed:
 
 1. the targeted native-Wayland i386 callback gate;
 2. the exact manifest and live-mount identity gate;
@@ -121,8 +132,8 @@ reproducible hash above, then run:
 4. a loaded-game soak beyond the prior exit point with bounded exception and
    pressure observation.
 
-If p25 fails, promote the independently verified immediate-input route over
-exact FINALPLAY18 and retain p24. If it passes, the combined fixed bundle may be
-promoted with FINALPLAY18 as the immediate rollback. In either case, status 40
-remains unclassified until an exception record or reproducible game path names
-its cause.
+All four gates passed. The combined bundle was promoted as FINALPLAY19, with
+exact FINALPLAY18 retained as the immediate rollback. The promotion record is
+`MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md`. Status 40 remains
+unclassified because the earlier exit has neither an exception record nor a
+reproducible game path that names its cause.

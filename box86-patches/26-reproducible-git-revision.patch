@@ -1,0 +1,46 @@
+Box86 patch 26 -- make the embedded revision independent of the build directory.
+
+Apply after patches 17--25 on top of the FINALPLAY15 complete patch.
+
+The upstream custom command runs `git rev-parse` in CMake's current working
+directory. An in-tree build finds the repository through its parent and embeds
+0579f8b9; an out-of-tree build under /tmp finds no repository and embeds an
+empty string. The resulting allocated bytes and build-id differ even when all
+source and compiler inputs are identical.
+
+Accept a cache value and run the fallback lookup explicitly in BOX86_ROOT.
+Production and rebuild scripts pass the pinned base revision through
+MGS2_GITREV, so the fallback is not part of the production identity.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -710,18 +710,25 @@
+     )
+-
++
+ endif()
+-
++
++if(NOT MGS2_GITREV)
++    execute_process(
++        COMMAND git -C "${BOX86_ROOT}" rev-parse --short HEAD
++        OUTPUT_VARIABLE MGS2_GITREV
++        OUTPUT_STRIP_TRAILING_WHITESPACE)
++endif()
++
+ # creates git_head.h
+ if(ARM_DYNAREC)
+     add_custom_command(
+         OUTPUT "${BOX86_ROOT}/src/git_head.h"
+-        COMMAND bash -c "echo \\\#define GITREV \\\"$(git rev-parse --short HEAD)\\\">\"${BOX86_ROOT}/src/git_head.h\""
++        COMMAND bash -c "echo \\\#define GITREV \\\"${MGS2_GITREV}\\\">\"${BOX86_ROOT}/src/git_head.h\""
+         DEPENDS dynarec ${ELFLOADER_SRC} ${INTERPRETER} ${WRAPPEDS}
+         VERBATIM)
+ else()
+     add_custom_command(
+         OUTPUT "${BOX86_ROOT}/src/git_head.h"
+-        COMMAND bash -c "echo \\\#define GITREV \\\"$(git rev-parse --short HEAD)\\\">\"${BOX86_ROOT}/src/git_head.h\""
++        COMMAND bash -c "echo \\\#define GITREV \\\"${MGS2_GITREV}\\\">\"${BOX86_ROOT}/src/git_head.h\""
+         DEPENDS ${ELFLOADER_SRC} ${INTERPRETER} ${WRAPPEDS}
+         VERBATIM)
+ endif()

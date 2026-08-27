@@ -6,11 +6,14 @@ problem rather than reading by filename alone.
 
 ## Current production
 
+- [FINALPLAY19 input and Wayland production](briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md)
+  — current p25/p26 production, immediate Start/Select edges, direct exit, loaded
+  game soak, exact `19/19` identity and FINALPLAY18 rollback.
 - [Input latency and exit-status-40 follow-up](briefs/MGS2_INPUT_AND_EXIT40_FOLLOWUP_2026-08-27.md)
-  — current crash evidence, proved gptokeyb delay/double-input cause, immediate
-  input candidate, remaining p25 Wayland ABI mismatch and promotion gates.
+  — crash evidence, proved gptokeyb delay/double-input cause and the candidate
+  record that preceded FINALPLAY19 promotion.
 - [FINALPLAY18 Wayland ABI production](briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md)
-  — current p24 production, loaded-game soak, deep suspend/resume, exact live
+  — retained p24 rollback, loaded-game soak, deep suspend/resume, exact live
   identity and FINALPLAY17 rollback.
 - [Active patch audit and Box86 Wayland ABI candidate](briefs/MGS2_PATCH_AUDIT_AND_WAYLAND_ABI_2026-08-26.md)
   — audit that found the now-promoted listener-ABI defect, launcher crash

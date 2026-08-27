@@ -273,15 +273,21 @@ if [ "${1:-}" = "--build" ]; then
     echo
     echo "== Box86 rebuild, exact bytes and device ABI =="
     BOX86_BUILD="${BOX86_BUILD:-$WORKSPACE/box86-src/build-timing}"
+    BOX86_BUILD_CFLAGS="$(lock box86_cflags) \
+-ffile-prefix-map=$BOX86_LIVE=$(lock box86_repro_source)"
     if cmake -S "$BOX86_LIVE" -B "$BOX86_BUILD" -DRK3399=1 \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-            -DCMAKE_C_FLAGS="$(lock box86_cflags)" \
+            -DCMAKE_C_FLAGS="$BOX86_BUILD_CFLAGS" \
             -DCMAKE_EXE_LINKER_FLAGS="$(lock box86_ldflags)" \
+            -DMGS2_GITREV="$base" \
             -DUSE_CCACHE=OFF >"$WORK/box86-configure.txt" 2>&1 \
             && cmake --build "$BOX86_BUILD" --parallel 8 \
                 >"$WORK/box86-build.txt" 2>&1; then
-        got=$(sha256sum "$BOX86_BUILD/box86" | cut -d' ' -f1)
+        cp "$BOX86_BUILD/box86" "$WORK/box86-runtime"
+        arm-linux-gnueabihf-strip --strip-debug \
+            --remove-section=.note.gnu.build-id "$WORK/box86-runtime"
+        got=$(sha256sum "$WORK/box86-runtime" | cut -d' ' -f1)
         if awk '$1 ~ /^box86_candidate_patch_/ {found=1} END {exit !found}' "$LOCK"; then
             want=$(lock box86_candidate_sha256)
         elif [ -n "$(lock box86_production_sha256)" ]; then
@@ -289,7 +295,7 @@ if [ "${1:-}" = "--build" ]; then
         else
             want=$(lock box86_sha256)
         fi
-        wraps=$(arm-linux-gnueabihf-objdump -T "$BOX86_BUILD/box86" 2>/dev/null \
+        wraps=$(arm-linux-gnueabihf-objdump -T "$WORK/box86-runtime" 2>/dev/null \
             | grep -cE ' (log10f|atan2f|asinf|acosf|sinhf|acoshf|coshf|sqrtf)$' || true)
         if [ "$got" = "$want" ] && [ "$wraps" = 8 ]; then
             echo "ok     rebuild reproduces the selected Box86 byte for byte"

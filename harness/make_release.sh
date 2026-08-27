@@ -132,13 +132,13 @@ sh "$REPO/harness/test_gptokeyb_launchers.sh" >/dev/null || {
     echo "gptokeyb launcher gate failed -- refusing to ship a port without reliable Start+Select exit" >&2
     exit 1
 }
-sh "$REPO/harness/test_finalplay18_production.sh" >/dev/null || {
-    echo "FINALPLAY18 selector gate failed -- refusing to ship an ambiguous production route" >&2
+sh "$REPO/harness/test_finalplay19_production.sh" >/dev/null || {
+    echo "FINALPLAY19 selector gate failed -- refusing to ship an ambiguous production route" >&2
     exit 1
 }
 echo "ok     live trees match the pinned bases plus the complete patches"
 echo "ok     launchers arm PortMaster Start+Select exit mode"
-echo "ok     FINALPLAY18 selector and rollback split are fail-closed"
+echo "ok     FINALPLAY19 selector and rollback split are fail-closed"
 
 echo "== 2. WineD3D =="
 ( cd "$WINE_BUILD" && make -j8 i386_LDFLAGS="$LD_DET" \
@@ -146,16 +146,22 @@ echo "== 2. WineD3D =="
 
 echo "== 3. island objects, and class-B regenerated from THAT WineD3D =="
 ( cd "$REPO" && SYSROOT=/ CC=clang-18 MGS2_ISLAND_LAUNCHER="$LAUNCHER" \
+    MGS2_REPRO_WINE_SOURCE="$(awk '$1=="island_repro_wine_source" {print $2}' "$LOCK")" \
+    MGS2_REPRO_WINE_BUILD="$(awk '$1=="island_repro_wine_build" {print $2}' "$LOCK")" \
+    MGS2_REPRO_BOX86_SOURCE="$(awk '$1=="island_repro_box86_source" {print $2}' "$LOCK")" \
     EXTRA_CFLAGS="--target=arm-linux-gnueabihf -mms-bitfields -DMGS2_GL_CENSUS" \
     sh harness/island/full/build_island_objects.sh >/dev/null )
 MGS2_ISLAND_LAUNCHER="$LAUNCHER" sh "$REPO/harness/verify_island_headers.sh"
 
 echo "== 4. Box86 =="
+BOX86_REPRO_CFLAGS="$(awk '$1=="box86_cflags" {print $2}' "$LOCK") \
+-ffile-prefix-map=$BOX86_SRC=$(awk '$1=="box86_repro_source" {print $2}' "$LOCK")"
 cmake -S "$BOX86_SRC" -B "$BOX86_BUILD" -DRK3399=1 \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
-    -DCMAKE_C_FLAGS="$(awk '$1=="box86_cflags" {print $2}' "$LOCK")" \
+    -DCMAKE_C_FLAGS="$BOX86_REPRO_CFLAGS" \
     -DCMAKE_EXE_LINKER_FLAGS="$(awk '$1=="box86_ldflags" {print $2}' "$LOCK")" \
+    -DMGS2_GITREV="$(awk '$1=="box86_base_commit" {print $2}' "$LOCK")" \
     -DUSE_CCACHE=OFF >/dev/null
 cmake --build "$BOX86_BUILD" --parallel 8 >/dev/null
 
@@ -163,6 +169,8 @@ echo "== 5. collect =="
 mkdir -p "$OUT"
 cp "$WINE_BUILD/dlls/wined3d/i386-windows/wined3d.dll" "$OUT/wined3d_$NAME.dll"
 cp "$BOX86_BUILD/box86" "$OUT/box86-$NAME"
+arm-linux-gnueabihf-strip --strip-debug \
+    --remove-section=.note.gnu.build-id "$OUT/box86-$NAME"
 # The presenter is carried forward from the last release unless its own build
 # tree has been reconfigured; rebuilding it here would silently change a binary
 # this release does not claim to touch.

@@ -40,9 +40,9 @@ grep -Fq 'scp -q "$REPO/device/mgs2.gptk" "$DEV:$GAMEDIR/mgs2.gptk"' \
 }
 echo "ok     release deploy includes device/mgs2.gptk"
 
-# The MGS2-specific helper is a closed candidate route, never an ambient
-# environment override. Its source/base/hash and the Wine controller boundary
-# must move together.
+# The MGS2-specific helper is selected only by complete candidate or production
+# routes, never by an ambient environment override. Its source/base/hash and the
+# Wine controller boundary must move together.
 ENGINE="$REPO/device/launch-play-dxvk-fp17.sh"
 CANDIDATE="$REPO/device/launch-input-immediate-candidate.sh"
 MANIFEST="$REPO/device/BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest"
@@ -53,7 +53,7 @@ HASH=49c782dad9da50cb0f5bb9e37821104e5089563feb24c7b0303117b75196b43a
 grep -Fq 'MGS2_INPUT_ROUTE \' "$ENGINE"
 grep -Fq 'MGS2_WINEDLLOVERRIDES="$MGS2_WINEDLLOVERRIDES;winebus.sys=d"' "$ENGINE"
 grep -Fq 'MGS2_GPTOKEYB_SHA256='$HASH "$ENGINE"
-grep -Fq 'MGS2_PRODUCTION_ROUTE=wayland-p25-candidate' "$CANDIDATE"
+grep -Fq 'MGS2_PRODUCTION_ROUTE=wayland-p26-candidate' "$CANDIDATE"
 if grep -Fq 'MGS2_INPUT_ROUTE=' "$CANDIDATE"; then
     echo "FAIL: candidate wrapper assembles input through an environment override" >&2
     exit 1
@@ -67,4 +67,4 @@ rows=$(awk '$1 !~ /^#/ && NF {n++} END {print n+0}' "$MANIFEST")
     echo "FAIL: input candidate manifest has $rows rows, expected 19" >&2
     exit 1
 }
-echo "ok     MGS2 candidate pins helper source, bytes and Wine input boundary"
+echo "ok     MGS2 closed routes pin helper source, bytes and Wine input boundary"

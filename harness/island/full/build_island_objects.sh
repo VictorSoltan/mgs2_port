@@ -57,6 +57,17 @@ EXTRA_CFLAGS="${EXTRA_CFLAGS:-}"
 OUT="$BOX86_SRC/src/island"
 REG="$OUT/registry"
 
+# __FILE__ is present in a few cold diagnostic strings, so absolute source
+# paths affect allocated bytes even after debug sections are removed. Map the
+# three machine-local roots to stable public names before compiling. This also
+# keeps the prebuilt island objects reproducible when the workspace moves.
+REPRO_WINE_SOURCE="${MGS2_REPRO_WINE_SOURCE:-/usr/src/wine-11.0}"
+REPRO_WINE_BUILD="${MGS2_REPRO_WINE_BUILD:-/usr/build/wine-i386}"
+REPRO_BOX86_SOURCE="${MGS2_REPRO_BOX86_SOURCE:-/usr/src/box86}"
+REPRO_CFLAGS="-ffile-prefix-map=$WINE_SRC=$REPRO_WINE_SOURCE \
+              -ffile-prefix-map=$WINE_BUILD=$REPRO_WINE_BUILD \
+              -ffile-prefix-map=$BOX86_SRC=$REPRO_BOX86_SOURCE"
+
 # The i386 DLL supplies the guest RVAs. The opengl32 DLL must be the one MOUNTED
 # ON THE DEVICE: the reference wineprefix copy shares an ImageBase and has
 # different RVAs, which is what made the first class-C failure silent.
@@ -68,7 +79,7 @@ INC="-I$WINE_BUILD/dlls/wined3d -I$WINE_SRC/dlls/wined3d -I$WINE_SRC/include \
      -I$WINE_SRC/include/msvcrt -I$WINE_SRC/libs/vkd3d/include \
      -I$WINE_SRC/libs/vkd3d/include/private -I$WINE_BUILD/include"
 DEF="-DMGS2_RELEASE -DMGS2_FINALPLAY -D_UCRT -D__WINESRC__ -DMGS2_ISLAND_ARM \
-     -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS $EXTRA_CFLAGS"
+     -DWINE_NO_TRACE_MSGS -DWINE_NO_DEBUG_MSGS $REPRO_CFLAGS $EXTRA_CFLAGS"
 
 mkdir -p "$OUT" "$REG"
 
