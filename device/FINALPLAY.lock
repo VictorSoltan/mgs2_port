@@ -21,6 +21,16 @@ wine_patch_83_sha256 8a1042d7b463415cecb52395eaa7f7adf76fd39e5e5f90593a02bd412ab
 finalplay19_dmsynth_sha256 b4ec2cd09f26a670eb8206d708f864597d2acde84ff1788732574c116b6baed2
 dmsynth_production_sha256 b11c9b6ba2f1d27fcdea822fff37f62187862aa7aeb5527d2efd2a159778ede8
 
+# FINALPLAY21 does not distribute or overwrite the game. It creates this exact
+# one-byte view in /tmp from the user's hash-pinned legal executable, bind-mounts
+# it for one launch and restores the original path during cleanup.
+game_exe_original_sha256 29759e6f06eaea4d61bb6aef5a5ef45a936eac1e76fa0c3471cf4f231349aaa0
+game_exe_wpatch_novs_sha256 6686b3fa6484a0609fbe65be46f34cbba941b18e252db7bbb83d457153ba31d6
+game_exe_wpatch_novs_offset 0x4a294a
+game_exe_wpatch_novs_original_byte 02
+game_wpatch_novs_source_patch game-patches/01-wpatch-fixed-function-fallback.patch
+game_wpatch_novs_source_patch_sha256 8e410333476be28719d52e42f856f16b5bad2b81b68bc645a1abc07c197bdfaf
+
 box86_base_remote    https://github.com/ptitSeb/box86.git
 box86_base_commit    0579f8b9
 box86_complete_patch box86-patches/FINALPLAY15-box86-complete.patch

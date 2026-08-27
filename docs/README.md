@@ -6,8 +6,12 @@ problem rather than reading by filename alone.
 
 ## Current production
 
+- [FINALPLAY21 missing-sea repair](briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md)
+  — current production; exact one-byte game-image view selects the existing
+  fixed-function wpatch path, restores animated water, passes `21/21` identity
+  and retains FINALPLAY20 as the immediate rollback.
 - [FINALPLAY20 DMSynth resume production](briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md)
-  — current p37 production, measured sample-clock repair after suspend,
+  — retained p37 rollback, measured sample-clock repair after suspend,
   ordinary sleep/listening gate, active-game soak, nine cold starts, exact
   `19/19` identity and FINALPLAY19 rollback.
 - [FINALPLAY19 input and Wayland production](briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md)

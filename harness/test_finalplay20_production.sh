@@ -1,5 +1,5 @@
 #!/bin/sh
-# Static fail-closed gate for the FINALPLAY20 selector and p37 audio bundle.
+# Static fail-closed gate for the retained FINALPLAY20 rollback bundle.
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,7 +24,7 @@ recorded_hash() {
     awk -v name="$1" '$2 == name {print $1}' "$PRODUCTION_HASHES"
 }
 
-grep -Fq 'dxvk|dxvk20|fp20)' "$SELECTOR"
+grep -Fq 'dxvk20|fp20)' "$SELECTOR"
 grep -Fq 'exec "$HERE/launch-play-dxvk-fp20.sh"' "$SELECTOR"
 grep -Fq 'dxvk19|fp19)' "$SELECTOR"
 grep -Fq 'exec "$HERE/launch-play-dxvk-fp19.sh"' "$SELECTOR"
@@ -66,7 +66,7 @@ cmp "$TMP/fp19-rest" "$TMP/fp20-rest"
   "$(lock_value finalplay17_d3d9_sha256)" ]
 ( cd "$REPO/device" && sed -n '6,$p' "$PRODUCTION_HASHES" | sha256sum -c - >/dev/null )
 
-echo "ok     FINALPLAY20 is the fixed default and FINALPLAY19 is exact rollback"
+echo "ok     FINALPLAY20 remains a fixed rollback and FINALPLAY19 is exact rollback"
 echo "ok     FINALPLAY20 differs from FINALPLAY19 only at dmsynth.dll and fixed watchdog state"
 echo "ok     p35+p37 Wine source patches and exact p37 binary hash are production-locked"
 echo "ok     tracked FINALPLAY20 launcher/manifest/config hashes match"

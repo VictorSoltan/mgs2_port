@@ -1,6 +1,6 @@
-# FINALPLAY20 production record
+# FINALPLAY21 production record
 
-FINALPLAY20 was promoted on 27 August 2026. The normal PortMaster entry selects:
+FINALPLAY21 was promoted on 27 August 2026. The normal PortMaster entry selects:
 
 ```text
 MGS2 D3D8
@@ -40,6 +40,17 @@ then the same process completed 180 movement cycles and 30 attacks. The normal
 entry passed nine of nine fully cold starts with `19/19` identity. See
 `docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`.
 
+FINALPLAY21 retains the complete FINALPLAY20 runtime and changes only the game
+patch-surface route. The custom `wpatch` vertex shader left the Big Shell sea
+as a solid background void through D3D8/DXVK/Mali. Clearing only
+`M_DG_WINAPP_PATCH_USE_VERTEXSHADER` selects libdg's existing fixed-function
+fallback and restored moving water. The exact candidate had no observed black
+squares and normal-feeling FPS; the normal entry then passed `21/21` live
+identity. The installed EXE is never overwritten: a fail-closed helper accepts
+only the locked original hash, creates an exact one-byte temporary image,
+bind-mounts it for the launch and restores the original path on cleanup. See
+`docs/briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md`.
+
 ## Launch and rollback
 
 Normal launch:
@@ -48,7 +59,14 @@ Normal launch:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to the exact FINALPLAY19 p34 runtime:
+Immediate one-launch rollback to the exact FINALPLAY20 runtime without the
+water-path edit:
+
+```sh
+MGS2_RENDERER=fp20 /storage/roms/ports/MGS2-Substance.sh
+```
+
+One-launch rollback to the exact FINALPLAY19 p34 runtime:
 
 ```sh
 MGS2_RENDERER=fp19 /storage/roms/ports/MGS2-Substance.sh
@@ -84,7 +102,8 @@ unchanged FINALPLAY16 manifest `18/18`.
 The selector is `device/launch-play.sh`; it dispatches to the fixed production
 route or a named rollback route:
 
-- `device/launch-play-dxvk-fp20.sh` — current production route;
+- `device/launch-play-dxvk-fp21.sh` — current production route;
+- `device/launch-play-dxvk-fp20.sh` — exact pre-water-fix rollback;
 - `device/launch-play-dxvk-fp19.sh` — exact p34 rollback;
 - `device/launch-play-dxvk-fp18.sh` — exact p24 rollback;
 - `device/launch-play-dxvk-fp17.sh` — shared fixed engine and p21 rollback;
@@ -101,7 +120,7 @@ after reaping it. The explicit DXVK research harness retains its separate
 emergency guard for unattended measurements.
 
 The tracked `device/mgs2.gptk` mapping is executed by the exact patched helper
-in FINALPLAY19 and FINALPLAY20. Its default-off `-immediate-start-back` mode
+in FINALPLAY19 through FINALPLAY21. Its default-off `-immediate-start-back` mode
 emits normal Start and Select mappings on the physical down/up edges without waiting for chord
 resolution. The closed route also sets `winebus.sys=d`, so Wine cannot consume
 the same physical input first as a raw joystick action. Same-device
@@ -111,9 +130,10 @@ was available and the CPU/GPU governors were restored.
 
 ## Production identity
 
-`device/FINALPLAY20_DMSYNTH_RESUME.manifest` is the authoritative 19-row identity
-gate. It covers eight supplied/bind-mounted files plus the exact system Wine,
-Vulkan loader and proprietary Mali files on which the route depends.
+`device/FINALPLAY21_WATER_WPATCH.manifest` is the authoritative 21-row identity
+gate. It retains all 19 FINALPLAY20 rows and adds the exact temporary game image
+plus the tracked patch helper. It covers eight bind mounts and the exact system
+Wine, Vulkan loader and proprietary Mali files on which the route depends.
 
 Supplied production artifacts:
 
@@ -127,6 +147,8 @@ Supplied production artifacts:
 | DirectSound | `dsound_p36_native_fir_target.dll` | `302eff548429` |
 | DirectMusic performance | `dmime_transition1.dll` | `ce3e3f14a62a` |
 | DirectMusic port | `dmusic_shared_lifetime1.dll` | `1fe0a571503b` |
+| game patch helper | `patch-mgs2-wpatch-novs.sh` | `b7ba819816b1` |
+| temporary game view | generated from installed legal EXE | `6686b3fa6484` |
 
 Use the full hashes in the manifest. Prefixes above are for human recognition,
 not verification.
@@ -195,6 +217,18 @@ Wine:
   rejected patch 82 records the failed wall-clock resume witness and is not
   shipped.
 
+Game compatibility patch:
+
+- original game EXE SHA-256:
+  `29759e6f06eaea4d61bb6aef5a5ef45a936eac1e76fa0c3471cf4f231349aaa0`;
+- exact temporary view SHA-256:
+  `6686b3fa6484a0609fbe65be46f34cbba941b18e252db7bbb83d457153ba31d6`;
+- only changed byte: file offset `0x4a294a`, `02 -> 00`;
+- source-equivalent record:
+  `game-patches/01-wpatch-fixed-function-fallback.patch`;
+- generator: `device/patch-mgs2-wpatch-novs.sh`, whose output and live mount
+  are both hash-verified before the game starts.
+
 ## What remains open
 
 - The two independent game/read stalls remain after the pipeline/DXT work and
@@ -206,8 +240,9 @@ Wine:
   now-fixed post-resume sample-clock delay.
 - One pre-renderer cold start fault at the same linked FluidSynth instruction
   previously seen with p36 remains unclassified. The relevant p35/p36/p37 code
-  is identical and the next nine fully cold FINALPLAY20 starts passed, so no
-  speculative workaround is shipped.
+  is identical and the next nine fully cold FINALPLAY20 starts plus the
+  FINALPLAY21 cold production start passed, so no speculative workaround is
+  shipped.
 - Runtime freezes have multiple known signatures; new occurrences must be
   captured and named rather than attributed by resemblance.
 - The previous status-40 exit remains unclassified because no exception frame
@@ -215,6 +250,10 @@ Wine:
   run's elapsed point, but status 40 alone does not prove causation.
 
 ## Historical production
+
+FINALPLAY20 remains the exact `MGS2_RENDERER=fp20` pre-water-fix rollback and is
+documented in
+`docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`.
 
 FINALPLAY19 remains the exact `MGS2_RENDERER=fp19` p34 rollback and is
 documented in

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY20. Direct
+# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY21. Direct
 # execution selects the exact FINALPLAY17 rollback. The newer wrappers select
 # complete closed routes; arbitrary renderer/input combinations are rejected.
 
@@ -20,6 +20,8 @@ type get_controls >/dev/null 2>&1 && get_controls
 
 GAMEDIR="/storage/roms/ports/MGS2-Substance"
 EXE="mgs2_sse_rg353vs_port.exe"
+GAME_EXE_TARGET="$GAMEDIR/game/bin/$EXE"
+PATCHED_GAME_EXE=""
 
 # Production runs exactly one bundle, and it is not selectable from the
 # environment.
@@ -63,8 +65,11 @@ mgs2_reject_research_overrides
 # p21 rollback; FINALPLAY18 changes only Box86 to the verified p24 ABI fix;
 # FINALPLAY19 adds the p25 text-input ABI fix, the p26 reproducible-build
 # boundary and immediate input; FINALPLAY20 adds the p37 DMSynth transport and
-# stale-timeline resume repair.
+# stale-timeline resume repair; FINALPLAY21 retains that bundle and selects the
+# game's existing fixed-function wpatch renderer for the sea surface.
 PRODUCTION_ROUTE=${MGS2_PRODUCTION_ROUTE:-finalplay17}
+GAME_EXE_PATCH=none
+EXPECTED_BIND_MOUNTS=7
 case "$PRODUCTION_ROUTE" in
     finalplay17)
         MGS2_BOX86_BIN=box86-fp21-dxvk-native-dxt-surface
@@ -88,6 +93,17 @@ case "$PRODUCTION_ROUTE" in
         MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
         MGS2_DMSYNTH_WATCHDOG_MS=250
         MGS2_DMSYNTH_WATCHDOG_STALL=1
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    finalplay21)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=FINALPLAY21_WATER_WPATCH.manifest
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-fixed-function
+        EXPECTED_BIND_MOUNTS=8
         export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
         ;;
     dmsynth-resume-p35-candidate)
@@ -374,9 +390,39 @@ cleanup() {
     unmount_all /usr/lib/wine/i386-windows/dmusic.dll
     unmount_all /usr/lib/wine/i386-unix/ntdll.so
     unmount_all /usr/bin/box86
+    unmount_all "$GAME_EXE_TARGET"
+    [ -n "$PATCHED_GAME_EXE" ] && rm -f "$PATCHED_GAME_EXE"
     [ -n "${ESUDO:-}" ] && $ESUDO systemctl restart oga_events >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
+
+# A power loss can leave the temporary game-image bind in place. Always expose
+# the legally installed original first; old routes stop here, while FINALPLAY21
+# builds and verifies a temporary one-byte view. The installed EXE is never
+# overwritten.
+prepare_game_exe() {
+    unmount_all "$GAME_EXE_TARGET" || return 1
+    [ "$GAME_EXE_PATCH" = none ] && return 0
+    if [ "$GAME_EXE_PATCH" != wpatch-fixed-function ]; then
+        echo "MGS2: unknown fixed game EXE patch $GAME_EXE_PATCH" >&2
+        return 1
+    fi
+    patcher="$GAMEDIR/patch-mgs2-wpatch-novs.sh"
+    got=$(sha256sum "$patcher" 2>/dev/null | cut -d' ' -f1)
+    if [ "$got" != b7ba819816b1f36d8bbcb0b0c32d064279db216454e10d4755e286ca7d373713 ]; then
+        echo "MGS2: water patch helper is ${got:-missing}, refusing FINALPLAY21" >&2
+        return 1
+    fi
+    PATCHED_GAME_EXE=$(mktemp /tmp/mgs2-wpatch-novs.XXXXXX) || return 1
+    "$patcher" "$GAME_EXE_TARGET" "$PATCHED_GAME_EXE" || return 1
+    mount_bind "$PATCHED_GAME_EXE" "$GAME_EXE_TARGET" || return 1
+    got=$(sha256sum "$GAME_EXE_TARGET" 2>/dev/null | cut -d' ' -f1)
+    if [ "$got" != 6686b3fa6484a0609fbe65be46f34cbba941b18e252db7bbb83d457153ba31d6 ]; then
+        echo "MGS2: mounted game EXE is ${got:-missing}, refusing FINALPLAY21" >&2
+        return 1
+    fi
+}
+prepare_game_exe || exit 1
 
 # FINALPLAY3 also serialises Box86's first-use allocation and publication of
 # an x86 mutex's native ARM backing mutex.  The old two-stage publication was
@@ -616,10 +662,11 @@ mgs2_verify_identity() {
         echo "MGS2: no $manifest, cannot verify identity" >&2
         return 1
     fi
-    # Seven bind-mounted production files: Box86, D3D8, D3D9 and four audio
-    # modules. The same manifest also pins the unmounted Vulkan/Wine/libmali
-    # dependencies, so checked may legitimately be greater than mounts.
-    mounts=7
+    # Seven bind-mounted production files in FINALPLAY17--20: Box86, D3D8,
+    # D3D9 and four audio modules. FINALPLAY21 adds the temporary verified game
+    # EXE view. The manifest also pins unmounted dependencies, so checked may be
+    # greater than mounts.
+    mounts=$EXPECTED_BIND_MOUNTS
     checked=0
     bad=0
     while read -r path want src; do

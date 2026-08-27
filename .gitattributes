@@ -1,0 +1,3 @@
+# The recovered MGS2 source records preserve its CRCRLF line endings.  This is
+# intentional: the patch is verified/applied with `patch --binary`.
+game-patches/*.patch whitespace=-trailing-space,-space-before-tab,cr-at-eol

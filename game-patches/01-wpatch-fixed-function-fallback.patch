@@ -1,0 +1,23 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH] libdg: retain the patch fixed-function renderer on DXVK/Mali
+
+The original hardware-vertex-processing branch enables the custom wpatch
+vertex shader unconditionally.  That shader produces no sea surface through
+the D3D8 -> DXVK-Sarek -> Mali route, while libdg's existing non-shader wpatch
+path renders and animates the same surface correctly.
+
+The distributed 2003 executable is not stored in this repository.  The
+corresponding fail-closed runtime patch changes the immediate operand of this
+single flag set at file offset 0x4a294a from 0x02 to 0x00.  No other byte is
+changed.
+
+--- a/mgs2x/source/system/libdg/wdgd.c
++++ b/mgs2x/source/system/libdg/wdgd.c
+@@ -1459,7 +1459,6 @@
+ 			}
+ 			DG_WinApp.flag |= M_DG_WINAPP_SHADOWWT_USE_VERTEXSHADER ;
+ 			DG_WinApp.flag |= M_DG_WINAPP_OPTCMF00_USE_VERTEXSHADER ;
+-			DG_WinApp.flag |= M_DG_WINAPP_PATCH_USE_VERTEXSHADER ;
+ 
+ 			/* DG_EVMOBJ描画VertexShader使用判定  */
+ 			if(  X2W_GetAppConfig(X2WAPPCFG_EVM_USE_OBJ_MULTITEX) )

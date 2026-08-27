@@ -16,20 +16,27 @@ superseded or explicitly retracted.
 
 ## Current production
 
-FINALPLAY20 is current as of 2026-08-27:
+FINALPLAY21 is current as of 2026-08-27:
 
 ```text
 D3D8 -> DXVK-Sarek 1.11.1 warm cache/one worker
      -> WineVulkan/Wayland -> proprietary armhf libmali
 texture decode -> Box86 native fused DXT5 surface bridge
+patch surfaces -> game fixed-function wpatch fallback
 ```
 
-It uses a direct 32-bit Wine prefix,
+It retains FINALPLAY20's direct 32-bit Wine prefix,
 `box86-fp26-wayland-text-input-production` and the FINALPLAY19 immediate-edge
-input route. FINALPLAY20 replaces only DMSynth p34 with p37 and fixes the
+input route. FINALPLAY20 replaced only DMSynth p34 with p37 and fixed the
 measured stale sample timeline that delayed steps and attacks after resume.
-Promotion followed exact-object clock checks, ordinary-button sleep/listening,
-a 180-movement/30-attack soak, nine of nine fully cold starts and 19/19 live
+FINALPLAY21 additionally clears only the game's custom wpatch vertex-shader
+flag, restoring the missing animated sea through the existing fixed-function
+fallback. The legal game EXE is never stored or overwritten: a hash-pinned
+one-byte temporary view is bind-mounted for the launch. Promotion followed the
+exact-object water/motion witness plus `21/21` live identity; FINALPLAY20
+remains the immediate exact rollback. FINALPLAY20 promotion followed
+exact-object clock checks, ordinary-button sleep/listening, a
+180-movement/30-attack soak, nine of nine fully cold starts and 19/19 live
 identity. FINALPLAY19 remains the exact p34 rollback. The inherited
 corrected symmetric FINALPLAY16 versus FINALPLAY17 A-B-A-B reduced the
 controlled gap sum by 20.1% and the two
@@ -39,6 +46,7 @@ independent game/read stalls remain open.
 Immediate rollback:
 
 ```sh
+MGS2_RENDERER=fp20 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=fp19 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=fp18 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=fp17 /storage/roms/ports/MGS2-Substance.sh
@@ -46,7 +54,8 @@ MGS2_RENDERER=dxvk16 /storage/roms/ports/MGS2-Substance.sh
 MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Read `docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`,
+Read `docs/briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md`,
+`docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`,
 `docs/briefs/MGS2_FINALPLAY19_INPUT_WAYLAND_PRODUCTION_2026-08-27.md` and
 `docs/briefs/MGS2_FINALPLAY18_WAYLAND_ABI_PRODUCTION_2026-08-26.md` and
 `docs/briefs/MGS2_FINALPLAY17_FREEZE_REDUCTION_PRODUCTION_2026-08-25.md` before
@@ -73,7 +82,7 @@ changing Box86 or renderer defaults.
 ## Current research entry points
 
 - Production/DXVK:
-  `docs/briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md`
+  `docs/briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md`
 - DXVK transfer rationale:
   `docs/briefs/MGS2_DMC3_OPTIMIZATION_TRANSFER_2026-08-24.md`
 - Intermittent gameplay SFX:
@@ -123,6 +132,10 @@ Do not mix the Wine 11.0 tree with the older CrossOver Android source tree.
   promoted FINALPLAY18 Wayland listener ABI fix. Patch 25 corrects the remaining
   reachable text-input callback signature; patch 26 closes its build-directory
   dependent embedded-revision boundary for FINALPLAY19.
+- `game-patches/01-wpatch-fixed-function-fallback.patch` records the
+  source-equivalent FINALPLAY21 change. The deployed helper accepts only the
+  locked original EXE hash and produces only the locked one-byte result; never
+  commit or distribute either game image.
 - FINALPLAY17 D3D8 is base+DXVK patch 02 with `b_ndebug=true`; D3D9 is
   base+patches 01, 02 and 08 with `b_ndebug=false`. Do not collapse the stages:
   only the split recorded in `device/FINALPLAY.lock` reproduces both DLLs.

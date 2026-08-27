@@ -16,7 +16,7 @@ endorsed by Konami, Anbernic, WineHQ, Box86 or DXVK.
 
 Picture, music, menu sounds, gameplay sound effects, input and saves work.
 
-The current production configuration is **FINALPLAY20**:
+The current production configuration is **FINALPLAY21**:
 
 ```text
 MGS2 D3D8 / Box86 native fused DXT5 surface decode
@@ -39,6 +39,14 @@ late while music remained current. Wine patches 60+83 re-arm that transport and
 rebase the stale mapping together. The exact bundle passed ordinary-button
 sleep/listening, a 180-movement/30-attack soak, nine of nine fully cold starts
 and `19/19` live identity on the RG353VS.
+
+FINALPLAY21 retains that exact bundle and fixes the missing Big Shell sea. The
+game's custom `wpatch` vertex shader produced a solid background void on this
+D3D8/DXVK/Mali route; selecting the existing fixed-function fallback restored
+the animated water. The change is an exact one-byte, hash-pinned temporary view
+of the user's installed EXE: the original file is never overwritten or
+distributed. The verified candidate had moving water with no black squares,
+and the normal entry cold-started with `21/21` live identity.
 
 Open problems:
 
@@ -82,6 +90,7 @@ artifacts; see [binaries/README.md](binaries/README.md).
 | `wine-patches/` | Wine 11.0 patch record; `history/` preserves superseded experiments |
 | `box86-patches/` | Box86 changes against the pinned upstream commit |
 | `dxvk-patches/` | DXVK-Sarek compatibility patches and optional counters |
+| `game-patches/` | Source-equivalent records for hash-pinned game compatibility edits |
 | `harness/` | External readers, profilers, correctness gates and rebuild tools |
 | `docs/briefs/` | Append-only measurement and diagnostic record |
 | `docs/evidence/` | Small, deliberately curated public evidence |
@@ -99,7 +108,13 @@ The normal PortMaster entry selects DXVK:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to exact FINALPLAY19 and its p34 DMSynth:
+Immediate one-launch rollback to exact FINALPLAY20 without the water-path edit:
+
+```sh
+MGS2_RENDERER=fp20 /storage/roms/ports/MGS2-Substance.sh
+```
+
+One-launch rollback to exact FINALPLAY19 and its p34 DMSynth:
 
 ```sh
 MGS2_RENDERER=fp19 /storage/roms/ports/MGS2-Substance.sh
@@ -131,7 +146,8 @@ MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 
 `device/launch-play.sh` is only the selector. The complete launchers are:
 
-- `device/launch-play-dxvk-fp20.sh` — current production;
+- `device/launch-play-dxvk-fp21.sh` — current production;
+- `device/launch-play-dxvk-fp20.sh` — exact pre-water-fix rollback;
 - `device/launch-play-dxvk-fp19.sh` — exact FINALPLAY19/p34 rollback;
 - `device/launch-play-dxvk-fp18.sh` — exact FINALPLAY18 rollback;
 - `device/launch-play-dxvk-fp17.sh` — exact FINALPLAY17 rollback/shared engine;
@@ -143,9 +159,9 @@ All named fixed runtime paths fail closed when live file hashes differ from thei
 manifests. A filename is never accepted as proof of what is loaded.
 `device/mgs2.gptk` is the tracked controller mapping. Legacy fixed routes use
 PortMaster's `$GPTOKEYB` command (or an explicit `-1` bare-system fallback).
-FINALPLAY19 and FINALPLAY20 use the exact patched helper recorded under
+FINALPLAY19 through FINALPLAY21 use the exact patched helper recorded under
 `gptokeyb-patches/` and disable Wine's duplicate physical-controller route.
-Both routes make
+These routes make
 Start+Select terminate the game directly instead of relying on the OS-level
 confirmation dialog.
 
@@ -171,7 +187,7 @@ The complete Wine boundary already contains patch 60's bounded DMSynth
 transport recovery. FINALPLAY20 adds patch 83's stale-timeline rebase on top;
 rejected patch 82 records why the device wall clock cannot be used as the
 resume witness.
-FINALPLAY17--20 also use exact state-cache mapping dedupe in
+FINALPLAY17--21 also use exact state-cache mapping dedupe in
 DXVK patch 08. The memory-only
 present counter and pipeline timeline are diagnostic and are not part of the
 production D3D9 DLL.
@@ -185,6 +201,7 @@ After configuring `.env`, verify the pinned reconstruction:
 ./harness/test_finalplay18_production.sh
 ./harness/test_finalplay19_production.sh
 ./harness/test_finalplay20_production.sh
+./harness/test_finalplay21_production.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross
