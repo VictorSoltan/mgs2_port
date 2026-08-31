@@ -1,0 +1,222 @@
+--- a/src/box86context.c
++++ b/src/box86context.c
+@@ -834,6 +834,7 @@
+ #define MGS2_DXT_SURFACE_OBJECT_BYTES 0x10c4u
+ #define MGS2_DXT_SURFACE_VERIFY_LIMIT 128u
+ #define MGS2_DXT5_FOURCC 0x35545844u
++#define MGS2_DXT_SURFACE_WITNESS_MAGIC 0x31535744u /* "DWS1" */
+ 
+ enum {
+     MGS2_DXT_SURFACE_FALLBACK_NO_CACHE = 0,
+@@ -844,6 +845,49 @@
+     MGS2_DXT_SURFACE_FALLBACK_COUNT
+ };
+ 
++enum {
++    MGS2_DXT_SURFACE_WITNESS_STRONG_SELFTEST = 1u << 0,
++    MGS2_DXT_SURFACE_WITNESS_ARMED = 1u << 1,
++    MGS2_DXT_SURFACE_WITNESS_INTERCEPTED = 1u << 2,
++    MGS2_DXT_SURFACE_WITNESS_NATIVE_SEEN = 1u << 3,
++    MGS2_DXT_SURFACE_WITNESS_GUEST_SEEN = 1u << 4,
++    MGS2_DXT_SURFACE_WITNESS_GUEST_FAILED = 1u << 5,
++};
++
++/* Fixed-size, externally readable production witness. The texture worker only
++ * publishes each one-way flag once; there is no per-call counter or logging.
++ * words: magic, version, word count, inverse magic, flags, first fallback. */
++__attribute__((visibility("default"))) volatile uint32_t
++        mgs2_dxt_surface_witness[6] = {
++            MGS2_DXT_SURFACE_WITNESS_MAGIC, 1, 6,
++            ~MGS2_DXT_SURFACE_WITNESS_MAGIC, 0,
++            MGS2_DXT_SURFACE_FALLBACK_COUNT,
++        };
++
++static void mgs2_dxt_surface_observe(unsigned int flag)
++{
++    unsigned int flags = __atomic_load_n(&mgs2_dxt_surface_witness[4],
++            __ATOMIC_RELAXED);
++
++    if (!(flags & flag))
++        __atomic_fetch_or(&mgs2_dxt_surface_witness[4], flag, __ATOMIC_RELAXED);
++}
++
++void mgs2_dxt_surface_observe_intercept(void)
++{
++    mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_INTERCEPTED);
++}
++
++static void mgs2_dxt_surface_observe_fallback(unsigned int reason)
++{
++    unsigned int expected = MGS2_DXT_SURFACE_FALLBACK_COUNT;
++
++    mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_GUEST_SEEN);
++    if (reason < MGS2_DXT_SURFACE_FALLBACK_COUNT)
++        __atomic_compare_exchange_n(&mgs2_dxt_surface_witness[5], &expected,
++                reason, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
++}
++
+ __attribute__((visibility("default"))) volatile unsigned int
+         mgs2_dxt_surface_armed, mgs2_dxt_surface_verify;
+ __attribute__((visibility("default"))) volatile unsigned int
+@@ -1142,8 +1186,13 @@
+     unsigned int reason = MGS2_DXT_SURFACE_FALLBACK_GUEST;
+ 
+     if (mgs2_dxt_surface_native_run(self, x, y, dst, 0, &reason))
++    {
++        mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_NATIVE_SEEN);
+         return;
+-    mgs2_dxt_surface_guest_call(self, x, y, dst);
++    }
++    mgs2_dxt_surface_observe_fallback(reason);
++    if (!mgs2_dxt_surface_guest_call(self, x, y, dst))
++        mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_GUEST_FAILED);
+ }
+ 
+ static void mgs2_native_dxt_surface_verify_impl(uint32_t self, uint32_t x,
+@@ -1158,15 +1207,25 @@
+             && __atomic_load_n(&mgs2_dxt_surface_compared, __ATOMIC_RELAXED)
+                     < MGS2_DXT_SURFACE_VERIFY_LIMIT
+             && mgs2_dxt_surface_verify_call(self, x, y, dst, call_number))
++    {
++        mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_NATIVE_SEEN);
+         return;
++    }
+     if (mgs2_dxt_surface_native_run(self, x, y, dst, 1, &reason))
++    {
++        mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_NATIVE_SEEN);
+         return;
++    }
++    mgs2_dxt_surface_observe_fallback(reason);
+     if (reason < MGS2_DXT_SURFACE_FALLBACK_COUNT)
+         __atomic_fetch_add(&mgs2_dxt_surface_fallback[reason], 1,
+                 __ATOMIC_RELAXED);
+     __atomic_fetch_add(&mgs2_dxt_surface_guest_calls, 1, __ATOMIC_RELAXED);
+     if (!mgs2_dxt_surface_guest_call(self, x, y, dst))
++    {
+         __atomic_fetch_add(&mgs2_dxt_surface_skipped, 1, __ATOMIC_RELAXED);
++        mgs2_dxt_surface_observe(MGS2_DXT_SURFACE_WITNESS_GUEST_FAILED);
++    }
+ }
+ 
+ static void mgs2_native_dxt_surface_wrapper(x86emu_t *emu, uintptr_t fnc)
+@@ -1180,42 +1239,73 @@
+ static int mgs2_native_dxt_surface_selftest(void)
+ {
+     uint32_t f[MGS2_DXT_SURFACE_OBJECT_BYTES / 4] = {0};
+-    unsigned char source[16] = {
+-        255, 0, 0x88, 0xc6, 0xfa, 0x88, 0xc6, 0xfa,
+-        0x00, 0xf8, 0xe0, 0x07, 0xe4, 0xe4, 0xe4, 0xe4
++    static const unsigned char blocks[2][16] = {
++        {
++            255, 0, 0x88, 0xc6, 0xfa, 0x88, 0xc6, 0xfa,
++            0x00, 0xf8, 0xe0, 0x07, 0xe4, 0xe4, 0xe4, 0xe4,
++        },
++        {
++            17, 201, 0x39, 0x72, 0x1c, 0xe7, 0x04, 0x91,
++            0x1f, 0x00, 0xe0, 0xff, 0x1b, 0xe4, 0x4e, 0x93,
++        },
+     };
+-    mgs2_rgba_t cache[16], expected[16], output[4];
++    unsigned char source[1024];
++    mgs2_rgba_t cache[32], expected[32], output[4];
+     unsigned int reason = 0;
+ 
+     if ((uintptr_t)f > UINT32_MAX || (uintptr_t)source > UINT32_MAX
+             || (uintptr_t)cache > UINT32_MAX || (uintptr_t)output > UINT32_MAX)
+         return 0;
++    memset(source, 0x3c, sizeof(source));
++    memset(cache, 0xa5, sizeof(cache));
++    memset(expected, 0, sizeof(expected));
++    memset(output, 0x5a, sizeof(output));
++    /* Independent fixture address:
++     * (cache_x 8 >> 2) * 64 + (first 4 >> 2) * 16
++     * + absolute_y 3 * 128 = 528. The second block begins at 544. */
++    memcpy(source + 528, blocks[0], sizeof(blocks[0]));
++    memcpy(source + 544, blocks[1], sizeof(blocks[1]));
+     f[0x4 / 4] = MGS2_DXT5_FOURCC;
+     f[0x18 / 4] = (uint32_t)(uintptr_t)source;
+-    f[0x1030 / 4] = 0;
+-    f[0x1050 / 4] = 16;
+-    f[0x1054 / 4] = 16;
++    f[0x1030 / 4] = 8;
++    f[0x1034 / 4] = 7;
++    f[0x1040 / 4] = 1;
++    f[0x1050 / 4] = 64;
++    f[0x1054 / 4] = 128;
+     f[0x1058 / 4] = 4;
+     f[0x1080 / 4] = 16;
+-    f[0x108c / 4] = 0;
+-    f[0x1090 / 4] = 0;
+-    f[0x1094 / 4] = 4;
+-    f[0x10a4 / 4] = 1;
++    f[0x108c / 4] = 4;
++    f[0x1090 / 4] = 5;
++    f[0x1094 / 4] = 12;
++    f[0x10a4 / 4] = 2;
+     f[0x10b0 / 4] = UINT32_MAX;
+     f[0x10b4 / 4] = UINT32_MAX;
+     f[0x10b8 / 4] = (uint32_t)(uintptr_t)cache;
+-    mgs2_native_dxt5_kernel(expected, source);
+-    if (!mgs2_dxt_surface_native_run((uint32_t)(uintptr_t)f, 0, 0,
++    mgs2_native_dxt5_kernel(expected, blocks[0]);
++    mgs2_native_dxt5_kernel(expected + 16, blocks[1]);
++    if (!mgs2_dxt_surface_native_run((uint32_t)(uintptr_t)f, 3, 2,
+             (uint32_t)(uintptr_t)output, 0, &reason))
+         return 0;
+     return !memcmp(cache, expected, sizeof(cache))
+-            && !memcmp(output, expected, sizeof(output));
++            && !memcmp(output, expected + 20, sizeof(output))
++            && f[0x10b0 / 4] == 8 && f[0x10b4 / 4] == 3;
+ }
+ 
+ static void mgs2_native_dxt_surface_report(void)
+ {
++    static const char *fallback_name[MGS2_DXT_SURFACE_FALLBACK_COUNT + 1] = {
++        "cache", "format", "colorkey", "layout", "guest", "none",
++    };
++    unsigned int flags, fallback;
++
+     if (!mgs2_dxt_surface_armed)
+         return;
++    flags = __atomic_load_n(&mgs2_dxt_surface_witness[4], __ATOMIC_RELAXED);
++    fallback = __atomic_load_n(&mgs2_dxt_surface_witness[5], __ATOMIC_RELAXED);
++    if (fallback > MGS2_DXT_SURFACE_FALLBACK_COUNT)
++        fallback = MGS2_DXT_SURFACE_FALLBACK_COUNT;
++    printf_log(LOG_NONE, "MGS2 native DXT surface witness: flags=%#x "
++            "first_fallback=%s\n", flags, fallback_name[fallback]);
+     printf_log(LOG_NONE, "MGS2 native DXT surface: %u calls, %u native, "
+             "%u guest, %u compared, %u mismatched, %u skipped\n",
+             mgs2_dxt_surface_calls, mgs2_dxt_surface_native_calls,
+@@ -1919,6 +2009,9 @@
+             SetMGS2NativeDxtSurface(bridge);
+             mgs2_dxt_surface_verify = verify;
+             mgs2_dxt_surface_armed = 1;
++            __atomic_store_n(&mgs2_dxt_surface_witness[4],
++                    MGS2_DXT_SURFACE_WITNESS_STRONG_SELFTEST
++                    | MGS2_DXT_SURFACE_WITNESS_ARMED, __ATOMIC_RELEASE);
+             printf_log(LOG_NONE, "MGS2 native DXT surface: self-test passed, "
+                     "bridge %p armed%s\n", (void *)bridge,
+                     mgs2_dxt_surface_verify ? " (VERIFY mode)" : "");
+--- a/src/include/bridge.h
++++ b/src/include/bridge.h
+@@ -35,6 +35,7 @@
+ uintptr_t mgs2_dxt_guest_addr(unsigned int id);
+ void SetMGS2NativeDxtSurface(uintptr_t alt);
+ uintptr_t mgs2_dxt_surface_guest_addr(void);
++void mgs2_dxt_surface_observe_intercept(void);
+ void* mgs2_indirect_alternate(void* addr);
+ extern __thread int mgs2_dither_bypass;
+ 
+--- a/src/tools/bridge.c
++++ b/src/tools/bridge.c
+@@ -506,7 +506,10 @@
+             if (__atomic_compare_exchange_n(&mgs2_dxt_surface_guest, &expected,
+                     (uintptr_t)addr, 0, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)
+                     || expected == (uintptr_t)addr)
++            {
++                mgs2_dxt_surface_observe_intercept();
+                 return (void *)mgs2_native_dxt_surface;
++            }
+         }
+     }
+     if (mgs2_native_dither)

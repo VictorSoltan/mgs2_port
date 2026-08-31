@@ -72,6 +72,16 @@ def read(path):
     return cycles, armed, frames, stats_ms
 
 
+def exact_sign_p(negative, positive):
+    """Exact two-sided sign test; callers omit ties."""
+    n = negative + positive
+    if not n:
+        return 1.0
+    k = min(negative, positive)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2.0 ** n)
+    return min(1.0, 2.0 * tail)
+
+
 def work_normalised(cycles, iterations=20000, seed=20260822):
     """Per-call cost difference, using every cycle instead of only balanced ones.
 
@@ -93,6 +103,9 @@ def work_normalised(cycles, iterations=20000, seed=20260822):
     """
     per = []
     for c in cycles:
+        if c["routed_n"] <= 0 or c["unrouted_n"] <= 0:
+            raise ValueError(
+                f"cycle {c.get('cycle', '?')} has a zero per-arm frame count")
         if not c["routed_calls"] or not c["unrouted_calls"]:
             continue
         routed = c["routed"] / (c["routed_calls"] / c["routed_n"])
@@ -106,13 +119,14 @@ def work_normalised(cycles, iterations=20000, seed=20260822):
     workload = statistics.median([item[1] for item in per])
     n = len(deltas)
     favour = sum(1 for value in deltas if value < 0)
-    tail = sum(math.comb(n, k) for k in range(favour, n + 1))
-    p_value = min(1.0, 2.0 * tail / 2 ** n)
+    oppose = sum(1 for value in deltas if value > 0)
+    p_value = exact_sign_p(favour, oppose)
 
     rng = random.Random(seed)
     boot = sorted(statistics.median(rng.choices(deltas, k=n)) * workload
                   for _ in range(iterations))
-    return dict(n=n, favour=favour, p=p_value, workload=workload,
+    return dict(n=n, sign_n=favour + oppose, favour=favour, p=p_value,
+                workload=workload,
                 median=statistics.median(deltas) * workload,
                 lo=boot[int(0.025 * iterations)], hi=boot[int(0.975 * iterations)],
                 below_one=sum(1 for b in boot if b < -1.0) / iterations)
@@ -157,6 +171,15 @@ def main():
     if not cycles:
         print("no completed A/B cycles in this log -- the run never reached "
               f"{4 * (armed[1] if armed else 64)} displayed frames.")
+        return 2
+
+    zero_frames = [c["cycle"] for c in cycles
+                   if c["routed_n"] <= 0 or c["unrouted_n"] <= 0]
+    if zero_frames:
+        print("\nREFUSED: zero per-arm frame count in cycle(s): "
+              + ", ".join(map(str, zero_frames)))
+        print("The work-normalised result would divide by this count, so the run"
+              " is malformed and no effect is reported.")
         return 2
 
     silent = [c for c in cycles if not c["routed_calls"] and not c["unrouted_calls"]]
@@ -230,8 +253,9 @@ def main():
     work = work_normalised(cycles)
     if work:
         print("\nwork-normalised (all %d cycles, scene weight divided out):" % work["n"])
-        print("  routed cheaper per call in %d of %d  (exact two-sided sign test p=%.4g)"
-              % (work["favour"], work["n"], work["p"]))
+        print("  routed cheaper per call in %d of %d non-ties"
+              "  (exact two-sided sign test p=%.4g)"
+              % (work["favour"], work["sign_n"], work["p"]))
         print("  effect at %.0f calls/frame: median %+.2f ms/frame,"
               " 95%% bootstrap CI [%+.2f, %+.2f]"
               % (work["workload"], work["median"], work["lo"], work["hi"]))

@@ -291,14 +291,19 @@ def capture_audio_state(label, outdir):
     """Read each bounded audio ring once, outside every game/audio thread."""
     pid = game_pid()
     os.makedirs(outdir, exist_ok=True)
-    import dmime_state
     import dmsynth_state
     import dsound_sfx_state
-    readers = (
-        ("dmime", dmime_state),
+    readers = [
         ("dmsynth", dmsynth_state),
         ("dsound", dsound_sfx_state),
-    )
+    ]
+    # FINALPLAY21's dmime_transition1.dll has no DMT1 recorder.  Read that ring
+    # only on the explicit diagnostic route that requested it; otherwise an
+    # absent optional instrument must not discard the independent DMSynth and
+    # DirectSound snapshots or abort a visual soak.
+    if os.environ.get("MGS2_DMIME_STATE", "0") != "0":
+        import dmime_state
+        readers.insert(0, ("dmime", dmime_state))
     for name, reader in readers:
         output = os.path.join(outdir, "%s-%s.json" % (label, name))
         temporary = output + ".tmp"

@@ -1,5 +1,7 @@
 #!/bin/sh
-# Produce a FINALPLAY release, and be the ONLY way one is produced.
+# FINALPLAY release entry point. Normal use dispatches to the exact current
+# FINALPLAY22 packager. The source-build body below is the explicitly selected
+# legacy FINALPLAY15 WineD3D reproducer.
 #
 # Until now a release was: build the live tree, scp the result, write the hashes
 # down. Nothing connected the three, and it showed -- the shipped FINALPLAY11
@@ -44,6 +46,22 @@ set -eu
 NAME="${1:?usage: make_release.sh <name> [--deploy]}"
 DEPLOY="${2:-}"
 REPO=$(cd "$(dirname "$0")/.." && pwd)
+
+# FINALPLAY23 is the normal production boundary.  The original implementation
+# below is retained only to reproduce an explicitly requested FINALPLAY15
+# WineD3D release; it cannot describe the current DXVK/Box86/game-helper route.
+RELEASE_ROUTE=${MGS2_RELEASE_ROUTE:-finalplay23}
+case "$RELEASE_ROUTE" in
+    finalplay23)
+        exec sh "$REPO/harness/make_current_release.sh" "$@"
+        ;;
+    wined3d-fp15) ;;
+    *)
+        echo "unknown MGS2_RELEASE_ROUTE=$RELEASE_ROUTE" >&2
+        echo "use finalplay23 (default) or explicit legacy wined3d-fp15" >&2
+        exit 1
+        ;;
+esac
 _mgs2_workspace_set=${MGS2_WORKSPACE+x}; _mgs2_workspace=${MGS2_WORKSPACE-}
 _wine_src_set=${WINE_SRC+x};             _wine_src=${WINE_SRC-}
 _wine_build_set=${WINE_BUILD+x};         _wine_build=${WINE_BUILD-}
@@ -105,7 +123,8 @@ fi
 # default because the default IS production: the override is now rejected at
 # runtime unless a research launcher asked for it.
 mgs2_bundle_table() {
-    sed -n "s|^mount_bind \"\$GAMEDIR/\([^\"]*\)\" *\([^ ]*\).*|\1$TAB\2|p" "$LAUNCHER" \
+    bundle_launcher=${1:-$LAUNCHER}
+    sed -n "s|^mount_bind \"\$GAMEDIR/\([^\"]*\)\" *\([^ ]*\).*|\1$TAB\2|p" "$bundle_launcher" \
         | sed 's|\${[A-Za-z0-9_]*:-\([^}]*\)}|\1|'
 }
 
@@ -132,13 +151,17 @@ sh "$REPO/harness/test_gptokeyb_launchers.sh" >/dev/null || {
     echo "gptokeyb launcher gate failed -- refusing to ship a port without reliable Start+Select exit" >&2
     exit 1
 }
-sh "$REPO/harness/test_finalplay21_production.sh" >/dev/null || {
-    echo "FINALPLAY21 selector gate failed -- refusing to ship an ambiguous production route" >&2
+sh "$REPO/harness/test_finalplay22_production.sh" >/dev/null || {
+    echo "FINALPLAY22 selector gate failed -- refusing to ship an ambiguous production route" >&2
+    exit 1
+}
+sh "$REPO/harness/test_finalplay23_production.sh" >/dev/null || {
+    echo "FINALPLAY23 selector gate failed -- refusing to ship an ambiguous production route" >&2
     exit 1
 }
 echo "ok     live trees match the pinned bases plus the complete patches"
 echo "ok     launchers arm PortMaster Start+Select exit mode"
-echo "ok     FINALPLAY21 selector and FINALPLAY20 rollback split are fail-closed"
+echo "ok     FINALPLAY23 selector and FINALPLAY22 rollback split are fail-closed"
 
 echo "== 2. WineD3D =="
 ( cd "$WINE_BUILD" && make -j8 i386_LDFLAGS="$LD_DET" \
@@ -167,6 +190,8 @@ cmake --build "$BOX86_BUILD" --parallel 8 >/dev/null
 
 echo "== 5. collect =="
 mkdir -p "$OUT"
+STAGED_LAUNCHER="$OUT/$LAUNCHER_NAME"
+cp "$LAUNCHER" "$STAGED_LAUNCHER"
 cp "$WINE_BUILD/dlls/wined3d/i386-windows/wined3d.dll" "$OUT/wined3d_$NAME.dll"
 cp "$BOX86_BUILD/box86" "$OUT/box86-$NAME"
 arm-linux-gnueabihf-strip --strip-debug \
@@ -201,14 +226,14 @@ echo "== 7. point the launcher at what was just built =="
 sed -i \
     -e "s|\${MGS2_BOX86_BIN:-[^}]*}|\${MGS2_BOX86_BIN:-box86-$NAME}|" \
     -e "s|\${MGS2_WINED3D_DLL:-[^}]*}|\${MGS2_WINED3D_DLL:-wined3d_$NAME.dll}|" \
-    "$LAUNCHER"
+    "$STAGED_LAUNCHER"
 if [ -n "$WLNAME" ]; then
-    sed -i -e "s|\${MGS2_WAYLAND_SO:-[^}]*}|\${MGS2_WAYLAND_SO:-$WLNAME}|" "$LAUNCHER"
+    sed -i -e "s|\${MGS2_WAYLAND_SO:-[^}]*}|\${MGS2_WAYLAND_SO:-$WLNAME}|" "$STAGED_LAUNCHER"
 fi
-echo "ok     $LAUNCHER_NAME mounts box86-$NAME and wined3d_$NAME.dll"
+echo "ok     staged $LAUNCHER_NAME mounts box86-$NAME and wined3d_$NAME.dll"
 
 echo "== 8. manifest, over every file the launcher mounts =="
-mgs2_bundle_table > "$OUT/.bundle"
+mgs2_bundle_table "$STAGED_LAUNCHER" > "$OUT/.bundle"
 rows=$(wc -l < "$OUT/.bundle")
 [ "$rows" -ge 8 ] || {
     echo "the bundle table parsed $rows mount_bind lines out of $LAUNCHER -- that is" >&2
@@ -293,6 +318,10 @@ if [ "$DEPLOY" = "--deploy" ]; then
     scp -q "$REPO"/device/*.sh "$DEV:$GAMEDIR/"
     scp -q "$REPO"/device/*.manifest "$DEV:$GAMEDIR/"
     scp -q "$REPO/device/mgs2.gptk" "$DEV:$GAMEDIR/mgs2.gptk"
+    # Install the staged legacy launcher last. The tracked source file remains
+    # unchanged, so current production gates cannot be invalidated by a legacy
+    # release build.
+    scp -q "$STAGED_LAUNCHER" "$DEV:$GAMEDIR/$LAUNCHER_NAME"
     ssh -o BatchMode=yes "$DEV" "cd $GAMEDIR && chmod +x box86-$NAME *.sh"
     echo "       $(ls "$REPO"/device/*.sh | wc -l) launchers copied"
     echo "       $(ls "$REPO"/device/*.manifest | wc -l) fixed manifests copied"

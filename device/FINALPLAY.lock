@@ -16,10 +16,17 @@ wine_research_patch_02 wine-patches/02-sleep0-wait-research-default-off.patch
 wine_research_patch_03 wine-patches/03-dsound-probe-p1-and-c90-cleanup.patch
 wine_history_patch_60 wine-patches/history/60-dmsynth-resume-recover.patch
 wine_production_patch_83 wine-patches/history/83-dmsynth-resume-timeline-rebase.patch
+wine_production_patch_84 wine-patches/history/84-dmime-message-private-state-layout.patch
+wine_production_patch_85 wine-patches/history/85-dmsynth-sink-lifetime-and-clock-state.patch
 wine_patch_60_sha256 242ae2183a303b525d204cdd722060045146a5834a2d6b91593e6c717ed386ba
 wine_patch_83_sha256 8a1042d7b463415cecb52395eaa7f7adf76fd39e5e5f90593a02bd412abfec7e
+wine_patch_84_sha256 d1fa52593cb556de8aa6d32a74b02d7273d92bed634eea70f24d13a271790778
+wine_patch_85_sha256 5ef57275503b7bd576944a7991afb76f560b4cf67d7af38b4dd15a22f6353d62
 finalplay19_dmsynth_sha256 b4ec2cd09f26a670eb8206d708f864597d2acde84ff1788732574c116b6baed2
 dmsynth_production_sha256 b11c9b6ba2f1d27fcdea822fff37f62187862aa7aeb5527d2efd2a159778ede8
+finalplay22_dmime_sha256 f23f08ed4c41f69baf4ac14a22f9fc5605b629123438fdf37714af6bdae5698e
+finalplay22_dmsynth_sha256 22287685511486728cb7fc08ec6689b4213ad48cc01679b4bb6e91c02ddfdc1e
+finalplay22_wine_source_date_epoch 1787976000
 
 # FINALPLAY21 does not distribute or overwrite the game. It creates this exact
 # one-byte view in /tmp from the user's hash-pinned legal executable, bind-mounts
@@ -30,6 +37,32 @@ game_exe_wpatch_novs_offset 0x4a294a
 game_exe_wpatch_novs_original_byte 02
 game_wpatch_novs_source_patch game-patches/01-wpatch-fixed-function-fallback.patch
 game_wpatch_novs_source_patch_sha256 8e410333476be28719d52e42f856f16b5bad2b81b68bc645a1abc07c197bdfaf
+
+# FINALPLAY22 replaces the one-byte view with the fail-closed 58-byte
+# state-owned wpatch transform. The user's installed image is still never
+# overwritten or distributed.
+game_exe_finalplay22_sha256 d902ee4398b77653674943f097f79e103d1aa0bc93ce825c0cb0c3d3522b9f88
+game_finalplay22_patcher device/patch-mgs2-wpatch-finalplay22.sh
+game_finalplay22_base_source_patch game-patches/02-wpatch-consumer-and-state-isolation.patch
+game_finalplay22_base_source_patch_sha256 fae7831938717b89aae4c056f553b68a8d21d02ed592420fad6f0f90bd3c5973
+game_finalplay22_state_source_patch game-patches/04-wpatch-texture-transform-ownership-candidate.patch
+game_finalplay22_state_source_patch_sha256 1f4c41382cf411f2f90b57e0f5a207ba7f530e27d54a657fd584e3ecd3a985ab
+game_finalplay22_safety_source_patch game-patches/05-wpatch-latent-safety-corrections.patch
+game_finalplay22_safety_source_patch_sha256 15bf5c0594145b2f69c87f3be22da75d14607dfc992b15bab79130a8c748b026
+
+# FINALPLAY23 adds exactly two bytes to the FINALPLAY22 view. Both are `ret` at
+# a function entry, closing the unguarded dereference of DirectShow state that
+# WindowsMpegInit() never initialises in this executable. Measured 2026-08-31:
+# wine exit 5 on a NULL read at VA 0x0087AE0F. FINALPLAY22 is the exact
+# one-launch rollback and its view hash above is unchanged.
+game_exe_finalplay23_sha256 d6b81257a82348299675adf863c9ad884c68c438b032fe20a75f18a094d29cd5
+game_finalplay23_patcher device/patch-mgs2-wpatch-finalplay23.sh
+game_exe_finalplay23_wrapper_offset 4696000
+game_exe_finalplay23_wrapper_original_byte 53
+game_exe_finalplay23_clock_offset 4697600
+game_exe_finalplay23_clock_original_byte 51
+game_finalplay23_movie_source_patch game-patches/06-movie-null-graph-guard.patch
+game_finalplay23_movie_source_patch_sha256 f60c1b8bd2ebec6f3ae188daef62b8eb0f80890baf7e51ad052e5f2030a6834f
 
 box86_base_remote    https://github.com/ptitSeb/box86.git
 box86_base_commit    0579f8b9

@@ -1,0 +1,141 @@
+From: MGS2 RG353VS port
+Subject: [PATCH 28] close remaining Wayland thunk and build provenance boundaries
+
+The strengthened listener auditor found one real format-string mismatch outside
+Wine's currently reachable listener set: pointer-gesture begin passed the
+surface pointer as an integer and the finger count as a pointer.  It also
+confirmed that wl_buffer was the only cross-thread-capable listener left out of
+patch 24's release/acquire publication.
+
+Keep the generated revision header private to each build directory.  The old
+source-tree output was shared by every build directory and did not depend on a
+changed MGS2_GITREV value.  Finally, bound the default-off diagnostic dump to
+the thirteen 32-bit words in VkPipelineRasterizationStateCreateInfo instead of
+reading three words past it.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -321,12 +321,6 @@ include_directories(
+     "${BOX86_ROOT}/src/wrapped/generated"
+ )
+ 
+-# git_head.h is a generated file
+-set_source_files_properties(
+-    "${BOX86_ROOT}/src/git_head.h"
+-    PROPERTIES GENERATED TRUE
+-    HEADER_FILE_ONLY TRUE)
+-
+ set(ELFLOADER_SRC
+     "${BOX86_ROOT}/src/mgs2_island_gl_trap.S"
+     "${BOX86_ROOT}/src/mgs2_island_gl.c"
+@@ -718,29 +712,24 @@ if(NOT MGS2_GITREV)
+         OUTPUT_STRIP_TRAILING_WHITESPACE)
+ endif()
+ 
+-# creates git_head.h
+-if(ARM_DYNAREC)
+-    add_custom_command(
+-        OUTPUT "${BOX86_ROOT}/src/git_head.h"
+-        COMMAND bash -c "echo \\\#define GITREV \\\"${MGS2_GITREV}\\\">\"${BOX86_ROOT}/src/git_head.h\""
+-        DEPENDS dynarec ${ELFLOADER_SRC} ${INTERPRETER} ${WRAPPEDS}
+-        VERBATIM)
+-else()
+-    add_custom_command(
+-        OUTPUT "${BOX86_ROOT}/src/git_head.h"
+-        COMMAND bash -c "echo \\\#define GITREV \\\"${MGS2_GITREV}\\\">\"${BOX86_ROOT}/src/git_head.h\""
+-        DEPENDS ${ELFLOADER_SRC} ${INTERPRETER} ${WRAPPEDS}
+-        VERBATIM)
+-endif()
++# Keep provenance private to this build directory.  file(GENERATE) rewrites
++# the header when a reconfigure changes MGS2_GITREV and cannot leak one build
++# directory's revision into another through the shared source tree.
++set(MGS2_GIT_HEAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/mgs2-generated")
++set(MGS2_GIT_HEAD "${MGS2_GIT_HEAD_DIR}/mgs2_git_head.h")
++file(MAKE_DIRECTORY "${MGS2_GIT_HEAD_DIR}")
++file(GENERATE OUTPUT "${MGS2_GIT_HEAD}"
++    CONTENT "#define GITREV \"${MGS2_GITREV}\"\n")
++include_directories("${MGS2_GIT_HEAD_DIR}")
+ 
+ add_library(interpreter OBJECT ${INTERPRETER})
+ 
+ if(BOX86LIB)
+ #build a static or dynamic lib...
+ if(BOX86DYNAMIC)
+-    add_library(box86 SHARED ${ELFLOADER_SRC} ${WRAPPEDS} "${BOX86_ROOT}/src/git_head.h")
++    add_library(box86 SHARED ${ELFLOADER_SRC} ${WRAPPEDS})
+ else()
+-    add_library(${BOX86} OBJECT ${ELFLOADER_SRC} ${WRAPPEDS} "${BOX86_ROOT}/src/git_head.h")
++    add_library(${BOX86} OBJECT ${ELFLOADER_SRC} ${WRAPPEDS})
+ endif()
+ if(ARM_DYNAREC)
+     if(ANDROID)
+@@ -770,7 +759,7 @@ else(BOX86LIB)
+ # out of tree from the Wine sources with box86-compatible flags; see
+ # harness/island/full/BUILD.md in the port repository.
+ file(GLOB MGS2_ISLAND_OBJS "${BOX86_ROOT}/src/island/*.o")
+-add_executable(${BOX86} ${ELFLOADER_SRC} ${WRAPPEDS} ${MGS2_ISLAND_OBJS} "${BOX86_ROOT}/src/git_head.h")
++add_executable(${BOX86} ${ELFLOADER_SRC} ${WRAPPEDS} ${MGS2_ISLAND_OBJS})
+ set_source_files_properties(${MGS2_ISLAND_OBJS} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+ add_dependencies(${BOX86} WRAPPERS)
+ add_dependencies(${BOX86} PRINTER)
+diff --git a/src/build_info.c b/src/build_info.c
+--- a/src/build_info.c
++++ b/src/build_info.c
+@@ -3,7 +3,7 @@
+ #ifdef NOGIT
+ #define GITREV "nogit"
+ #else
+-#include "git_head.h"
++#include "mgs2_git_head.h"
+ #endif
+ 
+ void PrintBox86Version()
+diff --git a/src/wrapped/wrappedvulkan.c b/src/wrapped/wrappedvulkan.c
+--- a/src/wrapped/wrappedvulkan.c
++++ b/src/wrapped/wrappedvulkan.c
+@@ -688,6 +688,6 @@ static void dmc3_dump_graphics_pipeline(const VkGraphicsPipelineCreateInfo *x)
+     dmc3_dump_words("input", x->pInputAssemblyState, 5);
+     dmc3_dump_words("viewport", x->pViewportState, 7);
+-    dmc3_dump_words("raster", x->pRasterizationState, 16);
++    dmc3_dump_words("raster", x->pRasterizationState, 13);
+     dmc3_dump_words("multisample", x->pMultisampleState, 9);
+     dmc3_dump_words("depth", x->pDepthStencilState, 24);
+     dmc3_dump_words("blend", x->pColorBlendState, 11);
+diff --git a/src/wrapped/wrappedwaylandclient.c b/src/wrapped/wrappedwaylandclient.c
+--- a/src/wrapped/wrappedwaylandclient.c
++++ b/src/wrapped/wrappedwaylandclient.c
+@@ -449,10 +449,10 @@ typedef struct my_wl_buffer_listener_s {
+     uintptr_t   release; //vFpp
+ } my_wl_buffer_listener_t;
+ #define GO(A)   \
+-static my_wl_buffer_listener_t* ref_wl_buffer_listener_##A = NULL;                 \
++static _Atomic(my_wl_buffer_listener_t*) ref_wl_buffer_listener_##A = NULL;        \
+ static void my_wl_buffer_listener_release_##A(void* a, void* b)                    \
+ {                                                                                  \
+-    RunFunctionFmt(ref_wl_buffer_listener_##A->release, "pp", a, b);               \
++    RunFunctionFmt(LISTENER_REF_LOAD(ref_wl_buffer_listener_##A)->release, "pp", a, b); \
+ }                                                                                  \
+ static my_wl_buffer_listener_t my_wl_buffer_listener_fct_##A = {                   \
+     (uintptr_t)my_wl_buffer_listener_release_##A,                                  \
+@@ -463,9 +463,9 @@ static void* find_wl_buffer_listener_Fct(void* fct)
+ {
+     if(!fct) return fct;
+-    #define GO(A) if(ref_wl_buffer_listener_##A == fct) return &my_wl_buffer_listener_fct_##A;
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_wl_buffer_listener_##A) == fct) return &my_wl_buffer_listener_fct_##A;
+     SUPER()
+     #undef GO
+-    #define GO(A) if(ref_wl_buffer_listener_##A == 0) {ref_wl_buffer_listener_##A = fct; return &my_wl_buffer_listener_fct_##A; }
++    #define GO(A) if(LISTENER_REF_LOOKUP(ref_wl_buffer_listener_##A) == 0) {LISTENER_REF_PUBLISH(ref_wl_buffer_listener_##A, fct); return &my_wl_buffer_listener_fct_##A; }
+     SUPER()
+     #undef GO
+     printf_log(LOG_NONE, "Warning, no more slot for wayland-client wl_buffer_listener callback\n");
+@@ -1540,7 +1540,7 @@ typedef struct my_zwp_pointer_gesture_pinch_v1_listener_s {
+     static my_zwp_pointer_gesture_pinch_v1_listener_t* ref_zwp_pointer_gesture_pinch_v1_listener_##A = NULL;                                  \
+     static void my_zwp_pointer_gesture_pinch_v1_listener_begin_##A(void* a, void* b, uint32_t c, uint32_t d, void* e, uint32_t f)             \
+     {                                                                                                                                         \
+-        RunFunctionFmt(ref_zwp_pointer_gesture_pinch_v1_listener_##A->begin, "ppuuup", a, b, c, d, e, f);                                     \
++        RunFunctionFmt(ref_zwp_pointer_gesture_pinch_v1_listener_##A->begin, "ppuupu", a, b, c, d, e, f);                                     \
+     }                                                                                                                                         \
+     static void my_zwp_pointer_gesture_pinch_v1_listener_update_##A(void* a, void* b, uint32_t c, int32_t d, int32_t e, int32_t f, int32_t g) \
+     {                                                                                                                                         \

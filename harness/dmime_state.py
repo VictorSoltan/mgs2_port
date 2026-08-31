@@ -15,10 +15,15 @@ import sys
 
 MAGIC = 0x31544D44  # DMT1
 VERSION = 1
-STATE_RVA = 0x26160
+# The DLL is relinked as patches are carried forward, so a recorded RVA is not
+# an identity.  None selects the bounded mapping scan below; --rva remains an
+# explicit research override for a separately identified image.
+STATE_RVA = None
 HEADER_WORDS = 12
 RECORD_WORDS = 12
 EVENTS = 256
+SCAN_CHUNK = 64 * 1024
+MAX_SCAN_BYTES = 8 * 1024 * 1024
 
 HEADER_NAMES = (
     "magic version header_words record_words event_count signature enabled "
@@ -45,13 +50,57 @@ EVENTS_NAMES = {
 }
 
 
-def module_base(pid):
+def module_layout(pid):
+    ranges = []
+    bases = []
     with open(f"/proc/{pid}/maps", encoding="ascii") as stream:
         for line in stream:
             fields = line.split()
-            if len(fields) >= 6 and fields[1].startswith("r-x") and fields[2] == "00000000" and "dmime.dll" in fields[-1]:
-                return int(fields[0].split("-", 1)[0], 16)
-    raise RuntimeError("dmime.dll mapping not found")
+            if len(fields) < 6 or os.path.basename(fields[5]).lower() != "dmime.dll":
+                continue
+            start, end = (int(value, 16) for value in fields[0].split("-", 1))
+            bases.append(start - int(fields[2], 16))
+            if fields[1].startswith("r"):
+                ranges.append((start, end))
+    if not ranges:
+        raise RuntimeError("readable dmime.dll mapping not found")
+    return min(bases), ranges
+
+
+def locate_state(fd, ranges):
+    total = sum(end - start for start, end in ranges)
+    if total > MAX_SCAN_BYTES:
+        raise RuntimeError(
+            f"refusing oversized dmime.dll scan: {total} bytes")
+
+    signature = struct.pack(
+        "<6I", MAGIC, VERSION, HEADER_WORDS, RECORD_WORDS, EVENTS,
+        (~MAGIC) & 0xFFFFFFFF)
+    matches = set()
+    overlap = len(signature) - 1
+    for start, end in ranges:
+        carry = b""
+        position = start
+        while position < end:
+            size = min(SCAN_CHUNK, end - position)
+            data = read_exact(fd, size, position)
+            window = carry + data
+            window_address = position - len(carry)
+            offset = window.find(signature)
+            while offset >= 0:
+                address = window_address + offset
+                if address % 4 == 0:
+                    matches.add(address)
+                offset = window.find(signature, offset + 1)
+            carry = window[-overlap:]
+            position += size
+
+    if not matches:
+        raise RuntimeError("DMT1 state header not found in dmime.dll mappings")
+    if len(matches) != 1:
+        rendered = ", ".join(hex(address) for address in sorted(matches))
+        raise RuntimeError(f"ambiguous DMT1 state headers: {rendered}")
+    return matches.pop()
 
 
 def read_exact(fd, size, address):
@@ -62,10 +111,10 @@ def read_exact(fd, size, address):
 
 
 def read_state(pid, rva, last):
-    base = module_base(pid)
-    address = base + rva
+    base, ranges = module_layout(pid)
     fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
     try:
+        address = base + rva if rva is not None else locate_state(fd, ranges)
         header = dict(zip(HEADER_NAMES, struct.unpack("<12I", read_exact(fd, HEADER_WORDS * 4, address))))
         if header["magic"] != MAGIC or header["signature"] != ((~MAGIC) & 0xFFFFFFFF):
             raise RuntimeError(f"bad dmime state signature at {address:#x}")
@@ -95,6 +144,8 @@ def read_state(pid, rva, last):
     return {
         "pid": pid,
         "address": hex(address),
+        "rva": hex(address - base),
+        "locator": "rva-override" if rva is not None else "bounded-header-scan",
         "magic": "DMT1",
         "version": header["version"],
         "enabled": bool(header["enabled"]),
@@ -106,7 +157,9 @@ def read_state(pid, rva, last):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("pid", type=int)
-    parser.add_argument("--rva", type=lambda value: int(value, 0), default=STATE_RVA)
+    parser.add_argument(
+        "--rva", type=lambda value: int(value, 0), default=STATE_RVA,
+        help="explicit research override; default scans only dmime.dll mappings")
     parser.add_argument("--last", type=int, default=0)
     parser.add_argument("--output")
     args = parser.parse_args()

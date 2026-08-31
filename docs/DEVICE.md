@@ -43,13 +43,29 @@ game streams from.
 ## Stopping, properly
 
 ```sh
-killall -9 launch.sh wine wine-preloader box86 box64 gptokeyb wineserver
+pkill -TERM -f '[l]aunch-play-dxvk-fp17.sh' 2>/dev/null || true
 sleep 3
-rm -f /tmp/mgs2-substance.lock
+# Fallback only if the launcher's TERM trap did not finish. Match the real
+# truncated helper comm as well as Wine/Box86 children.
+pkill -9 -x gptokeyb-mgs2-i 2>/dev/null || true
+killall -9 wine wine-preloader box86 box64 wineserver start.exe 2>/dev/null || true
+pkill -9 -f '[m]gs2_sse_rg353vs_port.exe' 2>/dev/null || true
+sleep 2
+G=/storage/roms/ports/MGS2-Substance
 for m in /usr/lib/wine/i386-windows/{wined3d,user32,d3d8,dmsynth,dsound,dmime,dmusic}.dll \
-         /usr/lib/wine/i386-unix/{winewayland,win32u,opengl32,ntdll}.so /usr/bin/box86; do
+         /usr/lib/wine/i386-unix/{winewayland,win32u,opengl32,ntdll}.so \
+         /usr/bin/box86 "$G/game/bin/d3d8.dll" \
+         "$G/wineprefix11-x86-dxvk-test/drive_c/windows/system32/d3d9.dll" \
+         "$G/game/bin/mgs2_sse_rg353vs_port.exe"; do
     while grep -q " $m " /proc/mounts; do umount "$m" || break; done
 done
+if ! grep -q " $G/game/bin/mgs2_sse_rg353vs_port.exe " /proc/mounts; then
+    rm -f /tmp/mgs2-wpatch-novs.* /tmp/mgs2-wpatch-isolated.* \
+          /tmp/mgs2-wpatch-state.* /tmp/mgs2-wpatch-finalplay22.* \
+          /tmp/mgs2-wpatch-finalplay23.*
+else
+    echo "temporary game image still mounted; preserving its backing file"
+fi
 ```
 
 Two traps in that block:
@@ -57,31 +73,54 @@ Two traps in that block:
 - The launcher **bind-mounts** its DLL choices over Wine's. A hard kill skips the
   launcher's own cleanup, so the mounts stay and the next run inherits whatever
   was mounted last. Always unwind them, and loop: they can stack.
-- `launch.sh` restores the CPU governor and frequency cap on exit through a trap,
-  which `kill -9` also skips. After a hard kill, check and restore:
+- Do not remove `/tmp/mgs2-substance.lock` while a launcher may still own it.
+  `flock` locks the inode, so deleting the name lets a second launcher lock a
+  new inode while the first is still alive. The lock file may remain after a
+  clean stop; an unlocked existing file is harmless.
+- The shared FINALPLAY17--22 launcher persists the original same-boot CPU/GPU
+  baseline in `/tmp/mgs2-cpu-baseline.state` before changing a clock. Normal
+  exit restores and removes it. `kill -9` skips that cleanup, but the next
+  closed launch validates the boot ID and exact policies, recovers the saved
+  baseline, then starts its controlled-clock run. Do not delete or hand-edit
+  that file. If the launcher cannot be run again, inspect the `cpu`/`gpu`
+  rows and restore those recorded values rather than assuming one universal
+  governor or cap.
+
+For the older `launch.sh` laboratory route, a hard kill still requires a
+manual check:
 
 ```sh
-cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq   # expect 1992000
-for p in /sys/devices/system/cpu/cpufreq/policy*; do echo 1992000 > $p/scaling_max_freq; done
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
 ```
 
-  1992000 is the correct value even though `scaling_available_frequencies` stops
+  1992000 is a valid controlled-run value even though
+  `scaling_available_frequencies` stops
   at 1800000. That list omits the top OPP; `cpuinfo_max_freq` reports 1992000 and
   the write above takes (verified on OS_VERSION 20260722, 2026-08-12). Do not
-  conclude from the shorter list that the fixed-clock baseline of the performance
+  conclude from the shorter list that the fixed-clock setting of the performance
   briefs is unreachable — it is. There is one shared policy, `policy0`, for all
   four A55 cores, so the loop writes a single file.
 
 ## Verifying what is actually running
 
-Never trust the filename you passed. Compare the mount target byte for byte:
+Never trust the filename you passed. Check every live target against the
+selected closed manifest. For normal FINALPLAY23 production:
 
 ```sh
 G=/storage/roms/ports/MGS2-Substance
-cmp -s /usr/bin/box86 $G/box86-island31 && echo ok
-cmp -s /usr/lib/wine/i386-windows/wined3d.dll $G/wined3d_p56_batch_state.dll && echo ok
-cmp -s /usr/lib/wine/i386-unix/winewayland.so $G/winewayland_stall1.so && echo ok
+bad=0
+while read -r path want src; do
+    case "$path" in ''|\#*) continue;; esac
+    got=$(sha256sum "$path" 2>/dev/null | cut -d' ' -f1)
+    [ "$got" = "$want" ] || { echo "BAD $path ($src): ${got:-missing}"; bad=$((bad+1)); }
+done < "$G/FINALPLAY23_MOVIE_GUARD.manifest"
+echo "mismatches=$bad"
 ```
+
+This intentionally verifies DXVK and the temporary game image; FINALPLAY23 does
+not bind WineD3D. Select the matching manifest when checking a named rollback or
+candidate.
 
 And confirm exactly one instance, matching on the exact `comm` (it is truncated
 to 15 characters, so `pgrep` patterns can mislead):
@@ -255,7 +294,7 @@ now creates `D: -> /storage` in the prefix on every start. If saving ever breaks
 again, check that symlink first:
 
 ```sh
-ls -la /storage/roms/ports/MGS2-Substance/wineprefix64/dosdevices/
+ls -la /storage/roms/ports/MGS2-Substance/wineprefix11-x86-dxvk-test/dosdevices/
 ```
 
 ## Sound

@@ -13,7 +13,6 @@ import struct
 import time
 
 
-DEFAULT_RVA = 0x30F040
 COUNTER_EXPORT = b"MGS2DxvkPresentCount"
 
 
@@ -92,6 +91,19 @@ def read_count(fd, address):
     return struct.unpack("<I", raw)[0]
 
 
+def resolve_rva(path, explicit_rva=None):
+    """Resolve the counter address, refusing to guess on a changed DLL."""
+    if explicit_rva is not None:
+        return explicit_rva, "argument"
+    try:
+        return exported_rva(path), "PE-export"
+    except (OSError, RuntimeError, struct.error) as error:
+        raise RuntimeError(
+            f"cannot resolve {COUNTER_EXPORT.decode()} from {path}: {error}; "
+            "pass an independently verified --rva only for a research build"
+        ) from error
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("pid", type=int)
@@ -105,13 +117,9 @@ def main():
 
     base, path = module_base(args.pid)
     try:
-        rva = args.rva if args.rva is not None else exported_rva(path)
-        rva_source = "argument" if args.rva is not None else "PE-export"
-    except (OSError, RuntimeError, struct.error) as error:
-        if args.rva is not None:
-            raise
-        rva = DEFAULT_RVA
-        rva_source = f"legacy-fallback:{error}"
+        rva, rva_source = resolve_rva(path, args.rva)
+    except RuntimeError as error:
+        parser.error(str(error))
     address = base + rva
     fd = os.open(f"/proc/{args.pid}/mem", os.O_RDONLY)
     try:

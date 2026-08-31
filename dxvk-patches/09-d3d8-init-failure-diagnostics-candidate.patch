@@ -1,0 +1,42 @@
+DXVK patch 09 -- fail closed on a null D3D9 factory and expose WSI priming failure.
+
+Apply after dxvk-patches/02-d3d8-wine-user-driver-init.patch to DXVK-Sarek
+commit 617958fe1cf2b10e06fa751d3e40bd765dcf2cc6. This is a source-only audit
+candidate; it is not part of either production DLL stage.
+
+Patch 02 already turns missing d3d9.dll and a missing Direct3DCreate9 export
+into DxvkError. Complete that boundary for the legal factory-null result rather
+than dereferencing address zero in D3D8Interface's constructor. Keep the hidden
+window attempt non-fatal for compatibility, but make its failure visible in the
+existing cold-start d3d8 log instead of silently continuing into an
+unattributable missing-WSI-extension failure.
+
+Neither branch is reached after a successful FINALPLAY21 cold start. There is
+no per-frame code or performance claim.
+
+--- a/src/d3d8/d3d8_interface.cpp
++++ b/src/d3d8/d3d8_interface.cpp
+@@ -18,7 +18,11 @@ namespace dxvk {
+     if (!createD3D9)
+       throw DxvkError("D3D8Interface: ERROR! Direct3DCreate9 not found");
+ 
+-    return createD3D9(D3D_SDK_VERSION);
++    auto d3d9 = createD3D9(D3D_SDK_VERSION);
++    if (!d3d9)
++      throw DxvkError("D3D8Interface: ERROR! Direct3DCreate9 returned null");
++
++    return d3d9;
+   }
+ 
+   D3D8Interface::D3D8Interface()
+--- a/src/d3d8/d3d8_main.cpp
++++ b/src/d3d8/d3d8_main.cpp
+@@ -124,6 +124,8 @@ extern "C" {
+       0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+     if (driverWindow)
+       DestroyWindow(driverWindow);
++    else
++      dxvk::Logger::warn("D3D8: Failed to create the user-driver priming window");
+ 
+     IDirect3D8* pDirect3D = nullptr;
+     dxvk::CreateD3D8(&pDirect3D);

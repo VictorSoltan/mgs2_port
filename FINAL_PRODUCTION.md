@@ -1,6 +1,8 @@
-# FINALPLAY21 production record
+# FINALPLAY23 production record
 
-FINALPLAY21 was promoted on 27 August 2026. The normal PortMaster entry selects:
+FINALPLAY23 was promoted on 31 August 2026 to close a measured crash in the
+game's DirectShow movie path; it inherits FINALPLAY22, promoted by owner
+directive on 29 August 2026. The normal PortMaster entry selects:
 
 ```text
 MGS2 D3D8
@@ -51,6 +53,51 @@ only the locked original hash, creates an exact one-byte temporary image,
 bind-mounts it for the launch and restores the original path on cleanup. See
 `docs/briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md`.
 
+FINALPLAY22 retains FINALPLAY21's renderer, Box86 and input bytes, and promotes
+the two independently exercised audit candidates. The exact temporary game
+view isolates the no-wrap IPU consumer, closes leaked fixed-function lighting,
+owns stage-0 `D3DTSS_TEXTURETRANSFORMFLAGS` immediately before UV-matrix upload
+and prevents software-VP startup from re-enabling the wpatch shader. Wine
+patches 84+85 repair dmime curve-private-state overlap and dmsynth sink
+startup, cleanup, `DSERR_BUFFERLOST` recovery and clock-state synchronisation.
+See `docs/briefs/MGS2_FINALPLAY22_AUDIT_FIXES_PRODUCTION_2026-08-29.md`.
+
+FINALPLAY23 retains that exact bundle and closes a crash the port has always
+carried. The shipping executable has `WindowsMpegInit()` stubbed with `ret`
+(VA `0x00878FE0`), so the DirectShow filter graph is never created; but the
+in-memory movie consumer is still reached and dereferences that never-created
+state with no null check. In ordinary play on 2026-08-31 this ended a session
+about 2.5 minutes after the first frame with `wine: Unhandled page fault on read
+access to 00000000 at address 0087AE0F` and wine exit 5. FINALPLAY23 adds
+exactly two bytes to the FINALPLAY22 temporary view -- `ret` at
+`WinstrmSendIPic` and at `RCTInit` -- and changes nothing else: all 19 other
+identity rows are byte-identical to FINALPLAY22. No movie played before the fix
+and none plays after it; restoring movie playback stays open. The route
+generated its exact image and passed `21/21` live identity on the device, and
+reached the title screen and both menu levels. The loaded-save action smoke has
+not re-run to completion -- `autoload_save.py` aborted on its own pixel check --
+and the movie trigger itself has not been re-exercised in play.
+
+The two bytes, their preconditions and the exact rollback are recorded in
+`device/patch-mgs2-wpatch-finalplay23.sh`, `device/FINALPLAY.lock` and
+`game-patches/06-movie-null-graph-guard.patch`;
+`harness/test_finalplay23_production.sh` executes the transform and proves the
+difference against the FINALPLAY22 image is those two offsets and nothing else.
+
+The visual and audio candidates separately passed exact `21/21` identity and
+loaded-save action smokes on the RG353VS. The owner explicitly accepted two
+incomplete gates for promotion: the delayed fixed-scene flicker A/B and
+post-resume gameplay-SFX survival after RTC wake failed to restore networking.
+The deployed combined normal entry then independently matched all `21/21` live
+objects, loaded the pixel-gated row-07 save and completed four movement bursts
+and four attacks without a new GPU fault. Its rollback-complete release contains
+25 exact files and installs the production selector last.
+The post-deploy `fp21` rollback smoke also matched its exact `21/21` identity
+and cleaned up without a remaining process, mount or temporary game view.
+One visual attempt caused a real Mali fault `0x4002`; exact FINALPLAY21 control
+and an immediate exact candidate rerun both passed, so it remains a preserved,
+non-reproduced and unattributed device event.
+
 ## Launch and rollback
 
 Normal launch:
@@ -59,8 +106,14 @@ Normal launch:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to the exact FINALPLAY20 runtime without the
-water-path edit:
+Immediate one-launch rollback to exact FINALPLAY21:
+
+```sh
+MGS2_RENDERER=fp21 /storage/roms/ports/MGS2-Substance.sh
+```
+
+One-launch rollback to the exact FINALPLAY20 runtime without the water-path
+edit:
 
 ```sh
 MGS2_RENDERER=fp20 /storage/roms/ports/MGS2-Substance.sh
@@ -102,11 +155,13 @@ unchanged FINALPLAY16 manifest `18/18`.
 The selector is `device/launch-play.sh`; it dispatches to the fixed production
 route or a named rollback route:
 
-- `device/launch-play-dxvk-fp21.sh` — current production route;
+- `device/launch-play-dxvk-fp23.sh` — current production route;
+- `device/launch-play-dxvk-fp22.sh` — exact one-launch rollback route;
+- `device/launch-play-dxvk-fp21.sh` — exact pre-audit-fixes rollback;
 - `device/launch-play-dxvk-fp20.sh` — exact pre-water-fix rollback;
 - `device/launch-play-dxvk-fp19.sh` — exact p34 rollback;
 - `device/launch-play-dxvk-fp18.sh` — exact p24 rollback;
-- `device/launch-play-dxvk-fp17.sh` — shared fixed engine and p21 rollback;
+- `device/launch-play-dxvk-fp17.sh` — shared fixed engine and FINALPLAY17 rollback;
 - `device/launch-play-dxvk-fp16.sh`;
 - `device/launch-play-wined3d-fp15.sh`.
 
@@ -120,7 +175,7 @@ after reaping it. The explicit DXVK research harness retains its separate
 emergency guard for unattended measurements.
 
 The tracked `device/mgs2.gptk` mapping is executed by the exact patched helper
-in FINALPLAY19 through FINALPLAY21. Its default-off `-immediate-start-back` mode
+in FINALPLAY19 through FINALPLAY23. Its default-off `-immediate-start-back` mode
 emits normal Start and Select mappings on the physical down/up edges without waiting for chord
 resolution. The closed route also sets `winebus.sys=d`, so Wine cannot consume
 the same physical input first as a raw joystick action. Same-device
@@ -130,10 +185,11 @@ was available and the CPU/GPU governors were restored.
 
 ## Production identity
 
-`device/FINALPLAY21_WATER_WPATCH.manifest` is the authoritative 21-row identity
-gate. It retains all 19 FINALPLAY20 rows and adds the exact temporary game image
-plus the tracked patch helper. It covers eight bind mounts and the exact system
-Wine, Vulkan loader and proprietary Mali files on which the route depends.
+`device/FINALPLAY23_MOVIE_GUARD.manifest` is the authoritative 21-row identity
+gate. Relative to FINALPLAY21, only the patch helper, temporary game view,
+`dmime.dll` and `dmsynth.dll` rows change. It covers eight bind mounts and the
+exact system Wine, Vulkan loader and proprietary Mali files on which the route
+depends.
 
 Supplied production artifacts:
 
@@ -143,12 +199,12 @@ Supplied production artifacts:
 | input helper | `gptokeyb-mgs2-immediate` | `49c782dad9da` |
 | D3D8 | `d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll` | `22e519d266b6` |
 | D3D9 | `d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll` | `4918b0283329` |
-| DirectMusic synth | `dmsynth_p37_resume_timeline.dll` | `b11c9b6ba2f1` |
+| DirectMusic synth | `dmsynth_p38_sink_lifetime.dll` | `222876855114` |
 | DirectSound | `dsound_p36_native_fir_target.dll` | `302eff548429` |
-| DirectMusic performance | `dmime_transition1.dll` | `ce3e3f14a62a` |
+| DirectMusic performance | `dmime_p16_curve_state_layout.dll` | `f23f08ed4c41` |
 | DirectMusic port | `dmusic_shared_lifetime1.dll` | `1fe0a571503b` |
-| game patch helper | `patch-mgs2-wpatch-novs.sh` | `b7ba819816b1` |
-| temporary game view | generated from installed legal EXE | `6686b3fa6484` |
+| game patch helper | `patch-mgs2-wpatch-finalplay22.sh` | `55f1714b68a0` |
+| temporary game view | generated from installed legal EXE | `d902ee4398b7` |
 
 Use the full hashes in the manifest. Prefixes above are for human recognition,
 not verification.
@@ -210,24 +266,26 @@ Wine:
 - complete FINALPLAY15 source delta:
   `wine-patches/FINALPLAY15-wine-complete.patch`;
 - patches 01--03 after that boundary are default-off research instrumentation
-  and its audit cleanup; no audit-built Wine DLL was deployed;
+  and its audit cleanup; they are not deployed;
 - The complete Wine boundary already contains retained patch 60's bounded
-  transport recovery; patch 83 adds the stale-timeline rebase on top. Both
-  source records and the exact binary hash are pinned in `device/FINALPLAY.lock`;
-  rejected patch 82 records the failed wall-clock resume witness and is not
-  shipped.
+  transport recovery; patch 83 adds the stale-timeline rebase. FINALPLAY22 adds
+  patch 84's dmime private-state layout and patch 85's dmsynth sink lifetime,
+  recoverable BUFFERLOST and clock-state repairs. All source records, the fixed
+  epoch and exact binary hashes are pinned in `device/FINALPLAY.lock`; rejected
+  patch 82 records the failed wall-clock resume witness and is not shipped.
 
 Game compatibility patch:
 
 - original game EXE SHA-256:
   `29759e6f06eaea4d61bb6aef5a5ef45a936eac1e76fa0c3471cf4f231349aaa0`;
 - exact temporary view SHA-256:
-  `6686b3fa6484a0609fbe65be46f34cbba941b18e252db7bbb83d457153ba31d6`;
-- only changed byte: file offset `0x4a294a`, `02 -> 00`;
-- source-equivalent record:
-  `game-patches/01-wpatch-fixed-function-fallback.patch`;
-- generator: `device/patch-mgs2-wpatch-novs.sh`, whose output and live mount
-  are both hash-verified before the game starts.
+  `d902ee4398b77653674943f097f79e103d1aa0bc93ce825c0cb0c3d3522b9f88`;
+- 58 changed bytes: two flag immediates, the bounded `.text` virtual size and
+  three validated trampolines/caves;
+- source-equivalent records: game patches 02, 04 and 05;
+- generator: `device/patch-mgs2-wpatch-finalplay22.sh`, whose input,
+  instructions/caves, complete output and live mount are verified before the
+  game starts.
 
 ## What remains open
 
@@ -235,13 +293,14 @@ Game compatibility patch:
   must be captured separately from compiler gaps.
 - New state-cache entries may still compile once when later gameplay first
   encounters them.
-- Intermittent gameplay SFX loss across encounter/map transitions still
-  requires a timestamp-correlated bounded capture; it is separate from the
-  now-fixed post-resume sample-clock delay.
+- FINALPLAY22 repairs a concrete intermittent-SFX lifetime mechanism, but
+  encounter-transition and post-resume survival still require a completed
+  observation. The pre-resume exact route and eight automated attacks passed;
+  RTC wake then lost the remote network before post-resume attacks.
 - One pre-renderer cold start fault at the same linked FluidSynth instruction
   previously seen with p36 remains unclassified. The relevant p35/p36/p37 code
   is identical and the next nine fully cold FINALPLAY20 starts plus the
-  FINALPLAY21 cold production start passed, so no speculative workaround is
+  FINALPLAY21 cold production start passed, so no additional speculative workaround is
   shipped.
 - Runtime freezes have multiple known signatures; new occurrences must be
   captured and named rather than attributed by resemblance.
@@ -250,6 +309,10 @@ Game compatibility patch:
   run's elapsed point, but status 40 alone does not prove causation.
 
 ## Historical production
+
+FINALPLAY21 remains the exact `MGS2_RENDERER=fp21` pre-audit-fixes rollback and
+is documented in
+`docs/briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md`.
 
 FINALPLAY20 remains the exact `MGS2_RENDERER=fp20` pre-water-fix rollback and is
 documented in

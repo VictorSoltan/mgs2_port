@@ -1,0 +1,32 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH] libdg: make fixed-function wpatch own its UV transform mode
+
+Apply after 02-wpatch-consumer-and-state-isolation.patch.
+
+Every fixed-function wpatch variant uploads a stage-0 texture matrix, but the
+renderer never selects the corresponding D3DTTFF_COUNT2 transform mode. Other
+renderers can leave that stage disabled or projected, making the water's UV
+matrix depend on draw order. Select COUNT2 on entry to the non-shader branch so
+the matrix and the mode have the same owner.
+
+The live FINALPLAY21 DG_WinApp flag has bit 8 clear, so the global device init
+also selects COUNT2 and the material/colour-source setup. That refutes a missing
+material setup on this route, but it does not protect wpatch from later EVM or
+shadow/optical renderer state changes.
+
+The distributed game executable is not stored here. A separate fail-closed
+helper validates the exact legal input and code bytes, emits the equivalent
+temporary-image trampoline, and verifies its complete output hash.
+
+--- a/mgs2x/source/system/libdg/wpatch.c
++++ b/mgs2x/source/system/libdg/wpatch.c
+@@ -1227,6 +1227,9 @@
+ 		FMATRIX	mtx ;
+ 
+ 		/* VertexShader非対応版 */
++		DG_SetTextureStageState(0, D3DTSS_TEXTURETRANSFORMFLAGS,
++				D3DTTFF_COUNT2) ;
++
+ #if FALSE
+ 		mtx = DG_UnitMatrix ;
+ 		mtx.m[0][0] = patch->tex->tex_trans.vec1.x ;

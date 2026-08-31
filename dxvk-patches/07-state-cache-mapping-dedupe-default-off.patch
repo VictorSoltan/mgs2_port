@@ -1,5 +1,4 @@
 diff --git a/src/dxvk/dxvk_state_cache.cpp b/src/dxvk/dxvk_state_cache.cpp
-index 70db4277..3bae4fe4 100644
 --- a/src/dxvk/dxvk_state_cache.cpp
 +++ b/src/dxvk/dxvk_state_cache.cpp
 @@ -8,7 +8,12 @@ namespace dxvk {

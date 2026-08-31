@@ -1,0 +1,49 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH] libdg: isolate the fixed-function wpatch fallback
+
+FINALPLAY21 disabled the custom wpatch vertex shader globally because the
+DXVK/Mali route did not render the animated sea.  The recovered call census
+shows one other external wpatch consumer: the no-wrap IPU movie panel.  Keep
+that panel on the original vertex-shader path while retaining the existing
+fixed-function fallback for the water consumers.
+
+The fixed-function branch enables D3D8 lighting and installs patch-local light
+state.  Return lighting to libdg's disabled baseline at the plugin tail so a
+later fixed-function draw cannot inherit the last water light.
+
+The distributed 2003 executable is not stored in this repository.  The
+fail-closed runtime equivalent validates the original instructions and an
+unused executable tail, applies only the recorded branch/trampoline bytes to a
+temporary image, expands .text's virtual extent within its existing raw size,
+and verifies the complete output hash.
+
+--- a/mgs2x/source/system/libdg/wdgd.c
++++ b/mgs2x/source/system/libdg/wdgd.c
+@@ -1459,7 +1459,6 @@
+ 			}
+ 			DG_WinApp.flag |= M_DG_WINAPP_SHADOWWT_USE_VERTEXSHADER ;
+ 			DG_WinApp.flag |= M_DG_WINAPP_OPTCMF00_USE_VERTEXSHADER ;
+-			DG_WinApp.flag |= M_DG_WINAPP_PATCH_USE_VERTEXSHADER ;
+ 
+ 			/* DG_EVMOBJ描画VertexShader使用判定  */
+ 			if(  X2W_GetAppConfig(X2WAPPCFG_EVM_USE_OBJ_MULTITEX) )
+--- a/mgs2x/source/system/libdg/wpatch.c
++++ b/mgs2x/source/system/libdg/wpatch.c
+@@ -1124,7 +1124,8 @@
+ 		DG_SetAlphaMode(0);
+ 	}
+ 
+-	if( DG_CheckPatchUseVertexShader() )
++	if( DG_CheckPatchUseVertexShader()
++	 || ( patch->flag & DG_PATCH_NO_WRAP ) )
+ 	{
+ 		{/* 環境マッピング用マトリクスの設定 */
+ 			FMATRIX		mat ;
+@@ -1608,6 +1609,7 @@
+ 
+ 	DG_SetTextureStageState(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
+ 	DG_SetTextureStageState(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
++	DG_SetRenderState(D3DRS_LIGHTING, FALSE);
+ 
+ 	/* スタティックプッシュバッファへの記録終了 */
+ 	DG_CloseDmaTask();

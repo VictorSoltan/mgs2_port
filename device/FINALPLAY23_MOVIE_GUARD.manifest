@@ -1,0 +1,25 @@
+# FINALPLAY23 identity. FINALPLAY22 plus exactly two bytes in the temporary game
+# EXE view, closing the unguarded dereference of the never-initialised DirectShow
+# state that ended the 2026-08-31 03:04 session with wine exit 5. Every other row
+# is byte-identical to FINALPLAY22, which remains the exact one-launch rollback.
+/usr/bin/box86	b7e9530f6039335a37ee54d8d3a2974e25b71500b96b95a9dd899f1e20374d51	box86-fp26-wayland-text-input-production
+/storage/roms/ports/MGS2-Substance/gptokeyb-mgs2-immediate	49c782dad9da50cb0f5bb9e37821104e5089563feb24c7b0303117b75196b43a	gptokeyb-5b1284e-mgs2-p01
+/storage/roms/ports/MGS2-Substance/patch-mgs2-wpatch-finalplay23.sh	c607805bd2afc391d267364fe8d63891bcf89f03ca18736eb561e276445889a8	tracked-finalplay23-patcher
+/storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe	d6b81257a82348299675adf863c9ad884c68c438b032fe20a75f18a094d29cd5	original-29759e6f-plus-state-owned-wpatch-transform-plus-movie-guard
+/storage/roms/ports/MGS2-Substance/game/bin/d3d8.dll	22e519d266b62bfa54d1d1f81e6314aab7b75890b342908f24d2b454e4af3baa	d3d8_dxvk_sarek_1.11.1_mali_wsiinit3.dll
+/storage/roms/ports/MGS2-Substance/wineprefix11-x86-dxvk-test/drive_c/windows/system32/d3d9.dll	4918b0283329702116dc64fba2e7be992a8b67ef2534ccf5af919f334c690650	d3d9_dxvk_sarek_1.11.1_mali_freeze1.dll
+/usr/lib/wine/i386-windows/dmsynth.dll	22287685511486728cb7fc08ec6689b4213ad48cc01679b4bb6e91c02ddfdc1e	dmsynth_p38_sink_lifetime.dll
+/usr/lib/wine/i386-windows/dsound.dll	302eff548429c6b87aed3931bb0bb1acd4c4c8a130a96ae7025612c2d7eb999c	dsound_p36_native_fir_target.dll
+/usr/lib/wine/i386-windows/dmime.dll	f23f08ed4c41f69baf4ac14a22f9fc5605b629123438fdf37714af6bdae5698e	dmime_p16_curve_state_layout.dll
+/usr/lib/wine/i386-windows/dmusic.dll	1fe0a571503bdd17166474838b83cf54c0f56fe5b44da371ffeb4123ebc8208e	dmusic_shared_lifetime1.dll
+/usr/lib/wine/i386-unix/win32u.so	04f8472bd672d37cd77b45cc647b95f698904b610d630bcc6cf2abfc9a4eecd8	ROCKNIX-20260822-system
+/usr/lib/wine/i386-unix/winewayland.so	f1aca90bc0d27ee49f5bbba6e654481b4a27d83408cb9d71cc0e24565b2f628b	ROCKNIX-20260822-system
+/usr/lib/wine/i386-unix/opengl32.so	749f1c4bcfad47690a9c7366069d99db2f4a0663365a46fa1fd5f4720e178387	ROCKNIX-20260822-system
+/usr/lib/wine/i386-unix/winevulkan.so	dc49370e4d263327c0596a5165e477011eae9ac46c5bd07c7ab3d2641f54bebc	ROCKNIX-20260822-system
+/usr/lib/wine/i386-windows/wined3d.dll	65669750ec68415a6b2d4acd147f58bafa11f2a2f8aa07bc8b5f375af714a520	ROCKNIX-20260822-system
+/usr/lib/wine/i386-windows/d3d8.dll	755e5a870911815315ae724bdba876fb08794b580a843ff0a23729d019deafe0	ROCKNIX-20260822-system
+/usr/lib/wine/i386-windows/user32.dll	1635f4c6917dc54f6764e1fceddd39b4ce04692a93a88f473fa6cbcf03d83d84	ROCKNIX-20260822-system
+/usr/lib/wine/i386-windows/winewayland.drv	9d9bdba6d481720825378d417a13e592a6f7faaad374e4ce149500b7627c6162	ROCKNIX-20260822-system
+/usr/lib/wine/i386-windows/winevulkan.dll	aa8bdfbdacca08a28f6c8ba8f80a2f1feef0b1e9365c4165b3d0c84cb2d93b37	ROCKNIX-20260822-system
+/usr/lib32/libmali.so.1.10.0	2b39f4315eec0545e21e5c5498f9125d01e35d7cad4a49a447f002dd7b5e0cbb	Mali-G52-g29p1
+/usr/lib32/libvulkan.so.1.4.347	2504809a0a0cb1fe46cd91a4e962d2ef317ccc01b6ee9757ac0938e7a42525d0	ROCKNIX-20260822-system

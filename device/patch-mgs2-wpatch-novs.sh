@@ -16,6 +16,17 @@ if [ "$INPUT" -ef "$OUTPUT" ]; then
     echo "MGS2: refusing to patch the installed game EXE in place" >&2
     exit 1
 fi
+case "$OUTPUT" in
+    /tmp/mgs2-wpatch-novs.*) ;;
+    *)
+        echo "MGS2: refusing output outside the private /tmp launch name" >&2
+        exit 1
+        ;;
+esac
+if [ -L "$OUTPUT" ]; then
+    echo "MGS2: refusing a symlink output" >&2
+    exit 1
+fi
 
 got=$(sha256sum "$INPUT" 2>/dev/null | cut -d' ' -f1)
 if [ "$got" != "$ORIGINAL_SHA256" ]; then

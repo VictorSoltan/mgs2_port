@@ -1,0 +1,90 @@
+DXVK patch 10 -- keep clip/cull SPIR-V capabilities and D3D9 caps coherent.
+
+Apply after dxvk-patches/01-mali-d3d9-pipeline-compat.patch to DXVK-Sarek
+commit 617958fe1cf2b10e06fa751d3e40bd765dcf2cc6. This is a source-only audit
+candidate; it is not part of the FINALPLAY21 D3D9 DLL stage.
+
+Patch 01 correctly suppresses ClipDistance/CullDistance declarations when the
+Vulkan feature is unavailable, but enables each SPIR-V capability only from the
+stage's output-plane count. Pixel-shader inputs and HS/DS/GS inputs can still
+declare the builtin with no matching capability. Once the device feature is
+enabled, enabling the capability for the module is legal even if a particular
+stage ends up not using it; use that direct condition for every DXBC stage and
+cover pixel-shader inputs as well.
+
+On a device such as the RG353VS where shaderClipDistance is unavailable, also
+report zero D3D9 user clip planes instead of accepting state that patch 01 must
+drop. MGS2 has no SetClipPlane or D3DRS_CLIPPLANEENABLE call, so this is not a
+flicker or performance candidate for this game.
+
+--- a/src/d3d9/d3d9_adapter.cpp
++++ b/src/d3d9/d3d9_adapter.cpp
+@@ -529,7 +529,8 @@ namespace dxvk {
+     // Max Active Lights
+     pCaps->MaxActiveLights           = caps::MaxEnabledLights;
+     // Max User Clip Planes
+-    pCaps->MaxUserClipPlanes         = MaxClipPlanes;
++    pCaps->MaxUserClipPlanes         = m_adapter->features().core.features.shaderClipDistance
++                                     ? MaxClipPlanes : 0;
+     // Max Vertex Blend Matrices
+     pCaps->MaxVertexBlendMatrices    = 4;
+     // Max Vertex Blend Matrix Index
+--- a/src/dxbc/dxbc_compiler.cpp
++++ b/src/dxbc/dxbc_compiler.cpp
+@@ -6737,9 +6737,9 @@ namespace dxvk {
+   
+   
+   void DxbcCompiler::emitVsInit() {
+-    if (m_moduleInfo.options.enableClipDistance && m_analysis->clipCullOut.numClipPlanes)
++    if (m_moduleInfo.options.enableClipDistance)
+       m_module.enableCapability(spv::CapabilityClipDistance);
+-    if (m_moduleInfo.options.enableCullDistance && m_analysis->clipCullOut.numCullPlanes)
++    if (m_moduleInfo.options.enableCullDistance)
+       m_module.enableCapability(spv::CapabilityCullDistance);
+     m_module.enableCapability(spv::CapabilityDrawParameters);
+     
+@@ -6783,9 +6783,9 @@ namespace dxvk {
+   
+   void DxbcCompiler::emitHsInit() {
+     m_module.enableCapability(spv::CapabilityTessellation);
+-    if (m_moduleInfo.options.enableClipDistance && m_analysis->clipCullOut.numClipPlanes)
++    if (m_moduleInfo.options.enableClipDistance)
+       m_module.enableCapability(spv::CapabilityClipDistance);
+-    if (m_moduleInfo.options.enableCullDistance && m_analysis->clipCullOut.numCullPlanes)
++    if (m_moduleInfo.options.enableCullDistance)
+       m_module.enableCapability(spv::CapabilityCullDistance);
+     
+     m_hs.builtinInvocationId = emitNewBuiltinVariable(
+@@ -6803,8 +6803,8 @@ namespace dxvk {
+   void DxbcCompiler::emitDsInit() {
+     m_module.enableCapability(spv::CapabilityTessellation);
+-    if (m_moduleInfo.options.enableClipDistance && m_analysis->clipCullOut.numClipPlanes)
++    if (m_moduleInfo.options.enableClipDistance)
+       m_module.enableCapability(spv::CapabilityClipDistance);
+-    if (m_moduleInfo.options.enableCullDistance && m_analysis->clipCullOut.numCullPlanes)
++    if (m_moduleInfo.options.enableCullDistance)
+       m_module.enableCapability(spv::CapabilityCullDistance);
+     
+     m_ds.builtinTessLevelOuter = emitBuiltinTessLevelOuter(spv::StorageClassInput);
+@@ -6847,8 +6847,8 @@ namespace dxvk {
+   void DxbcCompiler::emitGsInit() {
+     m_module.enableCapability(spv::CapabilityGeometry);
+-    if (m_moduleInfo.options.enableClipDistance && m_analysis->clipCullOut.numClipPlanes)
++    if (m_moduleInfo.options.enableClipDistance)
+       m_module.enableCapability(spv::CapabilityClipDistance);
+-    if (m_moduleInfo.options.enableCullDistance && m_analysis->clipCullOut.numCullPlanes)
++    if (m_moduleInfo.options.enableCullDistance)
+       m_module.enableCapability(spv::CapabilityCullDistance);
+ 
+     // Enable capabilities for xfb mode if necessary
+@@ -6902,6 +6902,10 @@ namespace dxvk {
+   
+   
+   void DxbcCompiler::emitPsInit() {
++    if (m_moduleInfo.options.enableClipDistance)
++      m_module.enableCapability(spv::CapabilityClipDistance);
++    if (m_moduleInfo.options.enableCullDistance)
++      m_module.enableCapability(spv::CapabilityCullDistance);
+     m_module.enableCapability(spv::CapabilityDerivativeControl);
+     
+     m_module.setExecutionMode(m_entryPointId,

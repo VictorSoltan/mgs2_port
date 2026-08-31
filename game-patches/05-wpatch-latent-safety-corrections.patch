@@ -1,0 +1,61 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH] libdg: close latent wpatch audit boundaries
+
+Apply after 02-wpatch-consumer-and-state-isolation.patch and
+04-wpatch-texture-transform-ownership-candidate.patch.
+
+Keep the fixed-function wpatch decision if Direct3D falls back to software
+vertex processing; the original software branch otherwise re-enables the bit
+that the hardware branch deliberately leaves clear. Give the unreachable
+bump-map case a defined fallback and the same assertion as the shader branch,
+instead of making its indirect draw call depend on an uninitialised local.
+Finally, check the IPU-panel patch allocation before dereferencing it.
+
+Only the software-VP flag has a one-byte equivalent in the bounded legal-image
+candidate. The bump-map assignment is unreachable in the recovered game and
+the allocation guard is retained as a source correction rather than a claim
+that an out-of-memory path was reproduced.
+
+--- a/mgs2x/source/system/libdg/wdgd.c
++++ b/mgs2x/source/system/libdg/wdgd.c
+@@ -1417,8 +1417,7 @@
+ 						    | M_DG_WINAPP_EVM_USE_VERTEXSHADER
+ 						    | M_DG_WINAPP_EVM_VBUFF_SOFTWAREPROCESSING
+ 							| M_DG_WINAPP_SHADOWWT_USE_VERTEXSHADER
+-							| M_DG_WINAPP_OPTCMF00_USE_VERTEXSHADER
+-							| M_DG_WINAPP_PATCH_USE_VERTEXSHADER ;
++							| M_DG_WINAPP_OPTCMF00_USE_VERTEXSHADER ;
+ 		}
+ 		else if( BehaviorFlags & D3DCREATE_MIXED_VERTEXPROCESSING )
+ 		{
+--- a/mgs2x/source/system/libdg/wpatch.c
++++ b/mgs2x/source/system/libdg/wpatch.c
+@@ -1079,7 +1079,7 @@
+ 	DG_PATCH_PARTS	*parts ;
+ 	DG_PATCH_VERT	*verts ;
+ 	int			i ;
+-	void		(*draw_ptch_func)(int,int,DG_PATCH_VERT*,DG_PATCH_VERT*,DG_PATCH_VERT*,DG_PATCH_VERT*) ;
++	void		(*draw_ptch_func)(int,int,DG_PATCH_VERT*,DG_PATCH_VERT*,DG_PATCH_VERT*,DG_PATCH_VERT*) = DrawPatchNVS_Normal ;
+ 	BOOL	use_tex_lin ;
+ 
+ 	if( !patch->tex ){ return ; }
+@@ -1345,6 +1345,7 @@
+ #endif
+ 				break ;
+ 			  case DG_PATCH_BUMPMAP:
++				ASSERT(0) ;
+ 				break ;
+ 			}
+ 		}
+--- a/mgs2x/source/user/takabe/object/ipupanel.c
++++ b/mgs2x/source/user/takabe/object/ipupanel.c
+@@ -320,8 +320,8 @@
+ 	work->ipu_tex = DG_SpotLightBaseTexture;
+ 
+ 	work->patch = patch = DG_MakePatch( 0, work->n_panel, work->n_panel * 4 );
+-	patch->verts[1] = patch->verts[0] ;	/* 面倒なので強制的にシングルバッファモードに */
+ 	if ( patch == NULL ) return ( -1 );
++	patch->verts[1] = patch->verts[0] ;	/* 面倒なので強制的にシングルバッファモードに */
+ 	patch->light = work->light ;
+ 	GM_GroupObject( patch, work->map );
+ 	DG_QueuePatchObjs( patch );

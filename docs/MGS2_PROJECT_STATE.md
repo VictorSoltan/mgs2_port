@@ -31,6 +31,7 @@ move around. A scripted 60-step run held sustained gameplay frames (200–290 KB
 | cutscenes absent | **largely fixed** by the same build; user reports cutscenes now visible |
 | horizontal striping on animated backdrops | open, characterised — §6c |
 | title backdrop / movie playback | open, needs DirectShow work — §6d |
+| movie path crashed the game | CLOSED in FINALPLAY23, 2026-08-31 — §6d |
 | second location: "problem with the disc you're using" | cause identified (§6e), fix built, untested |
 | **frame rate, 15–23 fps** | **the main remaining defect** — see §10 |
 | no audio at all | **fixed 2026-08-02** — `dmime_graphqi.dll`, see §11 |
@@ -431,6 +432,32 @@ enumerates its output pins and logs every `AM_MEDIA_TYPE`, then calls `Render()`
 the first failing `Connect` HRESULT. MPEG-1 payload and MPEG-2 elementary video need
 different answers. A movies-enabled executable is on the device as
 `mgs2_sse_rg353vs_movies.exe`, selectable with `MGS2_EXE`.
+
+**Corrected 2026-08-31.** The statement above that playback "goes through
+DirectShow via COM" was right, but the record missed that the shipping
+executable cannot even build the graph: `WindowsMpegInit()` (windecode.cpp:482,
+VA `0x00878FE0`) is stubbed with `ret` -- file offset 4689888, the `81` of
+`sub esp,0x4E0` replaced by `c3`. Pristine `mgs2_sse.exe` and
+`mgs2_sse_rg353vs.exe` still carry `81 ec e0 04 00 00`; every `_port`-lineage
+build carries `c3`. So `WindowsMpegWork.pGB` is NULL for the life of the process
+and the documented PSS byte pair at `0x17D82F` does not cover the in-memory
+consumer at `0x00888803`.
+
+That made the movie path not merely dead but fatal. On 2026-08-31 at 03:04,
+about 2.5 minutes into ordinary FINALPLAY22 play, the game took
+`wine: Unhandled page fault on read access to 00000000 at address 0087AE0F`
+(thread 0100) and wine exited 5. `0x0087AE0F` is `mov ecx,[eax]` in `RCTInit`
+with `eax = WindowsMpegWork.pGB = 0`, reached from `0x00888803` ->
+`WinstrmSendIPic` (`0x0087A7C0`) -> `MpegDecFirstRend` (`0x0087A8A0`) ->
+`RCTInit`. Nothing was logged because the module's debug `printf` at
+`0x006FA180` is `xor eax,eax; ret`; its error reporter is a `MessageBoxA`, which
+never fired because `CoCreateInstance` was never reached.
+
+FINALPLAY23 closes the crash with two `ret` bytes and
+`game-patches/06-movie-null-graph-guard.patch` records the source fix. Restoring
+playback is still open, and the next step below is unchanged -- but note that any
+movies-enabled attempt must also restore `WindowsMpegInit()`, which no earlier
+note mentions.
 
 ## 7. Build and test
 

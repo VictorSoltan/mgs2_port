@@ -1,0 +1,429 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH 85] dmsynth: make sink startup, loss recovery and clocks coherent
+
+The production sink has four connected lifetime failures:
+
+* both worker threads signal "started" even when setup failed, so Activate
+  returns S_OK and latches active=TRUE for a sink with no live worker;
+* a runtime DSERR_BUFFERLOST makes the render thread return before releasing
+  its samples, buffer and synth, while active remains TRUE forever;
+* written and the resume marker survive a deactivate/activate even though
+  activate_time is replaced, producing an incoherent sample/reference map;
+* patch 83 rebases before the underrun cursor correction, and its 64-bit
+  activate_time is read unlocked on 32-bit ARM.
+
+Propagate exact startup status through the existing events, close worker
+handles and reset stop events on every path, keep the render thread alive with
+a bounded 250 ms retry while DirectSound reports BUFFERLOST, and release every
+reference on all exits. Reset the render-owned cursor at activation, resync it
+before a resume rebase, and take the existing sink lock around activate_time.
+No normal-path polling or hot-thread log is added.
+
+--- a/dlls/dmsynth/synthsink.c
++++ b/dlls/dmsynth/synthsink.c
+@@ -509,22 +509,16 @@ static void synth_sink_get_format(struct synth_sink *This, WAVEFORMATEX *format)
+     }
+ }
+ 
+-static HRESULT synth_sink_wait_write(struct synth_sink *sink, IDirectSoundBuffer *buffer,
+-        DSBCAPS *caps, WAVEFORMATEX *format)
++/* Return the delay before the next write and bring the render-owned write
++ * cursor forward after an underrun. The resume rebase calls this first too,
++ * so it never anchors activate_time against the stale pre-resync cursor. */
++static DWORD synth_sink_update_write_position(struct synth_sink *sink,
++        const DSBCAPS *caps, const WAVEFORMATEX *format, REFERENCE_TIME master_time)
+ {
+-    REFERENCE_TIME master_time;
+     DWORD estimated_play_pos;
+     DWORD current_offset;
+     DWORD write_latency;
+     DWORD timeout;
+-    HRESULT hr;
+-    DWORD ret;
+-
+-    if (FAILED(hr = IReferenceClock_GetTime(sink->master_clock, &master_time)))
+-    {
+-        ERR("Failed to get master clock time, hr %#lx\n", hr);
+-        return hr;
+-    }
+ 
+     EnterCriticalSection(&sink->cs);
+     estimated_play_pos = (sink->play_pos + (master_time - sink->play_pos_time)
+@@ -548,6 +542,25 @@ static HRESULT synth_sink_wait_write(struct synth_sink *sink, IDirectSoundBuffer
+         timeout = 0;
+     }
+ 
++    return timeout;
++}
++
++static HRESULT synth_sink_wait_write(struct synth_sink *sink, IDirectSoundBuffer *buffer,
++        DSBCAPS *caps, WAVEFORMATEX *format)
++{
++    REFERENCE_TIME master_time;
++    DWORD timeout;
++    HRESULT hr;
++    DWORD ret;
++
++    if (FAILED(hr = IReferenceClock_GetTime(sink->master_clock, &master_time)))
++    {
++        ERR("Failed to get master clock time, hr %#lx\n", hr);
++        return hr;
++    }
++
++    timeout = synth_sink_update_write_position(sink, caps, format, master_time);
++
+     ret = WaitForSingleObject(sink->render_stop_event, timeout);
+     if (ret == WAIT_FAILED)
+     {
+@@ -577,7 +590,8 @@ static HRESULT synth_sink_write_data(struct synth_sink *sink, IDirectSoundBuffer
+     {
+         sinkprobe_lock(sink, hr, NULL, 0, NULL, 0);
+         sink->probe_record = -1;
+-        ERR("IDirectSoundBuffer_Lock failed, hr %#lx\n", hr);
++        if (hr != DSERR_BUFFERLOST)
++            ERR("IDirectSoundBuffer_Lock failed, hr %#lx\n", hr);
+         return hr;
+     }
+     sinkprobe_lock(sink, hr, data1, size1, data2, size2);
+@@ -598,7 +612,8 @@ static HRESULT synth_sink_write_data(struct synth_sink *sink, IDirectSoundBuffer
+     {
+         sinkprobe_unlock(sink, buffer, format, hr, data1, size1, data2, size2);
+         sink->probe_record = -1;
+-        ERR("IDirectSoundBuffer_Unlock failed, hr %#lx\n", hr);
++        if (hr != DSERR_BUFFERLOST)
++            ERR("IDirectSoundBuffer_Unlock failed, hr %#lx\n", hr);
+         return hr;
+     }
+ 
+@@ -668,6 +683,10 @@ static void synth_sink_rebase_timeline(struct synth_sink *sink, IDirectMusicSynt
+         return;
+     }
+ 
++    /* A recovered transport can move the DirectSound write lead by almost a
++     * whole buffer. Resynchronise written before deriving the sample clock. */
++    synth_sink_update_write_position(sink, caps, format, master_time);
++
+     synth_timeline_lock(synth);
+     EnterCriticalSection(&sink->cs);
+ 
+@@ -844,8 +863,15 @@ struct timing_thread_params
+     struct synth_sink *sink;
+     IDirectSoundBuffer *buffer;
+     HANDLE started_event;
++    HRESULT startup_hr;
+ };
+ 
++static void synth_sink_signal_startup(HANDLE event, HRESULT *startup_hr, HRESULT hr)
++{
++    *startup_hr = hr;
++    SetEvent(event);
++}
++
+ static DWORD CALLBACK synth_sink_timing_thread(void *args)
+ {
+     struct timing_thread_params *params = args;
+@@ -896,13 +922,15 @@ static DWORD CALLBACK synth_sink_timing_thread(void *args)
+ 
++    if (!buffer_event) hr = E_FAIL;
+     if (!buffer_event || FAILED(hr))
+     {
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr,
++                FAILED(hr) ? hr : E_FAIL);
+         goto done;
+     }
+ 
+     if (FAILED(hr = IDirectSoundBuffer_Play(buffer, 0, 0, DSBPLAY_LOOPING)))
+     {
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
+         ERR("Failed to start sound buffer, hr %#lx.\n", hr);
+         goto done;
+     }
+@@ -997,18 +1024,19 @@ static DWORD CALLBACK synth_sink_timing_thread(void *args)
+ 
+         if (!started)
+         {
+-            SetEvent(params->started_event);
++            synth_sink_signal_startup(params->started_event, &params->startup_hr, S_OK);
+             started = TRUE;
+         }
+     }
+ 
+     if (!started)
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr,
++                FAILED(hr) ? hr : E_FAIL);
+ 
+     if (FAILED(hr))
+     {
+         ERR("Thread unexpected termination, hr %#lx\n", hr);
+-        return hr;
++        goto done;
+     }
+ 
+ done:
+@@ -1027,7 +1055,7 @@ done:
+     }
+ 
+     IDirectSoundBuffer_Release(buffer);
+-    CloseHandle(buffer_event);
++    if (buffer_event) CloseHandle(buffer_event);
+ 
+     return 0;
+ }
+@@ -1038,6 +1066,7 @@ struct render_thread_params
+     IDirectMusicSynth *synth;
+     IDirectSoundBuffer *buffer;
+     HANDLE started_event;
++    HRESULT startup_hr;
+ };
+ 
+ static DWORD CALLBACK synth_sink_render_thread(void *args)
+@@ -1049,8 +1078,8 @@ static DWORD CALLBACK synth_sink_render_thread(void *args)
+     struct synth_sink *sink = params->sink;
+     WAVEFORMATEX format;
+     DWORD samples_size;
+-    short *samples;
+-    HRESULT hr;
++    short *samples = NULL;
++    HRESULT hr = S_OK;
+ 
+     TRACE("Starting thread, args %p\n", args);
+     SetThreadDescription(GetCurrentThread(), L"wine_dmsynth_sink_render");
+@@ -1062,7 +1091,7 @@ static DWORD CALLBACK synth_sink_render_thread(void *args)
+ 
+     if (FAILED(hr))
+     {
+-        SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
+         goto done;
+     }
+ 
+@@ -1070,23 +1099,55 @@ static DWORD CALLBACK synth_sink_render_thread(void *args)
+     if (!(samples = malloc(samples_size)))
+     {
+         ERR("Failed to allocate memory for samples\n");
+-        SetEvent(params->started_event);
++        hr = E_OUTOFMEMORY;
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
+         goto done;
+     }
+ 
+     if (FAILED(hr = synth_sink_render_data(sink, synth, buffer, &caps,
+             &format, samples, samples_size)))
++    {
+         ERR("Failed to render initial buffer data, hr %#lx.\n", hr);
+-    SetEvent(params->started_event);
++        synth_sink_signal_startup(params->started_event, &params->startup_hr, hr);
++        goto cleanup;
++    }
++    synth_sink_signal_startup(params->started_event, &params->startup_hr, S_OK);
+ 
+-    while (SUCCEEDED(hr) && SUCCEEDED(hr = synth_sink_write_data(sink, buffer,
+-            &caps, &format, samples, samples_size)))
++    for (;;)
+     {
+         HRESULT wait_hr;
++        BOOL rearmed = FALSE;
++
++        hr = synth_sink_write_data(sink, buffer, &caps, &format, samples, samples_size);
++        if (hr == DSERR_BUFFERLOST)
++        {
++            sink_watchdog_recover(buffer, FALSE, &rearmed);
++            if (rearmed)
++                InterlockedExchange(&sink->timeline_rebase_pending, 1);
++
++            /* Retry at the existing watchdog cadence only while the buffer is
++             * lost. This keeps the sink active without turning the audio
++             * thread into a polling or logging loop. */
++            wait_hr = WaitForSingleObject(sink->render_stop_event, SINK_WATCHDOG_MS);
++            if (wait_hr == WAIT_OBJECT_0)
++            {
++                hr = S_FALSE;
++                break;
++            }
++            if (wait_hr == WAIT_FAILED)
++            {
++                hr = HRESULT_FROM_WIN32(GetLastError());
++                break;
++            }
++            hr = S_OK;
++            continue;
++        }
++        if (FAILED(hr)) break;
+ 
+         if (hr == S_OK) /* if successfully written, render more data */
+             hr = synth_sink_render_data(sink, synth, buffer, &caps,
+                     &format, samples, samples_size);
++        if (FAILED(hr)) break;
+ 
+         if (S_OK != (wait_hr = synth_sink_wait_write(sink, buffer, &caps, &format)))
+         {
+@@ -1098,10 +1159,11 @@ static DWORD CALLBACK synth_sink_render_thread(void *args)
+     if (FAILED(hr))
+     {
+         ERR("Thread unexpected termination, hr %#lx\n", hr);
+-        return hr;
++        goto cleanup;
+     }
+ 
+     synth_sink_wait_play_end(sink, buffer, &caps, &format, samples_size);
++cleanup:
+     free(samples);
+ 
+ done:
+@@ -1118,6 +1180,7 @@ static HRESULT synth_sink_activate(struct synth_sink *This)
+     struct timing_thread_params timing_params;
+     struct render_thread_params render_params;
+     WAVEFORMATEX format;
++    REFERENCE_TIME activate_time;
+     HRESULT hr;
+ 
+     if (!This->synth) return DMUS_E_SYNTHNOTCONFIGURED;
+@@ -1125,8 +1188,19 @@ static HRESULT synth_sink_activate(struct synth_sink *This)
+     if (!This->master_clock) return DMUS_E_NO_MASTER_CLOCK;
+     if (This->active) return DMUS_E_SYNTHACTIVE;
+ 
+-    if (FAILED(hr = IReferenceClock_GetTime(This->master_clock, &This->activate_time))) return hr;
+-    This->latency_time = This->activate_time;
++    if (FAILED(hr = IReferenceClock_GetTime(This->master_clock, &activate_time))) return hr;
++    EnterCriticalSection(&This->cs);
++    This->activate_time = activate_time;
++    This->latency_time = activate_time;
++    This->latency = 0;
++    This->play_pos = 0;
++    This->write_pos = 0;
++    This->play_pos_time = activate_time;
++    This->written = 0;
++    LeaveCriticalSection(&This->cs);
++    InterlockedExchange(&This->timeline_rebase_pending, 0);
++    ResetEvent(This->timing_stop_event);
++    ResetEvent(This->render_stop_event);
+ 
+     if ((render_params.buffer = This->dsound_buffer))
+     {
+@@ -1152,6 +1226,7 @@ static HRESULT synth_sink_activate(struct synth_sink *This)
+ 
+     timing_params.sink = This;
+     timing_params.buffer = render_params.buffer;
++    timing_params.startup_hr = E_FAIL;
+     IDirectSoundBuffer_AddRef(render_params.buffer);
+ 
+     if (!(timing_params.started_event = CreateEventW(NULL, FALSE, FALSE, NULL))
+@@ -1160,16 +1235,27 @@ static HRESULT synth_sink_activate(struct synth_sink *This)
+         ERR("Failed to create timing thread, error %lu\n", GetLastError());
+         hr = HRESULT_FROM_WIN32(GetLastError());
+         IDirectSoundBuffer_Release(timing_params.buffer);
+-        CloseHandle(timing_params.started_event);
++        if (timing_params.started_event) CloseHandle(timing_params.started_event);
+         IDirectSoundBuffer_Release(render_params.buffer);
+         return hr;
+     }
+ 
+     WaitForSingleObject(timing_params.started_event, INFINITE);
++    hr = timing_params.startup_hr;
+     CloseHandle(timing_params.started_event);
++    if (FAILED(hr))
++    {
++        WaitForSingleObject(This->timing_thread, INFINITE);
++        CloseHandle(This->timing_thread);
++        ResetEvent(This->timing_stop_event);
++        This->timing_thread = NULL;
++        IDirectSoundBuffer_Release(render_params.buffer);
++        return hr;
++    }
+ 
+     render_params.sink = This;
+     render_params.synth = This->synth;
++    render_params.startup_hr = E_FAIL;
+     IDirectMusicSynth_AddRef(This->synth);
+ 
+     if (!(render_params.started_event = CreateEventW(NULL, FALSE, FALSE, NULL))
+@@ -1179,14 +1265,31 @@ static HRESULT synth_sink_activate(struct synth_sink *This)
+         hr = HRESULT_FROM_WIN32(GetLastError());
+         SetEvent(This->timing_stop_event);
+         WaitForSingleObject(This->timing_thread, INFINITE);
++        CloseHandle(This->timing_thread);
++        ResetEvent(This->timing_stop_event);
++        This->timing_thread = NULL;
+         IDirectSoundBuffer_Release(render_params.buffer);
+         IDirectMusicSynth_Release(render_params.synth);
+-        CloseHandle(render_params.started_event);
++        if (render_params.started_event) CloseHandle(render_params.started_event);
+         return hr;
+     }
+ 
+     WaitForSingleObject(render_params.started_event, INFINITE);
++    hr = render_params.startup_hr;
+     CloseHandle(render_params.started_event);
++    if (FAILED(hr))
++    {
++        WaitForSingleObject(This->render_thread, INFINITE);
++        CloseHandle(This->render_thread);
++        ResetEvent(This->render_stop_event);
++        This->render_thread = NULL;
++        SetEvent(This->timing_stop_event);
++        WaitForSingleObject(This->timing_thread, INFINITE);
++        CloseHandle(This->timing_thread);
++        ResetEvent(This->timing_stop_event);
++        This->timing_thread = NULL;
++        return hr;
++    }
+     This->active = TRUE;
+     return S_OK;
+ }
+@@ -1197,9 +1300,13 @@ static HRESULT synth_sink_deactivate(struct synth_sink *This)
+ 
+     SetEvent(This->render_stop_event);
+     WaitForSingleObject(This->render_thread, INFINITE);
++    CloseHandle(This->render_thread);
++    ResetEvent(This->render_stop_event);
+     This->render_thread = NULL;
+     SetEvent(This->timing_stop_event);
+     WaitForSingleObject(This->timing_thread, INFINITE);
++    CloseHandle(This->timing_thread);
++    ResetEvent(This->timing_stop_event);
+     This->timing_thread = NULL;
+     This->active = FALSE;
+ 
+@@ -1329,6 +1436,7 @@ static HRESULT WINAPI synth_sink_SampleToRefTime(IDirectMusicSynthSink *iface,
+         LONGLONG sample_time, REFERENCE_TIME *ref_time)
+ {
+     struct synth_sink *This = impl_from_IDirectMusicSynthSink(iface);
++    REFERENCE_TIME activate_time;
+     WAVEFORMATEX format;
+ 
+     TRACE("(%p)->(%I64d, %p)\n", This, sample_time, ref_time);
+@@ -1336,7 +1444,10 @@ static HRESULT WINAPI synth_sink_SampleToRefTime(IDirectMusicSynthSink *iface,
+     if (!ref_time) return E_POINTER;
+ 
+     synth_sink_get_format(This, &format);
+-    *ref_time = This->activate_time + ((sample_time * 10000) / format.nSamplesPerSec) * 1000;
++    EnterCriticalSection(&This->cs);
++    activate_time = This->activate_time;
++    LeaveCriticalSection(&This->cs);
++    *ref_time = activate_time + ((sample_time * 10000) / format.nSamplesPerSec) * 1000;
+ 
+     return S_OK;
+ }
+@@ -1345,6 +1456,7 @@ static HRESULT WINAPI synth_sink_RefTimeToSample(IDirectMusicSynthSink *iface,
+         REFERENCE_TIME ref_time, LONGLONG *sample_time)
+ {
+     struct synth_sink *This = impl_from_IDirectMusicSynthSink(iface);
++    REFERENCE_TIME activate_time;
+     WAVEFORMATEX format;
+ 
+     TRACE("(%p)->(%I64d, %p)\n", This, ref_time, sample_time);
+@@ -1352,7 +1464,10 @@ static HRESULT WINAPI synth_sink_RefTimeToSample(IDirectMusicSynthSink *iface,
+     if (!sample_time) return E_POINTER;
+ 
+     synth_sink_get_format(This, &format);
+-    ref_time -= This->activate_time;
++    EnterCriticalSection(&This->cs);
++    activate_time = This->activate_time;
++    LeaveCriticalSection(&This->cs);
++    ref_time -= activate_time;
+     *sample_time = ((ref_time / 1000) * format.nSamplesPerSec) / 10000;
+ 
+     return S_OK;

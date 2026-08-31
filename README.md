@@ -16,7 +16,7 @@ endorsed by Konami, Anbernic, WineHQ, Box86 or DXVK.
 
 Picture, music, menu sounds, gameplay sound effects, input and saves work.
 
-The current production configuration is **FINALPLAY21**:
+The current production configuration is **FINALPLAY23**:
 
 ```text
 MGS2 D3D8 / Box86 native fused DXT5 surface decode
@@ -48,13 +48,42 @@ of the user's installed EXE: the original file is never overwritten or
 distributed. The verified candidate had moving water with no black squares,
 and the normal entry cold-started with `21/21` live identity.
 
+FINALPLAY22 promotes the audit fixes selected by the owner. Its temporary game
+view isolates the no-wrap IPU consumer, closes leaked fixed-function lighting,
+owns stage-0 texture-transform state and keeps the fallback selected after a
+software-VP startup. Wine patches 84+85 repair dmime curve-private-state layout
+and dmsynth sink startup/recovery lifetime. The visual and audio candidates
+separately passed exact device identity and loaded-save action smokes. Promotion
+explicitly accepts two still-open gates: a delayed fixed-scene flicker A/B and
+post-resume SFX survival after the console failed to restore networking.
+The deployed combined normal entry subsequently passed independent `21/21`
+live identity, the pixel-gated row-07 load, four movement bursts and four
+attacks without a new GPU fault.
+
+FINALPLAY23 retains that exact bundle and closes a crash the port has always
+carried. The shipping executable has `WindowsMpegInit()` stubbed with `ret`
+(VA `0x00878FE0`), so the DirectShow filter graph is never created; but the
+in-memory movie consumer is still reached and dereferences that never-created
+state with no null check. In ordinary play on 2026-08-31 this ended a session
+about 2.5 minutes after the first frame with `wine: Unhandled page fault on read
+access to 00000000 at address 0087AE0F` and wine exit 5. FINALPLAY23 adds
+exactly two bytes to the FINALPLAY22 temporary view -- `ret` at
+`WinstrmSendIPic` and at `RCTInit` -- and changes nothing else: all 19 other
+identity rows are byte-identical to FINALPLAY22. No movie played before the fix
+and none plays after it; restoring movie playback stays open. The route
+generated its exact image and passed `21/21` live identity on the device, and
+reached the title screen and both menu levels. The loaded-save action smoke has
+not re-run to completion -- `autoload_save.py` aborted on its own pixel check --
+and the movie trigger itself has not been re-exercised in play.
+
 Open problems:
 
 - the earlier status-40 exit has no captured exception frame. FINALPLAY19 fixes
   an independently proved reachable callback defect and exceeded that exit
   point without recurrence, but the numerical exit status alone does not prove
   they had the same cause;
-- intermittent gameplay-SFX loss across some encounter/map transitions;
+- post-resume and encounter-transition gameplay-SFX survival still needs a
+  completed FINALPLAY22 observation despite the code repair now in production;
 - a rare pre-renderer cold-start page fault remains unclassified. Its relevant
   FluidSynth instructions are unchanged across p35/p36/p37, and it did not
   recur in the nine-run FINALPLAY20 cold-start gate;
@@ -108,7 +137,13 @@ The normal PortMaster entry selects DXVK:
 /storage/roms/ports/MGS2-Substance.sh
 ```
 
-Immediate one-launch rollback to exact FINALPLAY20 without the water-path edit:
+Immediate one-launch rollback to exact FINALPLAY21:
+
+```sh
+MGS2_RENDERER=fp21 /storage/roms/ports/MGS2-Substance.sh
+```
+
+One-launch rollback to exact FINALPLAY20 without the water-path edit:
 
 ```sh
 MGS2_RENDERER=fp20 /storage/roms/ports/MGS2-Substance.sh
@@ -146,7 +181,9 @@ MGS2_RENDERER=wined3d /storage/roms/ports/MGS2-Substance.sh
 
 `device/launch-play.sh` is only the selector. The complete launchers are:
 
-- `device/launch-play-dxvk-fp21.sh` — current production;
+- `device/launch-play-dxvk-fp23.sh` — current production;
+- `device/launch-play-dxvk-fp22.sh` — exact one-launch rollback;
+- `device/launch-play-dxvk-fp21.sh` — exact pre-audit-fixes rollback;
 - `device/launch-play-dxvk-fp20.sh` — exact pre-water-fix rollback;
 - `device/launch-play-dxvk-fp19.sh` — exact FINALPLAY19/p34 rollback;
 - `device/launch-play-dxvk-fp18.sh` — exact FINALPLAY18 rollback;
@@ -159,7 +196,7 @@ All named fixed runtime paths fail closed when live file hashes differ from thei
 manifests. A filename is never accepted as proof of what is loaded.
 `device/mgs2.gptk` is the tracked controller mapping. Legacy fixed routes use
 PortMaster's `$GPTOKEYB` command (or an explicit `-1` bare-system fallback).
-FINALPLAY19 through FINALPLAY21 use the exact patched helper recorded under
+FINALPLAY19 through FINALPLAY23 use the exact patched helper recorded under
 `gptokeyb-patches/` and disable Wine's duplicate physical-controller route.
 These routes make
 Start+Select terminate the game directly instead of relying on the OS-level
@@ -186,8 +223,10 @@ in FINALPLAY19; patch 26 pins the embedded revision across build directories.
 The complete Wine boundary already contains patch 60's bounded DMSynth
 transport recovery. FINALPLAY20 adds patch 83's stale-timeline rebase on top;
 rejected patch 82 records why the device wall clock cannot be used as the
-resume witness.
-FINALPLAY17--21 also use exact state-cache mapping dedupe in
+resume witness. FINALPLAY22 adds Wine patches 84+85 and the state-owned game
+source records 02+04+05; their exact hashes and fixed Wine epoch are pinned in
+`device/FINALPLAY.lock`.
+FINALPLAY17--22 also use exact state-cache mapping dedupe in
 DXVK patch 08. The memory-only
 present counter and pipeline timeline are diagnostic and are not part of the
 production D3D9 DLL.
@@ -202,6 +241,7 @@ After configuring `.env`, verify the pinned reconstruction:
 ./harness/test_finalplay19_production.sh
 ./harness/test_finalplay20_production.sh
 ./harness/test_finalplay21_production.sh
+./harness/test_finalplay22_production.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross

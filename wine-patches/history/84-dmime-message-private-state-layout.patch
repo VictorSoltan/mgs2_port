@@ -1,0 +1,41 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH 84] dmime: keep scheduler state before the variable PMSG tail
+
+AllocPMsg returns &message->msg and allocates room for the caller-requested
+PMSG payload after it. Patch 15 put curve_phase after the fixed DMUS_PMSG
+header, exactly where larger payloads such as DMUS_CURVE_PMSG continue. On
+i386 curve_phase therefore aliases DMUS_CURVE_PMSG.mtDuration: a non-zero
+duration prevents the START phase from running, while phase updates corrupt
+the public duration.
+
+Keep all private state before msg, assert that invariant at build time, and
+express the allocation as the exact offset of the variable payload plus its
+requested size.
+
+--- a/dlls/dmime/performance.c
++++ b/dlls/dmime/performance.c
+@@ -228,10 +228,14 @@ struct message
+ struct message
+ {
+     struct list entry;
+-    DMUS_PMSG msg;
+     DWORD curve_phase;
++    DMUS_PMSG msg;
+ };
+ 
++/* AllocPMsg returns a variable-size payload beginning at msg. Keep all private
++ * scheduler state before that tail so larger PMSG types cannot overwrite it. */
++C_ASSERT(offsetof(struct message, curve_phase) < offsetof(struct message, msg));
++
+ enum curve_phase
+ {
+     CURVE_PHASE_START,
+@@ -1405,7 +1409,7 @@ static HRESULT WINAPI performance_AllocPMsg(IDirectMusicPerformance8 *iface, ULO
+     if (!msg) return E_POINTER;
+     if (size < sizeof(DMUS_PMSG)) return E_INVALIDARG;
+ 
+-    if (!(message = calloc(1, size - sizeof(DMUS_PMSG) + sizeof(struct message)))) return E_OUTOFMEMORY;
++    if (!(message = calloc(1, offsetof(struct message, msg) + size))) return E_OUTOFMEMORY;
+     message->msg.dwSize = size;
+     list_init(&message->entry);
+     *msg = &message->msg;

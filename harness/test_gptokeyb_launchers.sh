@@ -33,12 +33,22 @@ for rel in $launchers; do
     echo "ok     $rel"
 done
 
-grep -Fq 'scp -q "$REPO/device/mgs2.gptk" "$DEV:$GAMEDIR/mgs2.gptk"' \
-    "$REPO/harness/make_release.sh" || {
-    echo "FAIL: release deploy does not copy mgs2.gptk" >&2
+CURRENT_RELEASE="$REPO/harness/make_current_release.sh"
+grep -Fq 'PRODUCTION="$REPO/device/FINALPLAY23_PRODUCTION.sha256"' \
+    "$CURRENT_RELEASE" || {
+    echo "FAIL: current release does not collect the exact production list" >&2
     exit 1
 }
-echo "ok     release deploy includes device/mgs2.gptk"
+awk '$2=="mgs2.gptk" {found=1} END {exit !found}' \
+    "$REPO/device/FINALPLAY23_PRODUCTION.sha256" || {
+    echo "FAIL: current production list does not carry mgs2.gptk" >&2
+    exit 1
+}
+grep -Fq 'device_scp "$OUT/$file" "$DEV:$staged"' "$CURRENT_RELEASE" || {
+    echo "FAIL: current release deploy does not copy every production row" >&2
+    exit 1
+}
+echo "ok     current release deploy includes exact mgs2.gptk bytes"
 
 # The MGS2-specific helper is selected only by complete candidate or production
 # routes, never by an ambient environment override. Its source/base/hash and the

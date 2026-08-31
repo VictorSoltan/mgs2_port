@@ -1,0 +1,90 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH] windecode: never touch a DirectShow graph that was not created
+
+Independent of the wpatch records. Apply to the recovered game source; the
+file has CRCRLF endings, so use `patch --binary`.
+
+WindowsMpegInit() only logs a failed CoCreateInstance(CLSID_FilterGraph) and
+returns, leaving WindowsMpegWork zeroed. Nothing downstream tests for that.
+MpegDecFirstRend() calls RCTInit() -- which dereferences WindowsMpegWork.pGB
+unconditionally -- BEFORE it checks WindowsMpegInitFlag, and WinstrmSendIPic()
+dereferences WindowsMpegWork.pSrcFTR and pSrcFTRInPin with no check at all.
+
+In the shipping port executable this is not hypothetical: WindowsMpegInit() is
+stubbed with `ret` at VA 0x00878FE0, so pGB is NULL for the life of the
+process while the in-memory movie consumer still reaches WinstrmSendIPic().
+Measured on the device 2026-08-31 03:04, in ordinary play about 2.5 minutes
+after the first frame:
+
+    wine: Unhandled page fault on read access to 00000000 at address 0087AE0F
+    (thread 0100), starting debugger...
+
+0x0087AE0F is `mov ecx,[eax]` in RCTInit with eax = WindowsMpegWork.pGB = 0,
+reached from 0x00888803 -> WinstrmSendIPic -> MpegDecFirstRend -> RCTInit.
+wine exited 5 and the session ended.
+
+Moving the existing WindowsMpegInitFlag test above RCTInit() closes the
+measured fault, the new WinstrmSendIPic() test closes the second dereference
+one instruction later at 0x0087A7E0 (WindowsMpegWork.pSrcFTR), and the two
+clock guards make RCTInit/RCTRelease safe on their own terms rather than by
+the caller's ordering.
+
+The bounded equivalent in the hash-pinned temporary image is two bytes, both
+`ret` at a function entry, which is what FINALPLAY23 applies:
+
+    offset 4696000  VA 0x0087A7C0  WinstrmSendIPic  53 -> c3
+    offset 4697600  VA 0x0087AE00  RCTInit          51 -> c3
+
+Neither is a behaviour change while the init stub stands: no movie played
+before this patch and none plays after it. Restoring movie playback is a
+separate, still-open problem -- see docs/MGS2_PROJECT_STATE.md section 6d.
+
+--- a/mgs2x/source/game/windecode.cpp
++++ b/mgs2x/source/game/windecode.cpp
+@@ -1119,14 +1119,14 @@
+ {
+ 	HRESULT hr = S_OK;
+ 	
+-#if TRUE 
+-	RCTInit() ;
+-#endif
+-
+ 	if(!WindowsMpegWork.WindowsMpegInitFlag){
+ 		return(hr);
+ 	}
+ 
++#if TRUE 
++	RCTInit() ;
++#endif
++
+ 	if (FAILED(hr = WindowsMpegWork.pMC->Run()))
+ 	{
+ 		Msg(TEXT("Could not run the DirectShow graph44!  hr=0x%x"), hr);
+@@ -2018,6 +2018,9 @@
+ 	
+ 	
+ 	int	rc;
++	if(!WindowsMpegWork.WindowsMpegInitFlag){
++		return(0);
++	}
+ 	if(mp2 -> init_flag){
+ 	}else{
+ 		IReferenceClock	*rclk;
+@@ -2451,7 +2454,7 @@
+ static	void	RCTInit(void)
+ {
+ 	IMediaFilter	*pMF ;
+-	if( !_pRCTest_set )
++	if( !_pRCTest_set && WindowsMpegWork.pGB )
+ 	{
+ 		WindowsMpegWork.pGB->QueryInterface(IID_IMediaFilter,(void **)&pMF);
+ 		pMF->SetSyncSource(&_pRCTest) ;
+@@ -2463,7 +2466,7 @@
+ static	void	RCTRelease(void)
+ {
+ 	IMediaFilter	*pMF ;
+-	if( _pRCTest_set )
++	if( _pRCTest_set && WindowsMpegWork.pGB )
+ 	{
+ 		printf("RCT Release\n");
+ 		WindowsMpegWork.pGB->QueryInterface(IID_IMediaFilter,(void **)&pMF);

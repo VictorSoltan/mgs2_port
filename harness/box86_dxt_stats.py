@@ -35,22 +35,60 @@ SURFACE_SCALARS = (
     "mgs2_dxt_surface_first_bad_native",
 )
 SURFACE_ARRAYS = {"mgs2_dxt_surface_fallback": 5}
+OPTIONAL_SURFACE_ARRAYS = {"mgs2_dxt_surface_witness": 6}
+
+WITNESS_MAGIC = 0x31535744  # "DWS1"
+WITNESS_STRONG_SELFTEST = 1 << 0
+WITNESS_ARMED = 1 << 1
+WITNESS_INTERCEPTED = 1 << 2
+WITNESS_NATIVE_SEEN = 1 << 3
+WITNESS_GUEST_SEEN = 1 << 4
+WITNESS_GUEST_FAILED = 1 << 5
+FALLBACK_NAMES = ("cache", "format", "colorkey", "layout", "guest", "none")
 
 
 def symbol_addresses(path):
     result = subprocess.run(
         ["readelf", "-Ws", path], check=True, capture_output=True, text=True)
     wanted = set(ARRAYS + SCALARS + SURFACE_SCALARS
-                 + tuple(BYTE_ARRAYS) + tuple(SURFACE_ARRAYS))
+                 + tuple(BYTE_ARRAYS) + tuple(SURFACE_ARRAYS)
+                 + tuple(OPTIONAL_SURFACE_ARRAYS))
+    required = wanted - set(OPTIONAL_SURFACE_ARRAYS)
     addresses = {}
     for line in result.stdout.splitlines():
         fields = line.split()
         if len(fields) >= 8 and fields[-1] in wanted:
             addresses.setdefault(fields[-1], int(fields[1], 16))
-    missing = sorted(wanted - addresses.keys())
+    missing = sorted(required - addresses.keys())
     if missing:
         raise RuntimeError("missing Box86 symbols: %s" % ", ".join(missing))
     return addresses
+
+
+def witness_verdict(words):
+    if words is None:
+        return "UNAVAILABLE: this Box86 predates the bounded production witness"
+    if (len(words) != 6 or words[0] != WITNESS_MAGIC or words[1] != 1
+            or words[2] != 6 or words[3] != ((~WITNESS_MAGIC) & 0xFFFFFFFF)):
+        return "REFUSED: malformed DXT-surface witness header"
+    flags = words[4]
+    if not (flags & WITNESS_STRONG_SELFTEST):
+        return "REFUSED: strengthened DXT-surface self-test did not pass"
+    if not (flags & WITNESS_ARMED):
+        return "REFUSED: DXT-surface bridge was not armed"
+    if not (flags & WITNESS_INTERCEPTED):
+        return "NOT_REACHED: bridge armed but guest signature was never intercepted"
+    if flags & WITNESS_GUEST_FAILED:
+        return "REFUSED: guest fallback call failed"
+    native = bool(flags & WITNESS_NATIVE_SEEN)
+    guest = bool(flags & WITNESS_GUEST_SEEN)
+    if native and guest:
+        return "MIXED: native conversion and conservative guest fallback both observed"
+    if native:
+        return "NATIVE_CONFIRMED: live calls completed through the native conversion"
+    if guest:
+        return "FALLBACK_ONLY: intercepted calls used only the guest fallback"
+    return "INCOMPLETE: interception observed but no completed conversion witnessed"
 
 
 def read_words(fd, address, count):
@@ -82,6 +120,8 @@ def main():
             name: read_words(fd, symbols[name], size)
             for name, size in SURFACE_ARRAYS.items()
         }
+        witness = (read_words(fd, symbols["mgs2_dxt_surface_witness"], 6)
+                   if "mgs2_dxt_surface_witness" in symbols else None)
     finally:
         os.close(fd)
 
@@ -116,6 +156,26 @@ def main():
                   (word, offset, guest_bits, native_bits))
 
     fallback = surface_arrays["mgs2_dxt_surface_fallback"]
+    if witness is None:
+        print("surface_witness unavailable")
+    elif witness_verdict(witness).startswith("REFUSED: malformed"):
+        print("surface_witness malformed=" + " ".join("%08x" % word
+                                                       for word in witness))
+    else:
+        flags = witness[4]
+        first_fallback = witness[5]
+        fallback_name = (FALLBACK_NAMES[first_fallback]
+                         if first_fallback < len(FALLBACK_NAMES)
+                         else "invalid-%d" % first_fallback)
+        print("surface_witness strong_selftest=%d armed=%d intercepted=%d "
+              "native_seen=%d guest_seen=%d guest_failed=%d first_fallback=%s" % (
+                  bool(flags & WITNESS_STRONG_SELFTEST),
+                  bool(flags & WITNESS_ARMED),
+                  bool(flags & WITNESS_INTERCEPTED),
+                  bool(flags & WITNESS_NATIVE_SEEN),
+                  bool(flags & WITNESS_GUEST_SEEN),
+                  bool(flags & WITNESS_GUEST_FAILED), fallback_name))
+    print("surface_verdict " + witness_verdict(witness))
     print("surface armed=%d verify=%d calls=%d native=%d guest=%d "
           "compared=%d mismatched=%d skipped=%d" % (
               surface["mgs2_dxt_surface_armed"],

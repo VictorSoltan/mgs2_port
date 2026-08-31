@@ -4,10 +4,29 @@ The briefs are an append-only research record. Many older documents contain
 conclusions that were later corrected, so choose the newest brief for the
 problem rather than reading by filename alone.
 
+## Open defect register
+
+- [Repository bug audit and the FINALPLAY21 flicker report](briefs/MGS2_BUG_AUDIT_2026-08-28.md)
+  — expanded defect register across the renderer, release gates, shared
+  launcher, Wine audio, Box86 Wayland and measurement harness. P1's
+  fail-closed state-ownership route had an exact device gameplay smoke and is
+  now promoted in FINALPLAY22,
+  P2 is refuted by a live flag read, L1--L5 are fixed and device-exercised,
+  and W1--W6's reproducible two-DLL route is also promoted after its pre-resume
+  gameplay gate passed. RTC wake completed, but the device did not restore networking,
+  so post-resume SFX survival remains open. E7 is intentionally skipped. Read
+  sections 3.8 and 5 for exact hashes and what is still not device-proven.
+
 ## Current production
 
+- [FINALPLAY22 audit-fix promotion](briefs/MGS2_FINALPLAY22_AUDIT_FIXES_PRODUCTION_2026-08-29.md)
+  — current production; combines the exact state-owned wpatch view with Wine
+  patches 84/85. FINALPLAY21 is the immediate exact rollback. The owner
+  explicitly accepted the delayed flicker A/B and post-resume SFX gates. The
+  deployed combined normal entry passed independent `21/21` identity and a
+  row-07 movement/action smoke.
 - [FINALPLAY21 missing-sea repair](briefs/MGS2_FINALPLAY21_WATER_WPATCH_PRODUCTION_2026-08-27.md)
-  — current production; exact one-byte game-image view selects the existing
+  — exact rollback; its one-byte game-image view selects the existing
   fixed-function wpatch path, restores animated water, passes `21/21` identity
   and retains FINALPLAY20 as the immediate rollback.
 - [FINALPLAY20 DMSynth resume production](briefs/MGS2_FINALPLAY20_DMSYNTH_RESUME_PRODUCTION_2026-08-27.md)

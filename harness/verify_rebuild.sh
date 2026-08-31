@@ -105,19 +105,13 @@ refresh_wine() {
     ( cd "$WORK/pristine" && tar xf "$TARBALL" )
     out="$REPO/$(lock wine_complete_patch)"
     head -30 "$out" > "$WORK/hdr"
-    : > "$WORK/body"
-    diff -rq -x '*.orig' "$P" "$WINE_LIVE" 2>/dev/null | grep " differ$" \
-        | sed "s|^Files $P/||; s| and .* differ$||" | sort > "$WORK/mod"
-    while read -r f; do
-        diff -u --label "a/$f" --label "b/$f" "$P/$f" "$WINE_LIVE/$f" >> "$WORK/body"
-    done < "$WORK/mod"
-    diff -rq -x '*.orig' "$P" "$WINE_LIVE" 2>/dev/null | grep "^Only in $P" \
-        | sed "s|^Only in $P/*||; s|: |/|" | sort > "$WORK/del"
-    while read -r f; do
-        diff -u --label "a/$f" --label "b/$f" "$P/$f" /dev/null >> "$WORK/body"
-    done < "$WORK/del"
+    if ! mgs2_patch_tree "$WORK/body" "$WORK/body.err" "$P" "$WINE_LIVE"; then
+        echo "refusing refresh: Wine tree cannot be recorded completely" >&2
+        sed -n '1,20p' "$WORK/body.err" >&2
+        return 1
+    fi
     cat "$WORK/hdr" "$WORK/body" > "$out"
-    echo "refreshed $(basename "$out"): $(wc -l < "$WORK/mod") modified, $(wc -l < "$WORK/del") deleted"
+    echo "refreshed $(basename "$out"): $(grep -c '^--- a/' "$WORK/body") file hunks"
 }
 
 refresh_box86() {
@@ -146,8 +140,8 @@ if [ "${1:-}" = "--refresh" ]; then
     fi
     echo "== regenerating the complete patches from the live trees =="
     mkdir -p "$WORK"
-    refresh_wine
-    refresh_box86
+    refresh_wine || exit 1
+    refresh_box86 || exit 1
     echo
     shift
 fi
@@ -155,7 +149,8 @@ fi
 echo "== base identities =="
 want=$(lock wine_base_sha256)
 got=$(sha256sum "$TARBALL" 2>/dev/null | cut -d" " -f1)
-if [ "$got" = "$want" ]; then echo "ok     wine tarball matches the pinned sha256"
+if mgs2_nonempty_equal "$got" "$want"; then
+    echo "ok     wine tarball matches the pinned sha256"
 else echo "FAIL   wine tarball is $got, lock says $want"; fail=1; fi
 
 base=$(lock box86_base_commit)
@@ -251,13 +246,11 @@ if [ "${1:-}" = "--build" ]; then
     elif [ "$got" = "$want" ]; then
         echo "ok     rebuild reproduces the shipped wined3d byte for byte"
     elif [ -n "$(lock candidate_in_tree)" ]; then
-        # Not a broken build: the tree deliberately carries a research candidate
-        # on top of the release. Saying "FAIL" here would train everyone to
-        # ignore the one check that catches an untraceable binary.
-        echo "note   rebuilt $got, release is $want -- expected, the tree carries"
+        echo "FAIL   rebuilt $got, release is $want -- the tree carries"
         echo "       $(lock candidate_in_tree) on top of $(lock release_name)."
         echo "       Reproducibility of the RELEASE is unverifiable while that is"
         echo "       true; revert the candidate or promote it to check it again."
+        fail=1
     else
         echo "FAIL   rebuilt $got, the shipped binary is $want"; fail=1
     fi

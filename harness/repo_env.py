@@ -13,6 +13,49 @@ WORKSPACE_ROOT = REPO_ROOT.parent
 _KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _strip_shell_comment(value: str) -> str:
+    """Strip a shell comment only when `#` begins an unquoted word."""
+    quote = None
+    escaped = False
+    at_word_start = True
+    for index, char in enumerate(value):
+        if escaped:
+            escaped = False
+            at_word_start = False
+            continue
+        if quote == "'":
+            if char == "'":
+                quote = None
+            continue
+        if char == "\\":
+            escaped = True
+            at_word_start = False
+            continue
+        if quote == '"':
+            if char == '"':
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+            at_word_start = False
+            continue
+        if char == "#" and at_word_start:
+            return value[:index].rstrip()
+        at_word_start = char.isspace()
+    return value
+
+
+def _parse_value(value: str) -> str:
+    """Parse one safe shell assignment word without changing its contents."""
+    lexer = shlex.shlex(_strip_shell_comment(value), posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    parts = list(lexer)
+    if len(parts) > 1:
+        raise ValueError("unquoted whitespace creates more than one shell word")
+    return parts[0] if parts else ""
+
+
 def load() -> pathlib.Path:
     """Load simple KEY=VALUE lines, preserving values already exported."""
     external = set(os.environ)
@@ -34,11 +77,11 @@ def load() -> pathlib.Path:
         key = key.strip()
         if not _KEY.fullmatch(key):
             raise ValueError(f"{path}:{number}: invalid variable name {key!r}")
-        lexer = shlex.shlex(value, posix=True)
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
-        parts = list(lexer)
-        parsed = " ".join(parts)
+        try:
+            parsed = _parse_value(value)
+        except ValueError as error:
+            raise ValueError(f"{path}:{number}: invalid value for {key}: {error}") \
+                from error
         if key not in external:
             os.environ[key] = os.path.expandvars(parsed)
     return path

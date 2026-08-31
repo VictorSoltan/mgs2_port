@@ -1,7 +1,8 @@
 #!/bin/bash
-# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY21. Direct
-# execution selects the exact FINALPLAY17 rollback. The newer wrappers select
-# complete closed routes; arbitrary renderer/input combinations are rejected.
+# Shared fixed-bundle engine for FINALPLAY17 through FINALPLAY22 and bounded
+# follow-up candidates. Direct execution selects the exact FINALPLAY17 rollback.
+# The newer wrappers select complete closed routes; arbitrary renderer/input
+# combinations are rejected.
 
 XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 if [ -d "/opt/system/Tools/PortMaster" ]; then
@@ -23,8 +24,8 @@ EXE="mgs2_sse_rg353vs_port.exe"
 GAME_EXE_TARGET="$GAMEDIR/game/bin/$EXE"
 PATCHED_GAME_EXE=""
 
-# Production runs exactly one bundle, and it is not selectable from the
-# environment.
+# The tracked wrappers intentionally select one complete named bundle through
+# MGS2_PRODUCTION_ROUTE. Individual binary/input/timing overrides are refused.
 #
 # Each of these variables used to do two things: pick a different binary, and
 # switch off the identity check for all the OTHER mounted files. So one stale
@@ -34,7 +35,8 @@ PATCHED_GAME_EXE=""
 # registry mapping the RVAs of a DLL that was no longer mounted.
 #
 # Named research launchers use their own runtime or the preserved FINALPLAY15
-# launcher. This production runtime never accepts a binary-selection override.
+# launcher. This shared runtime accepts its closed bundle selector, but never a
+# component-level binary-selection override.
 mgs2_reject_research_overrides() {
     found=""
     for v in MGS2_BOX86_BIN MGS2_WINED3D_DLL MGS2_WAYLAND_SO MGS2_D3D8_DLL \
@@ -44,6 +46,7 @@ mgs2_reject_research_overrides() {
              MGS2_INPUT_ROUTE \
              MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL \
              MGS2_BOX86_NATIVE_DXT MGS2_BOX86_NATIVE_DXT_SURFACE \
+             MGS2_BOX86_NATIVE_AABB MGS2_ISLAND_AB_MEASURE \
              MGS2_DXVK_STATE_CACHE_DEDUPE MGS2_DXVK_PIPELINE_TRACE \
              DXVK_STATE_CACHE DXVK_STATE_CACHE_PATH DXVK_CONFIG \
              DXVK_ALL_CORES; do
@@ -65,39 +68,121 @@ mgs2_reject_research_overrides
 # p21 rollback; FINALPLAY18 changes only Box86 to the verified p24 ABI fix;
 # FINALPLAY19 adds the p25 text-input ABI fix, the p26 reproducible-build
 # boundary and immediate input; FINALPLAY20 adds the p37 DMSynth transport and
-# stale-timeline resume repair; FINALPLAY21 retains that bundle and selects the
-# game's existing fixed-function wpatch renderer for the sea surface.
+# stale-timeline resume repair; FINALPLAY21 selects the game's existing
+# fixed-function wpatch renderer for the sea surface; FINALPLAY22 additionally
+# owns the wpatch state and repairs dmime/dmsynth lifetime failures.
 PRODUCTION_ROUTE=${MGS2_PRODUCTION_ROUTE:-finalplay17}
 GAME_EXE_PATCH=none
 EXPECTED_BIND_MOUNTS=7
+EXPECTED_IDENTITY_ROWS=
 case "$PRODUCTION_ROUTE" in
     finalplay17)
         MGS2_BOX86_BIN=box86-fp21-dxvk-native-dxt-surface
         PLAY_IDENTITY_MANIFEST=FINALPLAY17_DXVK_FREEZE.manifest
+        EXPECTED_IDENTITY_ROWS=18
         INPUT_ROUTE=legacy
         ;;
     finalplay18)
         MGS2_BOX86_BIN=box86-fp24-wayland-atomic-production
         PLAY_IDENTITY_MANIFEST=FINALPLAY18_WAYLAND_ABI.manifest
+        EXPECTED_IDENTITY_ROWS=18
         INPUT_ROUTE=legacy
         ;;
     finalplay19)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=FINALPLAY19_INPUT_WAYLAND.manifest
+        EXPECTED_IDENTITY_ROWS=19
         INPUT_ROUTE=immediate-production
         ;;
     finalplay20)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=FINALPLAY20_DMSYNTH_RESUME.manifest
+        EXPECTED_IDENTITY_ROWS=19
         INPUT_ROUTE=immediate-production
         MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
         MGS2_DMSYNTH_WATCHDOG_MS=250
         MGS2_DMSYNTH_WATCHDOG_STALL=1
         export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
         ;;
+    finalplay23)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=FINALPLAY23_MOVIE_GUARD.manifest
+        EXPECTED_IDENTITY_ROWS=21
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p38_sink_lifetime.dll
+        MGS2_DMIME_DLL=dmime_p16_curve_state_layout.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-finalplay23
+        EXPECTED_BIND_MOUNTS=8
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    finalplay22)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=FINALPLAY22_AUDIT_FIXES.manifest
+        EXPECTED_IDENTITY_ROWS=21
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p38_sink_lifetime.dll
+        MGS2_DMIME_DLL=dmime_p16_curve_state_layout.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-finalplay22
+        EXPECTED_BIND_MOUNTS=8
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
     finalplay21)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=FINALPLAY21_WATER_WPATCH.manifest
+        EXPECTED_IDENTITY_ROWS=21
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-fixed-function
+        EXPECTED_BIND_MOUNTS=8
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    wpatch-isolation-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=WPATCH_ISOLATION_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=21
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-isolated
+        EXPECTED_BIND_MOUNTS=8
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    wpatch-state-ownership-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=WPATCH_STATE_OWNERSHIP_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=21
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-state-owned
+        EXPECTED_BIND_MOUNTS=8
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    audio-lifetime-candidate)
+        MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
+        PLAY_IDENTITY_MANIFEST=AUDIO_LIFETIME_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=21
+        INPUT_ROUTE=immediate-production
+        MGS2_DMSYNTH_DLL=dmsynth_p38_sink_lifetime.dll
+        MGS2_DMIME_DLL=dmime_p16_curve_state_layout.dll
+        MGS2_DMSYNTH_WATCHDOG_MS=250
+        MGS2_DMSYNTH_WATCHDOG_STALL=1
+        GAME_EXE_PATCH=wpatch-fixed-function
+        EXPECTED_BIND_MOUNTS=8
+        export MGS2_DMSYNTH_WATCHDOG_MS MGS2_DMSYNTH_WATCHDOG_STALL
+        ;;
+    dxt-witness-candidate)
+        MGS2_BOX86_BIN=box86-p27-dxt-witness-candidate
+        PLAY_IDENTITY_MANIFEST=DXT_SURFACE_WITNESS_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=21
         INPUT_ROUTE=immediate-production
         MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
         MGS2_DMSYNTH_WATCHDOG_MS=250
@@ -109,12 +194,14 @@ case "$PRODUCTION_ROUTE" in
     dmsynth-resume-p35-candidate)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=DMSYNTH_RESUME_P35_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=19
         INPUT_ROUTE=immediate-production
         MGS2_DMSYNTH_DLL=dmsynth_p35_resume_recover.dll
         ;;
     dmsynth-resume-stall1-candidate)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=DMSYNTH_RESUME_STALL1_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=19
         INPUT_ROUTE=immediate-production
         MGS2_DMSYNTH_DLL=dmsynth_p35_resume_recover.dll
         MGS2_DMSYNTH_WATCHDOG_STALL=1
@@ -123,6 +210,7 @@ case "$PRODUCTION_ROUTE" in
     dmsynth-resume-p37-candidate)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-production
         PLAY_IDENTITY_MANIFEST=DMSYNTH_RESUME_P37_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=19
         INPUT_ROUTE=immediate-production
         MGS2_DMSYNTH_DLL=dmsynth_p37_resume_timeline.dll
         MGS2_DMSYNTH_WATCHDOG_STALL=1
@@ -131,6 +219,7 @@ case "$PRODUCTION_ROUTE" in
     wayland-p26-candidate)
         MGS2_BOX86_BIN=box86-fp26-wayland-text-input-candidate
         PLAY_IDENTITY_MANIFEST=BOX86_WAYLAND_TEXT_INPUT_CANDIDATE.manifest
+        EXPECTED_IDENTITY_ROWS=19
         INPUT_ROUTE=immediate-candidate
         ;;
     *)
@@ -170,7 +259,10 @@ export MGS2_BOX86_NATIVE_DXT=0
 export MGS2_BOX86_NATIVE_DXT_SURFACE=1
 
 exec 9>/tmp/mgs2-substance.lock
-flock -n 9 || exit 0
+if ! flock -n 9; then
+    echo "MGS2: another launch owns /tmp/mgs2-substance.lock; refusing a second instance" >&2
+    exit 1
+fi
 
 DXVK_WINE_MODE=${MGS2_DXVK_WINE_MODE:-wow64}
 if [ -n "${MGS2_DXVK_D3D8_DLL:-}" ] && [ "$DXVK_WINE_MODE" = direct32 ]; then
@@ -253,7 +345,7 @@ export BOX86_MUTEX_ALIGNED="${BOX86_MUTEX_ALIGNED:-1}"
 export MGS2_BOX86_NATIVE_MEMMOVE=1
 # Diagnostic-only exact AABB bridge.  Production remains off unless a caller
 # explicitly selects the matching Box86 + D3D8 pair and enables this switch.
-export MGS2_BOX86_NATIVE_AABB="${MGS2_BOX86_NATIVE_AABB:-0}"
+export MGS2_BOX86_NATIVE_AABB=0
 # Patch 36/Box86 patch 06 moves the exact Wine DirectSound FIR convolution out
 # of translated x86 and into native ARM. At fixed 1416 MHz the mixer thread fell
 # from 12.97% to 7.57% of one core (-41.6%); guest dsound samples fell 717 -> 40.
@@ -312,21 +404,134 @@ SAVED_MAX=""
 
 GPU_DEVFREQ=/sys/class/devfreq/fde60000.gpu
 SAVED_GPU_GOV=""
+CPU_STATE_FILE=/tmp/mgs2-cpu-baseline.state
+CPU_STATE_READY=0
+
+valid_governor() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+known_cpu_policy() {
+    local candidate="$1" p
+    for p in $CPU_POLICIES; do
+        [ "$candidate" = "$p" ] && return 0
+    done
+    return 1
+}
+
+load_cpu_state() {
+    local kind a b c extra boot_id expected_boot policies seen_gpu seen_policies
+    [ -f "$CPU_STATE_FILE" ] && [ ! -L "$CPU_STATE_FILE" ] || return 1
+    expected_boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
+    boot_id=""
+    policies=0
+    seen_gpu=0
+    seen_policies=""
+    SAVED_GOV=""
+    SAVED_MAX=""
+    SAVED_GPU_GOV=""
+    while read -r kind a b c extra; do
+        [ -z "$extra" ] || return 1
+        case "$kind" in
+            boot)
+                [ -z "$b$c" ] && [ -z "$boot_id" ] || return 1
+                boot_id=$a
+                ;;
+            cpu)
+                [ -n "$a" ] && known_cpu_policy "$a" || return 1
+                case " $seen_policies " in *" $a "*) return 1 ;; esac
+                valid_governor "$b" || return 1
+                case "$c" in ''|*[!0-9]*) return 1 ;; esac
+                SAVED_GOV="$SAVED_GOV $a:$b"
+                SAVED_MAX="$SAVED_MAX $a:$c"
+                seen_policies="$seen_policies $a"
+                policies=$((policies + 1))
+                ;;
+            gpu)
+                [ "$a" = "$GPU_DEVFREQ" ] && valid_governor "$b" && \
+                    [ -z "$c" ] && [ "$seen_gpu" = 0 ] || return 1
+                SAVED_GPU_GOV=$b
+                seen_gpu=1
+                ;;
+            *) return 1 ;;
+        esac
+    done < "$CPU_STATE_FILE"
+    set -- $CPU_POLICIES
+    [ "$boot_id" = "$expected_boot" ] && [ "$policies" = "$#" ] && \
+        [ "$seen_gpu" = 1 ] || return 1
+    CPU_STATE_READY=1
+}
 
 save_cpu_state() {
-    local p
+    local p gov max gpu boot_id tmp
+    if [ -e "$CPU_STATE_FILE" ] || [ -L "$CPU_STATE_FILE" ]; then
+        if load_cpu_state; then
+            echo "MGS2: recovered pre-launch clock baseline after an interrupted run" >&2
+            return 0
+        fi
+        boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
+        if grep -Fqx "boot $boot_id" "$CPU_STATE_FILE" 2>/dev/null; then
+            echo "MGS2: refusing corrupt same-boot clock baseline $CPU_STATE_FILE" >&2
+            return 1
+        fi
+        rm -f "$CPU_STATE_FILE" || return 1
+    fi
+    [ -n "$CPU_POLICIES" ] || {
+        echo "MGS2: no CPU frequency policies found; controlled-clock launch refused" >&2
+        return 1
+    }
+    boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null) || return 1
+    tmp=$(mktemp /tmp/mgs2-cpu-baseline.XXXXXX) || return 1
+    chmod 0600 "$tmp" || { rm -f "$tmp"; return 1; }
+    printf 'boot %s\n' "$boot_id" > "$tmp" || { rm -f "$tmp"; return 1; }
     for p in $CPU_POLICIES; do
-        SAVED_GOV="$SAVED_GOV $p:$(cat "$p/scaling_governor" 2>/dev/null)"
-        SAVED_MAX="$SAVED_MAX $p:$(cat "$p/scaling_max_freq" 2>/dev/null)"
+        gov=$(cat "$p/scaling_governor" 2>/dev/null) || { rm -f "$tmp"; return 1; }
+        max=$(cat "$p/scaling_max_freq" 2>/dev/null) || { rm -f "$tmp"; return 1; }
+        valid_governor "$gov" || { rm -f "$tmp"; return 1; }
+        case "$max" in ''|*[!0-9]*) rm -f "$tmp"; return 1 ;; esac
+        printf 'cpu %s %s %s\n' "$p" "$gov" "$max" >> "$tmp" || {
+            rm -f "$tmp"
+            return 1
+        }
+        SAVED_GOV="$SAVED_GOV $p:$gov"
+        SAVED_MAX="$SAVED_MAX $p:$max"
     done
-    SAVED_GPU_GOV="$(cat "$GPU_DEVFREQ/governor" 2>/dev/null)"
+    gpu=$(cat "$GPU_DEVFREQ/governor" 2>/dev/null) || { rm -f "$tmp"; return 1; }
+    valid_governor "$gpu" || { rm -f "$tmp"; return 1; }
+    printf 'gpu %s %s\n' "$GPU_DEVFREQ" "$gpu" >> "$tmp" || {
+        rm -f "$tmp"
+        return 1
+    }
+    mv "$tmp" "$CPU_STATE_FILE" || { rm -f "$tmp"; return 1; }
+    load_cpu_state || {
+        echo "MGS2: persisted clock baseline failed validation" >&2
+        rm -f "$CPU_STATE_FILE"
+        return 1
+    }
+}
+
+write_sysfs_exact() {
+    local path="$1" value="$2" got
+    if ! printf '%s\n' "$value" > "$path" 2>/dev/null; then
+        echo "MGS2: cannot write $value to $path; controlled-clock launch refused" >&2
+        return 1
+    fi
+    got=$(cat "$path" 2>/dev/null) || got=""
+    if [ "$got" != "$value" ]; then
+        echo "MGS2: $path read back ${got:-missing}, expected $value; controlled-clock launch refused" >&2
+        return 1
+    fi
 }
 
 set_final_cpu_cap() {
-    local p
+    local p failed
+    failed=0
     for p in $CPU_POLICIES; do
-        echo performance > "$p/scaling_governor" 2>/dev/null
-        echo 1992000 > "$p/scaling_max_freq" 2>/dev/null
+        write_sysfs_exact "$p/scaling_governor" performance || failed=1
+        write_sysfs_exact "$p/scaling_max_freq" 1992000 || failed=1
     done
     # The GPU sat on simple_ondemand and spent the reinforcement scene at
     # 400-600 of its 800 MHz. The dead-end list said pinning it to 800 was a net
@@ -343,82 +548,157 @@ set_final_cpu_cap() {
     # The CPU stayed at 1992000 in every arm -- the old throttling did not
     # recur -- ending at 78.1 C CPU / 73.3 C GPU, well under the 88 C cutoff.
     # MGS2_GPU_GOVERNOR=simple_ondemand reverts it for one run.
-    echo "${MGS2_GPU_GOVERNOR:-performance}" > "$GPU_DEVFREQ/governor" 2>/dev/null
+    write_sysfs_exact "$GPU_DEVFREQ/governor" "${MGS2_GPU_GOVERNOR:-performance}" || failed=1
+    [ "$failed" = 0 ]
 }
 
 restore_cpu_state() {
-    local e p v
-    [ -n "$SAVED_GPU_GOV" ] && echo "$SAVED_GPU_GOV" > "$GPU_DEVFREQ/governor" 2>/dev/null
+    local e p v failed
+    [ "$CPU_STATE_READY" = 1 ] || return 0
+    failed=0
+    [ -z "$SAVED_GPU_GOV" ] || \
+        write_sysfs_exact "$GPU_DEVFREQ/governor" "$SAVED_GPU_GOV" || failed=1
     for e in $SAVED_MAX; do
         p="${e%%:*}"; v="${e##*:}"
-        [ -n "$v" ] && echo "$v" > "$p/scaling_max_freq" 2>/dev/null
+        [ -z "$v" ] || write_sysfs_exact "$p/scaling_max_freq" "$v" || failed=1
     done
     for e in $SAVED_GOV; do
         p="${e%%:*}"; v="${e##*:}"
-        [ -n "$v" ] && echo "$v" > "$p/scaling_governor" 2>/dev/null
+        [ -z "$v" ] || write_sysfs_exact "$p/scaling_governor" "$v" || failed=1
     done
+    if [ "$failed" = 0 ]; then
+        rm -f "$CPU_STATE_FILE" || return 1
+        CPU_STATE_READY=0
+        return 0
+    fi
+    echo "MGS2: clock restore incomplete; preserving $CPU_STATE_FILE for recovery" >&2
+    return 1
 }
 
 # Arm cleanup before the first bind mount.  A missing or unreadable selected
 # runtime must not leave the earlier mounts active for the next launch.
 cleanup() {
+    local cleanup_failed game_image_unmounted
+    [ "${CLEANUP_ACTIVE:-0}" = 0 ] || return 0
+    CLEANUP_ACTIVE=1
+    trap - HUP INT TERM
+    cleanup_failed=0
     [ -n "${WINE_PID:-}" ] && kill "$WINE_PID" 2>/dev/null || true
     [ -n "${EXPLORER_PID:-}" ] && kill "$EXPLORER_PID" 2>/dev/null || true
     [ -n "${GPTOKEYB_PID:-}" ] && kill "$GPTOKEYB_PID" 2>/dev/null || true
-    killall -9 wineserver wineboot.exe services.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
+    killall -9 wineserver wineboot.exe services.exe start.exe explorer.exe winedevice.exe plugplay.exe svchost.exe rpcss.exe 2>/dev/null || true
     pkill -9 -f '[m]gs2_sse_rg353vs_port.exe' 2>/dev/null || true
     # A Wine child can remain visible briefly after SIGKILL and keep a bind
     # mount busy. Wait only in teardown, before attempting to restore targets.
     i=0
-    while pgrep -f '[w]ineboot.exe|[e]xplorer.exe|[m]gs2_sse_rg353vs_port.exe' >/dev/null 2>&1 \
+    while pgrep -f '[w]ineboot.exe|[s]tart.exe|[e]xplorer.exe|[m]gs2_sse_rg353vs_port.exe' >/dev/null 2>&1 \
           && [ "$i" -lt 20 ]; do
         sleep 0.1
         i=$((i + 1))
     done
-    restore_cpu_state
-    unmount_all /usr/lib/wine/i386-windows/wined3d.dll
-    unmount_all /usr/lib/wine/i386-windows/d3d8.dll
-    [ -n "${DXVK_D3D8_TARGET:-}" ] && unmount_all "$DXVK_D3D8_TARGET"
-    [ -n "${DXVK_D3D9_TARGET:-}" ] && unmount_all "$DXVK_D3D9_TARGET"
-    unmount_all /usr/lib/wine/i386-unix/winewayland.so
-    unmount_all /usr/lib/wine/i386-unix/win32u.so
-    unmount_all /usr/lib/wine/i386-unix/opengl32.so
-    unmount_all /usr/lib/wine/i386-windows/user32.dll
-    unmount_all /usr/lib/wine/i386-windows/dmsynth.dll
-    unmount_all /usr/lib/wine/i386-windows/dsound.dll
-    unmount_all /usr/lib/wine/i386-windows/dmime.dll
-    unmount_all /usr/lib/wine/i386-windows/dmusic.dll
-    unmount_all /usr/lib/wine/i386-unix/ntdll.so
-    unmount_all /usr/bin/box86
-    unmount_all "$GAME_EXE_TARGET"
-    [ -n "$PATCHED_GAME_EXE" ] && rm -f "$PATCHED_GAME_EXE"
+    restore_cpu_state || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/wined3d.dll || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/d3d8.dll || cleanup_failed=1
+    [ -z "${DXVK_D3D8_TARGET:-}" ] || unmount_all "$DXVK_D3D8_TARGET" || cleanup_failed=1
+    [ -z "${DXVK_D3D9_TARGET:-}" ] || unmount_all "$DXVK_D3D9_TARGET" || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-unix/winewayland.so || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-unix/win32u.so || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-unix/opengl32.so || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/user32.dll || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/dmsynth.dll || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/dsound.dll || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/dmime.dll || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-windows/dmusic.dll || cleanup_failed=1
+    unmount_all /usr/lib/wine/i386-unix/ntdll.so || cleanup_failed=1
+    unmount_all /usr/bin/box86 || cleanup_failed=1
+    game_image_unmounted=1
+    unmount_all "$GAME_EXE_TARGET" || {
+        cleanup_failed=1
+        game_image_unmounted=0
+    }
+    if [ -n "$PATCHED_GAME_EXE" ]; then
+        if [ "$game_image_unmounted" = 1 ]; then
+            rm -f "$PATCHED_GAME_EXE" || cleanup_failed=1
+        else
+            echo "MGS2: preserving busy mounted temporary game image $PATCHED_GAME_EXE" >&2
+        fi
+    fi
     [ -n "${ESUDO:-}" ] && $ESUDO systemctl restart oga_events >/dev/null 2>&1 || true
+    [ "$cleanup_failed" = 0 ] || \
+        echo "MGS2: cleanup finished with one or more reported failures" >&2
 }
-trap cleanup EXIT INT TERM
+
+cleanup_signal() {
+    local status="$1"
+    trap - EXIT HUP INT TERM
+    cleanup
+    exit "$status"
+}
+
+trap cleanup EXIT
+trap 'cleanup_signal 129' HUP
+trap 'cleanup_signal 130' INT
+trap 'cleanup_signal 143' TERM
 
 # A power loss can leave the temporary game-image bind in place. Always expose
 # the legally installed original first; old routes stop here, while FINALPLAY21
-# builds and verifies a temporary one-byte view. The installed EXE is never
+# and FINALPLAY22 build and verify a temporary view. The installed EXE is never
 # overwritten.
 prepare_game_exe() {
     unmount_all "$GAME_EXE_TARGET" || return 1
     [ "$GAME_EXE_PATCH" = none ] && return 0
-    if [ "$GAME_EXE_PATCH" != wpatch-fixed-function ]; then
-        echo "MGS2: unknown fixed game EXE patch $GAME_EXE_PATCH" >&2
-        return 1
-    fi
-    patcher="$GAMEDIR/patch-mgs2-wpatch-novs.sh"
+    case "$GAME_EXE_PATCH" in
+        wpatch-finalplay23)
+            patcher="$GAMEDIR/patch-mgs2-wpatch-finalplay23.sh"
+            patcher_hash=c607805bd2afc391d267364fe8d63891bcf89f03ca18736eb561e276445889a8
+            patched_hash=d6b81257a82348299675adf863c9ad884c68c438b032fe20a75f18a094d29cd5
+            tmp_template=/tmp/mgs2-wpatch-finalplay23.XXXXXX
+            route_name=FINALPLAY23
+            ;;
+        wpatch-finalplay22)
+            patcher="$GAMEDIR/patch-mgs2-wpatch-finalplay22.sh"
+            patcher_hash=55f1714b68a0360829469439143923bc74356502be9164628e1a2dd9633464fa
+            patched_hash=d902ee4398b77653674943f097f79e103d1aa0bc93ce825c0cb0c3d3522b9f88
+            tmp_template=/tmp/mgs2-wpatch-finalplay22.XXXXXX
+            route_name=FINALPLAY22
+            ;;
+        wpatch-fixed-function)
+            patcher="$GAMEDIR/patch-mgs2-wpatch-novs.sh"
+            patcher_hash=ace82a30c96c2c52dddf920a2d45f878f916ee31900838eef5fb491f8f607325
+            patched_hash=6686b3fa6484a0609fbe65be46f34cbba941b18e252db7bbb83d457153ba31d6
+            tmp_template=/tmp/mgs2-wpatch-novs.XXXXXX
+            route_name=FINALPLAY21
+            ;;
+        wpatch-isolated)
+            patcher="$GAMEDIR/patch-mgs2-wpatch-isolated.sh"
+            patcher_hash=5dcc4e1fd76df35e23539bec67a42fda680e1775422a52c6cc882c347026cbe0
+            patched_hash=e4a54598cefa2f7d19e02aa519e030b21a19424f163e3fdeebe32bb111cde1ce
+            tmp_template=/tmp/mgs2-wpatch-isolated.XXXXXX
+            route_name=wpatch-isolation-candidate
+            ;;
+        wpatch-state-owned)
+            patcher="$GAMEDIR/patch-mgs2-wpatch-state-owned.sh"
+            patcher_hash=0c75034daa9eaace2fcb45d7909a9c57f827d0e2ac2d67ca2602955c11d61e15
+            patched_hash=d902ee4398b77653674943f097f79e103d1aa0bc93ce825c0cb0c3d3522b9f88
+            tmp_template=/tmp/mgs2-wpatch-state.XXXXXX
+            route_name=wpatch-state-ownership-candidate
+            ;;
+        *)
+            echo "MGS2: unknown fixed game EXE patch $GAME_EXE_PATCH" >&2
+            return 1
+            ;;
+    esac
     got=$(sha256sum "$patcher" 2>/dev/null | cut -d' ' -f1)
-    if [ "$got" != b7ba819816b1f36d8bbcb0b0c32d064279db216454e10d4755e286ca7d373713 ]; then
-        echo "MGS2: water patch helper is ${got:-missing}, refusing FINALPLAY21" >&2
+    if [ "$got" != "$patcher_hash" ]; then
+        echo "MGS2: game patch helper is ${got:-missing}, refusing $route_name" >&2
         return 1
     fi
-    PATCHED_GAME_EXE=$(mktemp /tmp/mgs2-wpatch-novs.XXXXXX) || return 1
+    PATCHED_GAME_EXE=$(mktemp "$tmp_template") || return 1
     "$patcher" "$GAME_EXE_TARGET" "$PATCHED_GAME_EXE" || return 1
     mount_bind "$PATCHED_GAME_EXE" "$GAME_EXE_TARGET" || return 1
     got=$(sha256sum "$GAME_EXE_TARGET" 2>/dev/null | cut -d' ' -f1)
-    if [ "$got" != 6686b3fa6484a0609fbe65be46f34cbba941b18e252db7bbb83d457153ba31d6 ]; then
-        echo "MGS2: mounted game EXE is ${got:-missing}, refusing FINALPLAY21" >&2
+    if [ "$got" != "$patched_hash" ]; then
+        echo "MGS2: mounted game EXE is ${got:-missing}, refusing $route_name" >&2
         return 1
     fi
 }
@@ -485,11 +765,9 @@ prepare_game_exe || exit 1
 #   inherited environment cannot turn play into a measurement.
 #   device/launch-island-ab.sh sets MGS2_ISLAND_AB_MEASURE.
 unset MGS2_ISLAND_AB
-if [ -n "${MGS2_ISLAND_AB_MEASURE:-}" ]; then
-    export MGS2_ISLAND_AB="$MGS2_ISLAND_AB_MEASURE"
-    echo "MGS2: A/B harness armed on island entry $MGS2_ISLAND_AB -- this is a" \
-         "MEASUREMENT run, half the frames deliberately run unrouted" >&2
-fi
+# The FINALPLAY engine is a closed production/candidate bundle. Historical
+# island A/B wrappers route through the separate WineD3D research launcher;
+# an inherited measurement arm is rejected before this point.
 #
 # The native island contains WineD3D code and is not part of the DXVK renderer.
 export MGS2_BOX86_ISLAND_FULL=0
@@ -646,13 +924,12 @@ mount_bind "$GAMEDIR/dmusic_shared_lifetime1.dll" /usr/lib/wine/i386-windows/dmu
 # FINALPLAY14 identity check, on the MOUNTED files rather than on what was asked
 # for, and on ALL of them.
 #
-# It used to name three: box86, wined3d and the presenter -- the files
-# make_release.sh happened to build. The launcher also replaces win32u.so,
+# It used to name three: box86, wined3d and the presenter -- the files the old
+# release path happened to build. The launcher also replaces win32u.so,
 # opengl32.so, user32.dll, d3d8.dll and four DirectMusic/DirectSound modules, so
 # eight of the eleven substitutions were never verified, and four of them were
-# mounted after the check even ran. harness/make_release.sh now generates the
-# manifest FROM the mount_bind lines below, and the coverage assertion here reads
-# the same lines back, so the two cannot drift apart again without failing.
+# mounted after the check even ran. Each closed route now pins an exact row
+# count in addition to checking every listed live path and the bind-mount floor.
 #
 # There is no off switch. Binary-selection overrides are rejected at the top and
 # every manifest mismatch remains fatal.
@@ -663,9 +940,9 @@ mgs2_verify_identity() {
         return 1
     fi
     # Seven bind-mounted production files in FINALPLAY17--20: Box86, D3D8,
-    # D3D9 and four audio modules. FINALPLAY21 adds the temporary verified game
-    # EXE view. The manifest also pins unmounted dependencies, so checked may be
-    # greater than mounts.
+    # D3D9 and four audio modules. FINALPLAY21, FINALPLAY22 and the wpatch
+    # candidates add the temporary verified game EXE view. Manifests also pin unmounted
+    # dependencies, so the exact row count is greater than the mount count.
     mounts=$EXPECTED_BIND_MOUNTS
     checked=0
     bad=0
@@ -678,9 +955,14 @@ mgs2_verify_identity() {
             bad=$((bad + 1))
         fi
     done < "$manifest"
+    if [ -z "$EXPECTED_IDENTITY_ROWS" ] || [ "$checked" -ne "$EXPECTED_IDENTITY_ROWS" ]; then
+        echo "MGS2: refusing to launch -- $PLAY_IDENTITY_MANIFEST has $checked rows," \
+             "the closed route requires exactly ${EXPECTED_IDENTITY_ROWS:-an unset count}" >&2
+        return 1
+    fi
     if [ "$checked" -lt "$mounts" ]; then
-        echo "MGS2: refusing to launch -- the manifest covers $checked files and this" \
-             "launcher binds $mounts; regenerate it with harness/make_release.sh" >&2
+        echo "MGS2: refusing to launch -- the exact manifest has fewer rows than" \
+             "the $mounts bind mounts" >&2
         return 1
     fi
     if [ "$bad" != 0 ]; then
@@ -694,8 +976,8 @@ mgs2_verify_identity() {
 
 mgs2_verify_identity || exit 1
 
-save_cpu_state
-set_final_cpu_cap
+save_cpu_state || exit 1
+set_final_cpu_cap || exit 1
 
 cd "$GAMEDIR/game/bin" || exit 1
 

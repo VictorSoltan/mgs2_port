@@ -1,0 +1,36 @@
+From: MGS2 RG353VS compatibility port
+Subject: [PATCH] libdg: store the requested value in DG_NopRenderState
+
+DG_NopRenderState is meant to update libdg's render-state shadow without
+issuing a D3D8 call. Both the inline production body and the out-of-line body
+instead store the state enum, ignoring their Value argument. A later
+DG_SetRenderState(State, State) can then be skipped even though that value was
+never established.
+
+Store Value in both definitions. The recovered source and map contain no
+DG_NopRenderState caller, so this is a source-only audit correction and not a
+runtime or flicker candidate. The distributed game executable is not stored or
+modified by this record.
+
+--- a/mgs2x/source/system/libdg/wd3d.c
++++ b/mgs2x/source/system/libdg/wd3d.c
+@@ -932,7 +932,7 @@
+ 
+ void DG_NopRenderState(D3DRENDERSTATETYPE State, DWORD Value)
+ {
+-	DG_RenderStateValue[State] = State ;	// 状態だけ設定
++	DG_RenderStateValue[State] = Value ;	// 状態だけ設定
+ }
+ 
+ #endif
+--- a/mgs2x/source/system/libdg/libdgw.h
++++ b/mgs2x/source/system/libdg/libdgw.h
+@@ -2152,7 +2152,7 @@
+ 
+ inline void DG_NopRenderState(D3DRENDERSTATETYPE State, DWORD Value)
+ {
+-	DG_RenderStateValue[State] = State ;
++	DG_RenderStateValue[State] = Value ;
+ }
+ 
+ #endif
