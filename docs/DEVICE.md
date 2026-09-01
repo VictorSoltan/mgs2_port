@@ -122,6 +122,19 @@ This intentionally verifies DXVK and the temporary game image; FINALPLAY23 does
 not bind WineD3D. Select the matching manifest when checking a named rollback or
 candidate.
 
+For a clean FINALPLAY23 install, also verify the i386 dependencies that Box86
+loads for Wine's Wayland module:
+
+```sh
+cd "$G/x86libs"
+sha256sum -c "$G/FINALPLAY_RUNTIME_X86LIBS.sha256"
+```
+
+There must be ten successful rows. The production FP23 wrapper performs this
+check before the shared engine changes any system mount. These files were
+missing from the pre-2026-09-01 packaging path; an already dirty device could
+hide the omission by retaining another port's `x86libs` directory.
+
 And confirm exactly one instance, matching on the exact `comm` (it is truncated
 to 15 characters, so `pgrep` patterns can mislead):
 

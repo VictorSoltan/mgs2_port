@@ -4,9 +4,9 @@
 # This does not store or fetch the legal game EXE and does not redistribute the
 # ROCKNIX/Mali system rows in the live identity manifest.  It collects the
 # named runtime artifacts, tracked launchers/manifests/config and the carried
-# audio DLLs needed by a clean installation.  The exact FINALPLAY21 rollback
-# objects are included too. Every byte is checked against the production record
-# before it enters the bundle or the device.
+# audio DLLs and i386 Wayland dependencies needed by a clean installation. The
+# exact FINALPLAY21 rollback objects are included too. Every byte is checked
+# against the production record before it enters the bundle or the device.
 set -eu
 
 NAME=${1:?usage: make_current_release.sh <name> [--from-device|--deploy]}
@@ -42,10 +42,12 @@ DEV=${MGS2_DEVICE:-root@rg353vs}
 GAMEDIR=${MGS2_GAME_DIR:-/storage/roms/ports/MGS2-Substance}
 PORTDIR=$(dirname "$GAMEDIR")
 ARTIFACT_DIR=${MGS2_RELEASE_ARTIFACT_DIR:-$REPO/binaries}
+MENU_ARTIFACT_DIR=${MGS2_MENU_ARTIFACT_DIR:-$ARTIFACT_DIR/menu}
 KNOWN_HOSTS=${MGS2_KNOWN_HOSTS_FILE:-}
 OUT="$REPO/release/$NAME"
 PRODUCTION="$REPO/device/FINALPLAY23_PRODUCTION.sha256"
 MANIFEST="$REPO/device/FINALPLAY23_MOVIE_GUARD.manifest"
+MENU_MANIFEST="$REPO/device/MGS2_MENU.sha256"
 TMP=$(mktemp -d /tmp/mgs2-current-release.XXXXXX)
 OUT_CREATED=0
 BUNDLE_COMPLETE=0
@@ -99,8 +101,8 @@ echo "ok     FINALPLAY18--23 and input gates pass"
 cp "$PRODUCTION" "$TMP/files"
 
 rows=$(awk 'NF == 2 && $1 !~ /^#/ {n++} END {print n+0}' "$TMP/files")
-[ "$rows" = 28 ] || {
-    echo "current distributable table has $rows rows, expected 28" >&2
+[ "$rows" = 39 ] || {
+    echo "current distributable table has $rows rows, expected 39" >&2
     exit 1
 }
 [ "$(awk 'NF == 2 && $1 !~ /^#/ {print $2}' "$TMP/files" | sort | uniq -d | wc -l)" = 0 ] || {
@@ -132,6 +134,7 @@ while read -r want file extra; do
         src="$ARTIFACT_DIR/$file"
     elif [ "$FETCH_DEVICE" = 1 ]; then
         src="$TMP/$file"
+        mkdir -p "$(dirname "$src")"
         device_scp "$DEV:$GAMEDIR/$file" "$src" || {
             echo "cannot fetch missing exact artifact $file from $DEV:$GAMEDIR" >&2
             exit 1
@@ -146,6 +149,7 @@ while read -r want file extra; do
         echo "$file is $got, production requires $want" >&2
         exit 1
     }
+    mkdir -p "$(dirname "$OUT/$file")"
     cp "$src" "$OUT/$file"
     printf '%s  %s\n' "$want" "$file" >> "$OUT/SHA256SUMS"
 done < "$TMP/files"
@@ -168,11 +172,49 @@ done
     85-dmsynth-sink-lifetime-and-clock-state.patch > SOURCE_RECORDS.sha256)
 (cd "$OUT" && sha256sum -c SHA256SUMS >/dev/null)
 (cd "$OUT" && sha256sum -c SOURCE_RECORDS.sha256 >/dev/null)
+
+echo "== 3. collect exact PortMaster menu metadata =="
+cp "$MENU_MANIFEST" "$OUT/MENU_SHA256SUMS"
+menu_rows=$(awk 'NF == 2 && $1 !~ /^#/ {n++} END {print n+0}' "$MENU_MANIFEST")
+[ "$menu_rows" = 3 ] || {
+    echo "menu metadata table has $menu_rows rows, expected 3" >&2
+    exit 1
+}
+while read -r want file extra; do
+    case "$want" in ''|\#*) continue;; esac
+    [ -z "${extra:-}" ] || {
+        echo "malformed menu metadata row for $file" >&2
+        exit 1
+    }
+    if [ -r "$REPO/device/$file" ]; then
+        src="$REPO/device/$file"
+    elif [ -r "$MENU_ARTIFACT_DIR/$file" ]; then
+        src="$MENU_ARTIFACT_DIR/$file"
+    elif [ "$FETCH_DEVICE" = 1 ]; then
+        src="$TMP/menu-$file"
+        device_scp "$DEV:$GAMEDIR/$file" "$src" || {
+            echo "cannot fetch missing menu artifact $file from $DEV:$GAMEDIR" >&2
+            exit 1
+        }
+    else
+        echo "missing exact menu artifact $file" >&2
+        echo "put it in $MENU_ARTIFACT_DIR or use --from-device/--deploy" >&2
+        exit 1
+    fi
+    got=$(sha256sum "$src" | cut -d' ' -f1)
+    [ "$got" = "$want" ] || {
+        echo "$file is $got, menu metadata requires $want" >&2
+        exit 1
+    }
+    cp "$src" "$OUT/$file"
+done < "$MENU_MANIFEST"
+(cd "$OUT" && sha256sum -c MENU_SHA256SUMS >/dev/null)
 BUNDLE_COMPLETE=1
-echo "ok     $rows exact distributable files; legal EXE and system libraries excluded"
+echo "ok     $rows exact distributable files; legal EXE and ARM system libraries excluded"
+echo "ok     $menu_rows exact PortMaster menu files"
 
 if [ "$MODE" = --deploy ]; then
-    echo "== 3. deploy exact FINALPLAY23 bundle =="
+    echo "== 4. deploy exact FINALPLAY23 bundle =="
     deployed=0
     while read -r want file extra; do
         case "$want" in ''|\#*) continue;; esac
@@ -181,6 +223,8 @@ if [ "$MODE" = --deploy ]; then
         else
             target="$GAMEDIR/$file"
         fi
+        target_dir=$(dirname "$target")
+        device_ssh "$DEV" "mkdir -p '$target_dir'"
         staged="$target.finalplay22-new"
         device_scp "$OUT/$file" "$DEV:$staged"
         got=$(device_ssh "$DEV" "sha256sum '$staged'" 2>/dev/null | cut -d' ' -f1)
@@ -205,6 +249,22 @@ if [ "$MODE" = --deploy ]; then
     device_ssh "$DEV" \
         "chmod +x '$PORTDIR/MGS2-Substance.sh' '$GAMEDIR'/box86-fp26-wayland-text-input-production '$GAMEDIR'/gptokeyb-mgs2-immediate '$GAMEDIR'/*.sh"
     echo "ok     deployed and re-hashed $rows exact files"
+
+    echo "== 5. deploy exact PortMaster menu files =="
+    while read -r want file extra; do
+        case "$want" in ''|\#*) continue;; esac
+        target="$GAMEDIR/$file"
+        staged="$target.menu-new"
+        device_scp "$OUT/$file" "$DEV:$staged"
+        got=$(device_ssh "$DEV" "sha256sum '$staged'" 2>/dev/null | cut -d' ' -f1)
+        [ "$got" = "$want" ] || {
+            device_ssh "$DEV" "rm -f '$staged'" >/dev/null 2>&1 || true
+            echo "staged $target is ${got:-missing}, expected $want" >&2
+            exit 1
+        }
+        device_ssh "$DEV" "mv -f '$staged' '$target'; chmod 0644 '$target'"
+    done < "$MENU_MANIFEST"
+    echo "ok     deployed and re-hashed $menu_rows exact PortMaster menu files"
 fi
 
 echo "release $NAME is in $OUT"

@@ -72,9 +72,21 @@ exactly two bytes to the FINALPLAY22 temporary view -- `ret` at
 identity rows are byte-identical to FINALPLAY22. No movie played before the fix
 and none plays after it; restoring movie playback stays open. The route
 generated its exact image and passed `21/21` live identity on the device, and
-reached the title screen and both menu levels. The loaded-save action smoke has
-not re-run to completion -- `autoload_save.py` aborted on its own pixel check --
-and the movie trigger itself has not been re-exercised in play.
+reached the title screen and both menu levels. The clean-reinstall gate on
+2026-09-01 subsequently loaded the pixel-confirmed row-07 save, completed four
+movement bursts and four attacks, and left no fresh kernel GPU fault. The movie
+trigger itself has not been re-exercised in play.
+
+A destructive clean reinstall on 2026-09-01 exposed one packaging dependency
+that dirty upgrades had hidden: Wine's i386 Wayland module needs ten x86 shared
+libraries under `MGS2-Substance/x86libs/`. The current FP23 wrapper now verifies
+their separate exact manifest before entering the unchanged shared engine, and
+the clean-install release record includes all ten objects. On the RG353VS the
+unchanged normal route then started in about 5.8 seconds, passed `21/21`, kept
+the real game and immediate input helper live for 35 seconds and rendered the
+`PRESS START BUTTON` title screen. All ten restored save files match both
+pre-removal backups byte for byte. A second normal-entry run then passed the
+loaded-save/action gate described above.
 
 Open problems:
 
@@ -242,6 +254,7 @@ After configuring `.env`, verify the pinned reconstruction:
 ./harness/test_finalplay20_production.sh
 ./harness/test_finalplay21_production.sh
 ./harness/test_finalplay22_production.sh
+./harness/test_finalplay23_production.sh
 ```
 
 Use `./harness/verify_rebuild.sh --build` only with the required cross

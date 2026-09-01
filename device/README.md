@@ -1,10 +1,28 @@
 # Device launchers
 
+## PortMaster menu metadata
+
+`gameinfo.xml` is the canonical EmulationStation record for the normal
+`MGS2-Substance.sh` entry. It sets the public title, description, release data
+and the image path `./MGS2-Substance/cover.png`. The ignored local artifact
+cache carries the owner's 4:3 artwork for the EmulationStation cover and
+the required 640x480 gameplay capture for PortMaster's separate screenshot role;
+both are pinned by `MGS2_MENU.sha256` and neither image is stored in Git. The
+cover is installed byte-for-byte without cropping, resizing or recompression.
+
+`harness/update_portmaster_gamelist.py` merges this record into a live
+`gamelist.xml`, preserves play statistics and unknown fields, and removes only
+the three obsolete MGS2 entries whose old launchers were retired. Stop
+EmulationStation before replacing its live gamelist so it cannot overwrite the
+change from its in-memory copy.
+
 ## Production
 
 - `MGS2-Substance.sh` — PortMaster-facing entry point.
 - `launch-play.sh` — renderer selector.
-- `launch-play-dxvk-fp22.sh` — current FINALPLAY22 audit-fix route.
+- `launch-play-dxvk-fp23.sh` — current FINALPLAY23 movie-guard route and clean
+  dependency preflight.
+- `launch-play-dxvk-fp22.sh` — exact FINALPLAY22 rollback.
 - `launch-play-dxvk-fp21.sh` — exact FINALPLAY21 rollback.
 - `launch-play-dxvk-fp20.sh` — exact FINALPLAY20/pre-water-fix rollback.
 - `launch-play-dxvk-fp19.sh` — exact FINALPLAY19/p34 rollback.
@@ -12,7 +30,8 @@
 - `launch-play-dxvk-fp17.sh` — shared fixed engine and exact FINALPLAY17 rollback.
 - `launch-play-dxvk-fp16.sh` — byte-exact previous-DXVK rollback.
 - `launch-play-wined3d-fp15.sh` — byte-exact rollback runtime.
-- `FINALPLAY22_AUDIT_FIXES.manifest`, `FINALPLAY21_WATER_WPATCH.manifest`,
+- `FINALPLAY23_MOVIE_GUARD.manifest`, `FINALPLAY_RUNTIME_X86LIBS.sha256`,
+  `FINALPLAY22_AUDIT_FIXES.manifest`, `FINALPLAY21_WATER_WPATCH.manifest`,
   `FINALPLAY20_DMSYNTH_RESUME.manifest`,
   `FINALPLAY19_INPUT_WAYLAND.manifest`,
   `FINALPLAY18_WAYLAND_ABI.manifest`,
@@ -21,8 +40,8 @@
   `FINALPLAY.manifest` — fail-closed live identity gates.
 - `mgs2.gptk` — tracked controller-to-keyboard mapping. Legacy fixed routes use
   PortMaster's `$GPTOKEYB` command for direct Start+Select exit. FINALPLAY19
-  through FINALPLAY22 select the source-recorded immediate-edge helper and disable
-  Wine's duplicate raw-controller route.
+  through FINALPLAY23 select the source-recorded immediate-edge helper and
+  disable Wine's duplicate raw-controller route.
 
 The fixed play launchers leave one bounded cold-path exit record in
 `/tmp/mgs2-play-exit.log` with their route, Wine PID and real `wait` status.
@@ -79,7 +98,7 @@ no-wrap IPU panel on the original vertex-shader path and disables leaked
 fixed-function lighting at the wpatch plugin tail. Its legal-game transform,
 source record and 21-row identity are pinned by
 `WPATCH_ISOLATION_CANDIDATE.lock`, `WPATCH_ISOLATION_CANDIDATE.manifest` and
-`harness/test_wpatch_isolation_candidate.sh`. FINALPLAY22 is the default; this
+`harness/test_wpatch_isolation_candidate.sh`. FINALPLAY23 is the default; this
 narrower candidate remains unexposed through `MGS2_RENDERER`.
 
 `launch-dxt-surface-witness-candidate.sh` isolates Box86 patch 27 on top of
@@ -120,12 +139,13 @@ baseline instead of accepting the previous performance cap as the new normal.
 Compiled artifacts named by these scripts live in the ignored local
 `binaries/` cache or in a separately distributed release bundle, never in Git.
 
-`harness/make_release.sh NAME` now packages the current FINALPLAY22 boundary by
+`harness/make_release.sh NAME` now packages the current FINALPLAY23 boundary by
 default. It requires every exact artifact in `binaries/` (or an overridden
 `MGS2_RELEASE_ARTIFACT_DIR`); `--from-device` may fill only missing rows from an
 explicitly configured device, and `--deploy` additionally installs and
-re-hashes all 25 distributable rows, including the four objects exclusive to
-the exact FINALPLAY21 rollback. The legal game image and the ROCKNIX/Mali
-system rows are excluded. The old reproducible WineD3D builder is available
-only with `MGS2_RELEASE_ROUTE=wined3d-fp15` and edits a staged launcher, never a
-tracked production file.
+re-hashes all 39 distributable runtime rows plus the three PortMaster menu
+files. The runtime set includes the four objects exclusive to the exact
+FINALPLAY21 rollback. The legal game image and the ROCKNIX/Mali system rows are
+excluded. The old reproducible WineD3D builder is available only with
+`MGS2_RELEASE_ROUTE=wined3d-fp15` and edits a staged launcher, never a tracked
+production file.

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./MGS2-Substance.sh</path>
+    <name>Metal Gear Solid 2: Substance</name>
+    <desc>An expanded edition of Metal Gear Solid 2: Sons of Liberty with the complete tactical espionage campaign, more than 350 VR missions, Snake Tales, Boss Survival and other bonus modes.
+
+This RG353VS compatibility port requires a legally obtained copy of the 2003 Windows release; game data is not included.</desc>
+    <releasedate>20030327T000000</releasedate>
+    <developer>Konami Computer Entertainment Japan, Success</developer>
+    <publisher>Konami</publisher>
+    <genre>Action, Stealth</genre>
+    <players>1</players>
+    <image>./MGS2-Substance/cover.png</image>
+  </game>
+</gameList>

@@ -14,6 +14,7 @@ WRAPPER="$REPO/device/launch-play-dxvk-fp23.sh"
 PATCHER="$REPO/device/patch-mgs2-wpatch-finalplay23.sh"
 ROLLBACK_PATCHER="$REPO/device/patch-mgs2-wpatch-finalplay22.sh"
 MANIFEST="$REPO/device/FINALPLAY23_MOVIE_GUARD.manifest"
+X86LIBS_MANIFEST="$REPO/device/FINALPLAY_RUNTIME_X86LIBS.sha256"
 ROLLBACK="$REPO/device/FINALPLAY22_AUDIT_FIXES.manifest"
 PRODUCTION="$REPO/device/FINALPLAY23_PRODUCTION.sha256"
 LOCK="$REPO/device/FINALPLAY.lock"
@@ -66,9 +67,29 @@ grep -Fq 'MGS2_DMIME_DLL=dmime_p16_curve_state_layout.dll' "$ENGINE"
 grep -Fq 'INPUT_ROUTE=immediate-production' "$ENGINE"
 grep -Fq 'EXPECTED_BIND_MOUNTS=8' "$ENGINE"
 grep -Fq 'EXPECTED_IDENTITY_ROWS=21' "$ENGINE"
+grep -Fq 'X86LIBS_MANIFEST="$HERE/FINALPLAY_RUNTIME_X86LIBS.sha256"' "$WRAPPER"
+grep -Fq 'verify_x86libs' "$WRAPPER"
 
 rows=$(awk '$1 !~ /^#/ && NF {n++} END {print n+0}' "$MANIFEST")
 [ "$rows" = 21 ] || { echo "FAIL: FINALPLAY23 manifest has $rows rows, expected 21" >&2; exit 1; }
+x86_rows=$(awk '$1 !~ /^#/ && NF == 2 {n++} END {print n+0}' "$X86LIBS_MANIFEST")
+[ "$x86_rows" = 10 ] || { echo "FAIL: x86 runtime manifest has $x86_rows rows, expected 10" >&2; exit 1; }
+[ "$(awk '$1 !~ /^#/ && NF == 2 {print $2}' "$X86LIBS_MANIFEST" | sort | uniq -d | wc -l)" = 0 ]
+[ "$(awk '$1 !~ /^#/ && NF == 2 && $2 ~ /\// {n++} END {print n+0}' "$X86LIBS_MANIFEST")" = 0 ]
+
+# The wrapper must stop before the shared engine if a clean bundle omitted its
+# dependency directory. This is the exact packaging regression found on device.
+mkdir -p "$TMP/x86-preflight"
+cp "$WRAPPER" "$TMP/x86-preflight/launch-play-dxvk-fp23.sh"
+cp "$X86LIBS_MANIFEST" "$TMP/x86-preflight/FINALPLAY_RUNTIME_X86LIBS.sha256"
+printf '#!/bin/sh\ntouch "%s"\n' "$TMP/engine-ran" > \
+    "$TMP/x86-preflight/launch-play-dxvk-fp17.sh"
+chmod +x "$TMP/x86-preflight/launch-play-dxvk-fp17.sh"
+if "$TMP/x86-preflight/launch-play-dxvk-fp23.sh" >/dev/null 2>&1; then
+    echo "FAIL: FINALPLAY23 accepted a bundle with no x86libs directory" >&2
+    exit 1
+fi
+[ ! -e "$TMP/engine-ran" ]
 [ "$(manifest_hash /storage/roms/ports/MGS2-Substance/game/bin/mgs2_sse_rg353vs_port.exe)" = "$GAME_HASH" ]
 [ "$(manifest_hash /storage/roms/ports/MGS2-Substance/patch-mgs2-wpatch-finalplay23.sh)" = "$PATCHER_HASH" ]
 
@@ -155,8 +176,14 @@ if [ -r "$SOURCE_ROOT/game/windecode.cpp" ]; then
     SOURCE_GATE=applied
 fi
 
-[ "$(awk 'NF == 2 {n++} END {print n+0}' "$PRODUCTION")" = 28 ]
+[ "$(awk 'NF == 2 {n++} END {print n+0}' "$PRODUCTION")" = 39 ]
 [ "$(recorded_hash FINALPLAY23_MOVIE_GUARD.manifest)" = "$(sha256sum "$MANIFEST" | cut -d' ' -f1)" ]
+[ "$(recorded_hash FINALPLAY_RUNTIME_X86LIBS.sha256)" = "$(sha256sum "$X86LIBS_MANIFEST" | cut -d' ' -f1)" ]
+while read -r want file extra; do
+    case "$want" in ''|\#*) continue;; esac
+    [ -z "${extra:-}" ]
+    [ "$(recorded_hash "x86libs/$file")" = "$want" ]
+done < "$X86LIBS_MANIFEST"
 [ "$(recorded_hash patch-mgs2-wpatch-finalplay23.sh)" = "$PATCHER_HASH" ]
 [ "$(recorded_hash launch-play-dxvk-fp23.sh)" = \
   "$(sha256sum "$REPO/device/launch-play-dxvk-fp23.sh" | cut -d' ' -f1)" ]
@@ -175,9 +202,9 @@ grep -Fq 'RELEASE_ROUTE=${MGS2_RELEASE_ROUTE:-finalplay23}' "$RELEASE"
 grep -Fq 'finalplay23)' "$RELEASE"
 grep -Fq 'PRODUCTION="$REPO/device/FINALPLAY23_PRODUCTION.sha256"' "$CURRENT_RELEASE"
 grep -Fq 'MANIFEST="$REPO/device/FINALPLAY23_MOVIE_GUARD.manifest"' "$CURRENT_RELEASE"
-grep -Fq '[ "$rows" = 28 ]' "$CURRENT_RELEASE"
+grep -Fq '[ "$rows" = 39 ]' "$CURRENT_RELEASE"
 
 echo "ok     FINALPLAY23 is the fixed default and FINALPLAY22 is exact rollback"
 echo "ok     the two movie-guard bytes are the only difference from FINALPLAY22"
 echo "ok     fail-closed 60-byte transform ($TRANSFORM_GATE), source record $SOURCE_GATE"
-echo "ok     exact 21-row live identity and 28-file rollback-complete bundle are closed"
+echo "ok     exact 21-row live identity and 39-file clean-install bundle are closed"

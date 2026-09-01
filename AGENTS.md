@@ -46,9 +46,12 @@ bytes to that view -- `ret` at `WinstrmSendIPic` (offset 4696000) and at
 state that `WindowsMpegInit()` never creates in this executable. Measured
 2026-08-31: `wine: Unhandled page fault on read access to 00000000 at address
 0087AE0F`, wine exit 5, about 2.5 minutes into ordinary play. It generated its
-exact image and passed `21/21` live identity; the loaded-save action smoke has
-not re-run to completion and the movie trigger has not been re-exercised.
-FINALPLAY22 is the immediate exact rollback. FINALPLAY20 promotion followed
+exact image and passed `21/21` live identity. After the 2026-09-01 clean
+reinstall it also passed the pixel-gated row-07 load, four movements and four
+attacks. The clean-install wrapper separately verifies the ten exact i386
+Wayland dependencies in `FINALPLAY_RUNTIME_X86LIBS.sha256`; the movie trigger
+has not been re-exercised. FINALPLAY22 is the immediate exact rollback.
+FINALPLAY20 promotion followed
 exact-object clock checks, ordinary-button sleep/listening, a
 180-movement/30-attack soak, nine of nine fully cold starts and 19/19 live
 identity. FINALPLAY19 remains the exact p34 rollback. The inherited

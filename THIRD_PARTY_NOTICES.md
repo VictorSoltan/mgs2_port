@@ -63,9 +63,26 @@ and Metal Gear Solid 2 are referenced by manifests and documentation but are not
 included. Their hashes describe the tested environment and do not imply a right
 to redistribute those components.
 
+## Clean-install i386 runtime dependencies
+
+The local clean-install bundle additionally carries exact i386 shared-library
+objects for libstdc++ (GCC runtime exception), ICU (Unicode/ICU license),
+Wayland (MIT), libffi (MIT), xkbcommon (MIT), libxml2 (MIT) and liblzma/XZ.
+Their byte identities are recorded in
+`device/FINALPLAY_RUNTIME_X86LIBS.sha256`; the binaries remain ignored by Git.
+The presently recovered copies came from an existing ROCKNIX-compatible port
+on the measured device. Do not publish that binary bundle until its exact
+source-package versions and corresponding license texts have also been pinned.
+
 ## Diagnostic screenshots
 
 `docs/evidence/` may contain small screenshots captured from Metal Gear Solid
 2 solely to document rendering correctness. They are not covered by the source
 licenses in this repository and are not offered for reuse. Game content and
 trademarks remain the property of their respective owners.
+
+The ignored local menu-artifact cache and locally assembled device bundle may
+also contain `screenshot.png` and `cover.png` for PortMaster/EmulationStation.
+The cover source is recorded in `device/MGS2_MENU.sha256`. These files are not
+stored in Git, are not offered for reuse and must not be published without a
+separate rights review; the underlying game art and marks remain Konami's.

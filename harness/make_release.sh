@@ -1,6 +1,6 @@
 #!/bin/sh
 # FINALPLAY release entry point. Normal use dispatches to the exact current
-# FINALPLAY22 packager. The source-build body below is the explicitly selected
+# FINALPLAY23 packager. The source-build body below is the explicitly selected
 # legacy FINALPLAY15 WineD3D reproducer.
 #
 # Until now a release was: build the live tree, scp the result, write the hashes

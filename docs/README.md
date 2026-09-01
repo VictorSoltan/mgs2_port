@@ -19,9 +19,17 @@ problem rather than reading by filename alone.
 
 ## Current production
 
+- [Clean-reinstall i386 dependency repair](briefs/MGS2_CLEAN_REINSTALL_RUNTIME_DEPENDENCIES_2026-09-01.md)
+  — current clean-install boundary; preserves the historical 21-row live
+  identity while adding a separate exact 10-row `x86libs` gate. Records the
+  missing-Wayland-module failure, rejected win32u/timeout detours, restored
+  saves and the normal FINALPLAY23 device launch.
+- [FINALPLAY23 DirectShow movie guard](../FINAL_PRODUCTION.md)
+  — current production; adds two guarded function-entry bytes to the
+  FINALPLAY22 temporary game view. FINALPLAY22 is the immediate exact rollback.
 - [FINALPLAY22 audit-fix promotion](briefs/MGS2_FINALPLAY22_AUDIT_FIXES_PRODUCTION_2026-08-29.md)
-  — current production; combines the exact state-owned wpatch view with Wine
-  patches 84/85. FINALPLAY21 is the immediate exact rollback. The owner
+  — exact rollback; combines the state-owned wpatch view with Wine patches
+  84/85. FINALPLAY21 is the next rollback. The owner
   explicitly accepted the delayed flicker A/B and post-resume SFX gates. The
   deployed combined normal entry passed independent `21/21` identity and a
   row-07 movement/action smoke.

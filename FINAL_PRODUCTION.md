@@ -74,9 +74,11 @@ exactly two bytes to the FINALPLAY22 temporary view -- `ret` at
 identity rows are byte-identical to FINALPLAY22. No movie played before the fix
 and none plays after it; restoring movie playback stays open. The route
 generated its exact image and passed `21/21` live identity on the device, and
-reached the title screen and both menu levels. The loaded-save action smoke has
-not re-run to completion -- `autoload_save.py` aborted on its own pixel check --
-and the movie trigger itself has not been re-exercised in play.
+reached the title screen and both menu levels. On 2026-09-01 the rebuilt clean
+installation additionally loaded the pixel-gated row-07 save, completed four
+movement bursts and four attacks, and produced normal loaded/post-action
+frames with no fresh kernel GPU fault. The movie trigger itself has not been
+re-exercised in play.
 
 The two bytes, their preconditions and the exact rollback are recorded in
 `device/patch-mgs2-wpatch-finalplay23.sh`, `device/FINALPLAY.lock` and
@@ -191,6 +193,14 @@ gate. Relative to FINALPLAY21, only the patch helper, temporary game view,
 exact system Wine, Vulkan loader and proprietary Mali files on which the route
 depends.
 
+A clean installation also requires the ten i386 libraries pinned by
+`device/FINALPLAY_RUNTIME_X86LIBS.sha256`. They are loaded by Box86 on behalf of
+Wine's i386 Wayland driver and therefore cannot be supplied by the ARM system
+root. FINALPLAY23 checks this separate 10-row manifest before entering the
+shared engine. Keeping it separate preserves the measured 21-row live identity
+and the byte-exact FINALPLAY17--22 launcher records. The current clean-install
+bundle has 39 files: the previous 28, this manifest and its ten libraries.
+
 Supplied production artifacts:
 
 | Role | Artifact | SHA-256 prefix |
@@ -203,8 +213,8 @@ Supplied production artifacts:
 | DirectSound | `dsound_p36_native_fir_target.dll` | `302eff548429` |
 | DirectMusic performance | `dmime_p16_curve_state_layout.dll` | `f23f08ed4c41` |
 | DirectMusic port | `dmusic_shared_lifetime1.dll` | `1fe0a571503b` |
-| game patch helper | `patch-mgs2-wpatch-finalplay22.sh` | `55f1714b68a0` |
-| temporary game view | generated from installed legal EXE | `d902ee4398b7` |
+| game patch helper | `patch-mgs2-wpatch-finalplay23.sh` | `c607805bd2af` |
+| temporary game view | generated from installed legal EXE | `d6b81257a823` |
 
 Use the full hashes in the manifest. Prefixes above are for human recognition,
 not verification.
